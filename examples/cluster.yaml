@@ -1,0 +1,420 @@
+# Production-style Norca cluster: 3 servers and 3 clients in one region.
+#
+#   - 3 dedicated servers (Raft quorum survives one failure), no workloads on them
+#   - 2 Linux clients with Docker CE from the Docker APT repository
+#   - 1 Windows client for native .exe workloads (raw_exec)
+#   - mTLS, gossip encryption, ACLs, packs and backups
+#
+#   norca-deployer validate -c examples/cluster.yaml
+#   norca-deployer plan     -c examples/cluster.yaml
+#   norca-deployer apply    -c examples/cluster.yaml
+#
+# Re-running apply is safe: only nodes whose binary, certificate, configuration
+# or service unit changed are restarted, servers one at a time.
+# Relative paths are resolved against the directory of this file.
+
+version: norca.io/v1alpha1
+kind: DeploymentPlan
+
+metadata:
+  name: norca-prod                  # Cluster name; also the CN of the generated CA.
+  region: eu-central                # Norca region of all nodes in this plan (one plan = one region).
+  datacenter: dc1                   # Default datacenter; a node can override it with "datacenter".
+
+release:
+  version: v0.2.0                   # Norca release tag.
+  source: official                  # official | custom-url | local-path | host-package
+  # checksum_sha256: "<64 hex>"     # Optional pin of the release archive digest.
+  natsbridge: true                  # Also install norca-natsbridge (from the same release archive)
+                                    # on the clients, for the bridge job of the nats pack below.
+  # Norca from a Debian package instead (Linux-only clusters; your own APT
+  # repository or a local .deb). The package installs norca (and
+  # norca-natsbridge); the deployer only checks the binary:
+  # source: host-package
+  # package: norca                  # The package name (default norca); add it to host_packages.install.
+
+cni:
+  install: true                     # CNI plugins on the Linux clients (bridge networking).
+  version: v1.9.1
+  source: official
+  # source: local-path              # Air-gapped: take the archive from the deployer machine.
+  # local_archive_path: dist/cni-plugins-linux-{arch}-v1.9.1.tgz
+
+upgrade:
+  max_parallel_clients: 1           # Clients restarted at the same time during a rollout.
+  health_timeout: 240               # Seconds a restarted agent has to become healthy; otherwise the rollout stops.
+
+paths:
+  linux:                            # Every key is optional; these are the defaults except data_dir.
+    bin_dir: /usr/local/bin         # norca binary.
+    config_dir: /etc/norca.d        # norca.hcl.
+    data_dir: /srv/norca/data       # Raft data and allocation state (moved to a data partition here).
+    log_dir: /var/log/norca         # Agent log file.
+    tls_dir: /etc/norca.d/tls       # CA, certificate and key of the node.
+    cni_bin_dir: /opt/cni/bin       # CNI plugins.
+    cni_config_dir: /opt/cni/config # CNI network lists.
+    apps_dir: /opt/norca/apps       # Root of the native application volumes.
+  windows:
+    data_dir: D:\norca\data         # Windows paths have their own defaults (C:\ProgramData\norca\...).
+    apps_dir: C:\norca\apps
+
+tuning:
+  apply_sysctl: true                # Kernel parameters and bridge modules for container networking.
+  apply_firewall_rules: true        # Open 4646-4648 in ufw/firewalld/iptables (Windows Firewall on Windows).
+  open_ephemeral_ports: true        # Open 20000-32000 on the clients for the allocations.
+  setup_logrotate: true             # Agent log file with size-based rotation.
+  windows_long_paths: true          # Enable LongPathsEnabled on Windows nodes.
+  file_descriptor_limit: 131072     # LimitNOFILE of the agent service.
+  firewall:                         # Who may reach the Norca ports (Linux nodes; Windows is not managed).
+    cluster_cidrs: [10.8.0.0/24]    # The node network (VPN): RPC 4647 and Serf 4648.
+    api_cidrs:                      # HTTP API and UI 4646 on the servers.
+      - 10.8.0.0/24
+      - 192.0.2.0/24                # e.g. the office network of the operators.
+    # ephemeral_cidrs: [0.0.0.0/0]  # Allocation ports 20000-32000; default cluster_cidrs.
+                                    # Open them wider only for services meant to be public.
+    extra_ports:                    # Static ports of workloads (outside 20000-32000).
+      - port: "4222"                # NATS clients (nats pack); 6222 routes and 8222 monitoring
+        cidrs: [10.8.0.0/24]        # only matter between the NATS servers / for operators.
+        roles: [client]             # Default: the nodes that run a client; proto tcp (udp, both).
+    default_deny: true              # Enable ufw and deny all other incoming traffic. The SSH
+                                    # port the deployer uses (and every port sshd listens on)
+                                    # stays open. Needs ufw (installed below) or firewalld.
+
+network:
+  bind_address: 0.0.0.0             # Listen on all addresses.
+  interface_prefix: wg              # Advertise the address of the first interface whose name starts
+                                    # with "wg" (e.g. a WireGuard VPN); resolved by the agent at start.
+  # interface_suffix: vpn           # Or match the end of the interface name.
+  ports:
+    http: 4646
+    rpc: 4647
+    serf: 4648
+  # dynamic_ports:                  # Range of the allocation ports (default 20000-32000);
+  #   min: 21000                    # the firewall opens the same range.
+  #   max: 29000
+
+security:
+  tls_enabled: true                 # mTLS for HTTP and RPC.
+  verify_server_hostname: true      # RPC peers must present server.<region>.nomad / client.<region>.nomad.
+  verify_https_client: false        # true: require client certificates on the HTTP API (certs/cli.pem is issued).
+  gossip_encryption_key: AUTO_GENERATE   # Or a base64 key, or an "!enc:v1:..." secret.
+  pki:
+    # ca_cert_path: pki/ca.pem      # Use an existing CA instead of generating certs/norca-ca.pem.
+    # ca_key_path: pki/ca-key.pem
+    generate_worker_pool_cert: true # Issue certs/client-pool.pem, a reusable client certificate
+                                    # for clients added outside the deployer (e.g. autoscaling).
+    server_additional_dns_sans:     # Extra DNS names in the server certificates (load balancer etc.).
+      - norca.example.com
+    server_additional_ip_sans:      # Extra IP addresses in the server certificates.
+      - 10.8.0.100
+    spiffe:                         # SPIFFE IDs in the certificates (needed by OpenZiti).
+      enabled: true
+      trust_domain: prod.example.com   # Default "<metadata.name>.norca". Nodes get
+                                       # spiffe://prod.example.com/norca/eu-central/<server|client>/<hostname>;
+                                       # a new CA carries spiffe://prod.example.com.
+  acl:
+    enabled: true
+    auto_bootstrap: true            # Bootstrap once; the token goes to management_token_output.
+    management_token_output: .norca-deployer/management-token   # Default location.
+    policies:                       # Created after the bootstrap (replicated to other regions).
+      - name: natsbridge
+        description: Event stream to NATS bridge
+        rules_file: policies/natsbridge.hcl   # Relative to this file; or rules: | inline.
+        job:                        # Bound to the job: its workload identity gets the policy.
+          namespace: default
+          job_id: natsbridge
+
+backup:
+  enabled: false                    # Set to true after filling in a real destination and age recipient.
+  schedule: "0 */2 * * *"           # Cron schedule of the server snapshots.
+  destination:
+    name: s3-primary
+    type: s3                        # s3 or directory (path: /absolute/dir on the servers).
+    endpoint: https://s3.example.com:9000
+    bucket: norca-backups
+    prefix: clusters/eu-central
+    force_path_style: true          # Path-style bucket URLs (MinIO, RustFS).
+  encryption:
+    recipients:                     # Every backup is encrypted with age; at least one recipient.
+      - age1examplerecipientreplacewithyourownpublickeyxxxxxxxxxxxxxxxxxxxxxxxxxx
+  retention:
+    keep_hourly: 24
+    keep_daily: 7
+    keep_weekly: 4
+    keep_monthly: 6
+
+host_packages:
+  update_cache: true                # apt-get update before installing (skipped on offline nodes).
+  lock_timeout: 300                 # Seconds to wait for the dpkg lock.
+  repositories:
+    - name: docker                  # -> /etc/apt/sources.list.d/norca-docker.sources
+      uri: https://download.docker.com/linux/debian
+      suite: bookworm               # Distribution codename.
+      components: [stable]
+      architectures: [amd64]
+      key_file: keys/docker.asc     # Signing key, uploaded as /etc/apt/keyrings/norca-docker.asc (Signed-By).
+      pin_priority: 600             # Prefer this repository for its packages.
+      roles: [client]               # Configure the repository on the clients only.
+    # A private repository with credentials and an exact pin:
+    # - name: internal
+    #   uri: https://apt.example.com/debian
+    #   suite: bookworm
+    #   components: [main]
+    #   key_file: keys/internal.gpg
+    #   pin_priority: 990
+    #   pin_packages: ["mycorp-*"]
+    #   pin_release: o=MyCorp       # Without it the pin applies to every repository on the host.
+    #   auth:                       # Written to /etc/apt/auth.conf.d/norca-internal.conf (0600).
+    #     username: deploy
+    #     password: "!enc:v1:aes-gcm:..."
+  install:
+    # With release.source host-package: Norca itself as a Debian package.
+    # - name: norca
+    #   version: "0.2.0-1"          # Pin the version; upgrades are plan changes.
+    #   hold: true
+    # - name: norca                 # ...or a local .deb copied by the deployer:
+    #   file: debs/norca_0.2.0-1_{arch}.deb
+    - name: docker-ce               # Docker engine for the docker driver.
+      roles: [client]
+    - name: docker-ce-cli
+      roles: [client]
+    - name: containerd.io
+      roles: [client]
+    - name: chrony                  # Time sync on every node (Raft and TLS need correct clocks).
+    - name: ufw                     # Firewall for tuning.firewall.default_deny.
+    # - name: mycorp-agent
+    #   version: "2.4.1-1"          # Exact Debian version; empty = candidate version.
+    #   hold: true
+    #   hosts: [norca-worker-01]    # Only on these nodes (host or hostname).
+
+scripts:
+  - name: prepare-data-disk
+    phase: pre_install              # Before packages, directories and the agent.
+    path: scripts/prepare-data-disk.sh   # Relative to this file.
+    roles: [master]                 # Only on the servers.
+    env:
+      DATA_DEVICE: /dev/sdb
+    timeout: 300                    # Seconds (default 600).
+  - name: docker-log-limits
+    phase: post_packages            # After Docker is installed, before the agent starts.
+    roles: [client]
+    inline: |
+      cat > /etc/docker/daemon.json <<'EOF'
+      {"log-driver": "json-file", "log-opts": {"max-size": "50m", "max-file": "3"}}
+      EOF
+      systemctl restart docker
+
+secrets:                            # Written after the cluster is up, before the packs.
+  store: builtin                    # builtin: Norca's built-in secret store. external: the jobs
+                                    # read secrets from an external store (e.g. Vault) that you
+                                    # set up first; the "secret" entries are then skipped.
+  bootstrap:
+    # Passwords of the NATS users (nats pack, auth_mode userpass): the item
+    # password of nats/users/<user>. "!generate:<name>" creates a random value
+    # once and keeps it (encrypted with the master key) in
+    # .norca-deployer/generated/<name>, so you can hand it to the clients.
+    - path: nats/users/app
+      items:
+        password: "!generate:nats-app"
+    - path: nats/users/ops
+      items:
+        password: "!generate:nats-ops"
+    # The NKey seed of the bridge's NATS user; its public key goes into the
+    # pack values below (!nkey-public with the same name).
+    - path: nats/users/natsbridge
+      items:
+        seed: "!nkey-seed:natsbridge"
+    # Further forms of item values:
+    # - path: apps/mailer               # A secret of an application.
+    #   namespace: default              # Default "default".
+    #   items:
+    #     user: mailer                  # Plain value.
+    #     password: "!enc:v1:aes-gcm:..."   # Encrypted with "secret encrypt".
+    #     ca: "@certs/smtp-ca.pem"      # File content, relative to this file.
+    #   overwrite: true                 # Write a new version when the items change
+    #                                   # (default: create once, never touch it again).
+    # - type: variable                  # A Variable instead of a secret.
+    #   path: nomad/jobs/billing
+    #   items:
+    #     api_url: https://billing.example.com
+
+packs:
+  registries:
+    - name: builtin                 # Registry name in the cluster.
+      type: dir                     # git (default) | oci | dir
+      url: builtin                  # The packs that ship with Norca.
+      ref: latest
+    - name: norca                   # The Norca pack registry (nats, postgres, rustfs, ...).
+      type: git
+      url: https://github.com/bacanoo-io/norca-registry
+      ref: v0.1.0                   # Pin a tag.
+  deploy:
+    - name: cache                   # Release name (lower case, digits, '-').
+      registry: builtin             # Needed with several registries.
+      pack: redis                   # Pack in the registry.
+      enabled: true                 # false: keep the entry but do not deploy it.
+      values:                       # Pack variables.
+        datacenters: [dc1, dc2]
+        node_pool: apps             # The clients are in the pool "apps" (client_defaults); jobs
+                                    # without node_pool only run in the pool "default".
+        count: 1
+        memory: 256
+
+    # NATS cluster (JetStream) and the event stream -> NATS bridge.
+    - name: nats
+      registry: norca
+      pack: nats
+      enabled: true
+      values:
+        datacenters: [dc1, dc2]
+        node_pool: apps
+        count: 1                    # One server per client node (distinct_hosts): use 3 for HA
+                                    # on 3 or more Linux clients with Docker.
+        jetstream_enabled: true
+        auth_mode: userpass         # Users in accounts, passwords from the secrets above.
+        users:
+          - name: app
+            publish_allow: ["app.>", "$JS.API.>"]
+            subscribe_allow: ["app.>", "nomad.>", "_INBOX.>"]
+          - name: ops
+            account: SYS            # nats server report, raft peer-remove.
+        # tls_enabled: true         # TLS: put tls_ca/tls_cert/tls_key into the Variable
+                                    # nomad/jobs/nats (a secrets entry of type variable).
+        bridge_enabled: true        # The natsbridge job: Norca events to <prefix>.<region>.<topic>.
+        bridge_nkey: "!nkey-public:natsbridge"   # Public key of the NKey generated above.
+        bridge_driver: exec         # Runs /usr/local/bin/norca-natsbridge (release.natsbridge).
+        bridge_binary: /usr/local/bin/norca-natsbridge
+        # bridge_sync_pushes: true  # Also sync pack registries on push notices; then add the
+                                    # registry permissions to policies/natsbridge.hcl.
+
+# Defaults for every node that runs a client. A node's own client_settings
+# win: values when set, meta entries by key, lists and blocks when given.
+client_defaults:
+  node_pool: apps                   # Node pool of the clients; jobs choose it with node_pool.
+  meta:                             # Labels for constraint/affinity/spread/separate (${meta.<key>}).
+    environment: production
+  reserved:                         # Kept for the OS, Docker and sshd; not offered to allocations.
+    cpu: 200                        # MHz
+    memory: 512                     # MB
+    reserved_ports: "22"
+  drain_on_shutdown:                # Stopping the agent (e.g. a reboot) drains the node first.
+    deadline: 30m
+
+node_pools:                         # Descriptions of the pools (created after the cluster is up;
+  - name: apps                      # a pool named by a node also appears when the node registers).
+    description: Linux application nodes
+    meta:
+      owner: platform
+  - name: windows
+    description: Windows nodes for native .exe workloads
+
+inventory:
+  masters:                          # Servers; bootstrap_expect defaults to their count (3).
+    - host: 203.0.113.10            # SSH address.
+      hostname: norca-server-01     # Node name.
+      cluster_address: 10.8.0.10    # Address the other nodes use (VPN); also in the certificate.
+      connection:
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true                # sudo for a non-root user.
+        # become_password: "!enc:v1:aes-gcm:..."   # When sudo needs a password.
+      server_settings:
+        bootstrap_expect: 3
+        raft_multiplier: 1          # Raft timing; higher values tolerate slower networks.
+        log_level: INFO
+    - host: 203.0.113.11
+      hostname: norca-server-02
+      cluster_address: 10.8.0.11
+      connection:
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+      server_settings:
+        bootstrap_expect: 3
+    - host: 203.0.113.12
+      hostname: norca-server-03
+      cluster_address: 10.8.0.12
+      arch: arm64                   # Mixed architectures are fine; each node gets its own binary.
+      connection:
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+      server_settings:
+        bootstrap_expect: 3
+
+  clients:
+    - host: 203.0.113.20
+      hostname: norca-worker-01
+      cluster_address: 10.8.0.20
+      connection:
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+        host_key_checking: strict   # The host key must already be in known_hosts_file.
+        known_hosts_file: ~/.ssh/known_hosts
+      client_settings:
+        network_interface: wg0      # Interface used for allocation addresses.
+        drivers: [docker, exec]     # driver.allowlist.
+        gc_disk_usage_threshold: 85 # Garbage-collect allocations above this disk usage (%).
+        node_class: general         # ${node.class}
+        meta:                       # Merged with client_defaults.meta.
+          rack: r1
+          storage: ssd
+        host_networks:              # Named networks for job ports (port "http" { host_network = "public" }).
+          - name: public
+            interface: eth0
+            reserved_ports: "22"
+        native_app_volumes:
+          enable_defaults: true     # host volumes native-apps-bin/work/config/data under apps_dir.
+        custom_host_volumes:
+          - name: shared-data       # Host volume name used by jobs.
+            path: /srv/shared       # Created with the given mode and owner.
+            read_only: false
+            owner: "1000:1000"
+            mode: "0750"
+    - host: 203.0.113.21
+      hostname: norca-worker-02
+      cluster_address: 10.8.0.21
+      datacenter: dc2               # This client is in another datacenter of the region.
+      connection:
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+      client_settings:
+        network_interface: wg0
+        drivers: [docker, exec]
+        node_class: general
+        meta:
+          rack: r2
+          storage: hdd
+      path_overrides:               # Paths for this node only.
+        data_dir: /data/norca
+    - host: 203.0.113.30
+      hostname: norca-win-01
+      platform: windows             # Commands run through PowerShell; packages and scripts are skipped.
+      cluster_address: 10.8.0.30
+      connection:
+        mode: ssh
+        ssh_user: Administrator     # No become on Windows: connect as an administrator.
+        ssh_key_path: ~/.ssh/norca_deployer
+      client_settings:
+        drivers: [raw_exec]
+        enable_raw_exec: true
+        node_pool: windows          # Overrides client_defaults.node_pool.
+        node_class: windows
+        native_app_volumes:
+          enable_defaults: true     # C:\norca\apps\bin, work, config, data
+        # extra_hcl: |              # Settings the deployer does not model, inside the client block.
+        #   max_kill_timeout = "60s"
+
+# Multi-region: a plan per region. A replica region adds this block; ACLs are
+# bootstrapped only in the authoritative region and replicated from it.
+# federation:
+#   authoritative_region: eu-central
+#   join: [10.8.0.10, 10.8.0.11, 10.8.0.12]   # Servers of the other region (Serf port by default).
+#   replication_token_file: ../eu-central/.norca-deployer/management-token

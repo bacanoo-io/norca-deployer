@@ -1,0 +1,85 @@
+# Adding nodes to a running cluster.
+#
+# There is no separate "add node" command: add the node to the inventory and
+# run apply again. The deployer compares every node with the plan:
+#
+#   - the new node is installed completely (packages, binary, certificates,
+#     norca.hcl, service) and started;
+#   - existing nodes are only checked; nothing changed on them, so they are
+#     not restarted ("unchanged, not restarted").
+#
+#   norca-deployer plan  -c examples/add-node.yaml   # shows norca-worker-03 as "new"
+#   norca-deployer apply -c examples/add-node.yaml
+#
+# After a successful apply the node is in the list of installed nodes
+# (.norca-deployer/nodes-<region>.json). That list is how a later apply
+# notices a node that was deleted from the plan (see decommission-node.yaml).
+#
+# Adding a CLIENT never restarts other nodes: clients join the servers listed
+# in their own configuration.
+#
+# Adding a SERVER changes the configuration of every server (the join list
+# and bootstrap_expect), so the existing servers restart one at a time, each
+# waiting for a healthy agent, a leader and all Raft peers. Keep the number of
+# servers odd (3 or 5) and add servers one plan change at a time.
+
+metadata:
+  name: norca-prod
+  region: eu-central
+  datacenter: dc1
+
+release:
+  version: v0.2.0                   # The new node gets the same release as the others.
+
+upgrade:
+  max_parallel_clients: 1
+  health_timeout: 240
+
+tuning:
+  apply_sysctl: true
+  apply_firewall_rules: true
+  open_ephemeral_ports: true
+
+security:
+  tls_enabled: true                 # The new node gets a certificate from the existing CA in certs/.
+  verify_server_hostname: true
+  gossip_encryption_key: AUTO_GENERATE   # The existing key in .norca-deployer/gossip.key is reused.
+  acl:
+    enabled: true
+    auto_bootstrap: true            # Already bootstrapped; the stored token is used.
+
+inventory:
+  masters:                          # Unchanged: no server restarts when a client is added.
+    - host: 10.8.0.10
+      hostname: norca-server-01
+      connection: &ssh              # YAML anchor: the same connection settings for every node.
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+    - host: 10.8.0.11
+      hostname: norca-server-02
+      connection: *ssh
+    - host: 10.8.0.12
+      hostname: norca-server-03
+      connection: *ssh
+
+  clients:
+    - host: 10.8.0.20
+      hostname: norca-worker-01
+      connection: *ssh
+      client_settings:
+        drivers: [docker, exec]
+    - host: 10.8.0.21
+      hostname: norca-worker-02
+      connection: *ssh
+      client_settings:
+        drivers: [docker, exec]
+
+    # NEW: the only node apply installs; the hostname must be unique.
+    - host: 10.8.0.22
+      hostname: norca-worker-03
+      datacenter: dc2               # It may go to another datacenter of the region.
+      connection: *ssh
+      client_settings:
+        drivers: [docker, exec]

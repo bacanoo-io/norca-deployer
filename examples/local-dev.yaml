@@ -1,0 +1,83 @@
+# Local development node: Norca server and client on this machine.
+#
+# The deployer does not use SSH here (connection.mode: local); it runs the
+# commands directly on the machine it is started on. That machine must be a
+# Linux host with systemd, and the deployer must run as root because it
+# installs a systemd service and writes to /etc, /var/lib and /usr/local:
+#
+#   sudo norca-deployer apply -c examples/local-dev.yaml
+#
+# The agent listens on 127.0.0.1 only, without TLS and ACLs, so the CLI and
+# the UI work without certificates or tokens:
+#
+#   export NORCA_ADDR=http://127.0.0.1:4646
+#   norca node status
+#   open http://127.0.0.1:4646/ui
+#
+# Do not use this plan for anything reachable from a network.
+
+metadata:
+  name: norca-dev                   # Cluster name.
+  region: global                    # Region of the node.
+  datacenter: dev                   # Datacenter of the node; jobs must target "dev" (or "*").
+
+release:
+  version: v0.2.0                   # Norca release to install from GitHub.
+  source: official                  # Downloaded and verified on this machine.
+  # Testing your own Norca build instead (rerun apply after each build; the
+  # agent restarts only when the binary changed):
+  # source: local-path
+  # local_binary_path: ../norca/bin/norca     # Path relative to this file, or absolute.
+  # Or a Debian package of your build (e.g. made with nfpm), installed by
+  # apt from a local file:
+  # source: host-package
+  # package: norca
+  # (and under host_packages.install:  - {name: norca, file: ../norca/dist/norca_0.2.0-1_amd64.deb})
+
+cni:
+  install: true                     # CNI plugins for bridge networking (network { mode = "bridge" }).
+  version: v1.9.1
+
+upgrade:
+  health_timeout: 60                # A local agent is up quickly; fail fast if it is not.
+
+tuning:
+  apply_sysctl: false               # Leave the kernel settings of a workstation alone. Set to true
+                                    # when bridge networking does not work (loads br_netfilter and
+                                    # enables bridge-nf-call-iptables and ip_forward).
+  apply_firewall_rules: false       # Nothing is exposed: the agent binds to 127.0.0.1.
+  setup_logrotate: true             # Agent log in /var/log/norca/norca.log, rotated by the agent.
+
+network:
+  bind_address: 127.0.0.1           # HTTP, RPC and Serf on the loopback interface only.
+
+security:
+  tls_enabled: false                # Plain HTTP for local development.
+  gossip_encryption_key: ""         # No gossip encryption (a single server has no gossip peers).
+  acl:
+    enabled: false                  # No tokens needed. Set to true (with auto_bootstrap: true)
+                                    # to develop against ACLs; the token is then stored in
+                                    # .norca-deployer/management-token next to this file.
+    auto_bootstrap: false
+
+# Docker for the docker driver, from the Debian/Ubuntu archive. Uncomment on a
+# Debian-based machine without Docker; skip it if Docker is already installed.
+# host_packages:
+#   install:
+#     - name: docker.io
+
+inventory:
+  masters:
+    - host: 127.0.0.1               # Advertised and joined on loopback.
+      hostname: norca-dev           # Node name shown in the UI.
+      connection:
+        mode: local                 # Run on this machine, no SSH.
+      server_settings:
+        bootstrap_expect: 1         # A single server elects itself leader.
+        log_level: DEBUG            # Verbose agent log for development.
+      client_settings:              # The server also runs the client, so jobs run here.
+        drivers: [docker, exec, raw_exec]   # Drivers allowed on the node.
+        enable_raw_exec: true       # raw_exec: run local binaries and scripts without isolation.
+        native_app_volumes:
+          enable_defaults: true     # /opt/norca/apps/{bin,work,config,data} as host volumes
+                                    # native-apps-bin, -work, -config, -data for exec/raw_exec jobs.

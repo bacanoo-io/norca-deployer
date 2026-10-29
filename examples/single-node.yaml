@@ -1,0 +1,120 @@
+# Single-node Norca deployment plan.
+#
+# One Debian/Ubuntu machine runs both the Norca server and the client, so it
+# can schedule jobs on itself. Good for development, demos and small edge
+# sites. Run it with:
+#
+#   norca-deployer validate -c examples/single-node.yaml
+#   norca-deployer plan     -c examples/single-node.yaml
+#   norca-deployer apply    -c examples/single-node.yaml
+#
+# Relative paths in this file (keys, scripts, .deb files) are resolved
+# against the directory of this file. The deployer keeps its local state
+# (CA in certs/, gossip key and ACL token in .norca-deployer/) next to it.
+
+version: norca.io/v1alpha1          # Plan format version (default; may be omitted).
+kind: DeploymentPlan                # Document kind (default; may be omitted).
+
+metadata:
+  name: norca-single                # Cluster name; also the CN of the generated CA.
+  region: global                    # Norca region of the node (default "global").
+  datacenter: dc1                   # Norca datacenter of the node (default "dc1").
+
+release:
+  version: v0.2.0                   # Norca release tag to install.
+  source: official                  # Download the GitHub release archive on the deployer machine
+                                    # and verify it against the release's SHA256SUMS file.
+  # Other sources:
+  # source: local-path              # Copy a binary or release archive from the deployer machine,
+  # local_binary_path: dist/norca_{os}_{arch}.tar.gz   # {os}/{arch} are replaced per node.
+  # source: custom-url              # Same archive layout under your own mirror:
+  # download_base_url: https://mirror.example.com/norca/releases/download
+  # checksum_sha256: "<64 hex>"     # Optional extra pin of the archive digest.
+  # source: host-package            # Norca from a Debian package (APT repository or local .deb,
+  # package: norca                  # see host_packages below); the deployer only checks the binary.
+
+cni:
+  install: true                     # Install the CNI reference plugins (needed for bridge networking).
+  version: v1.9.1                   # CNI plugins release to install.
+  source: official                  # Download from GitHub (SHA-256 verified), or local-path / custom-url.
+
+upgrade:
+  health_timeout: 180               # Seconds to wait for the agent to become healthy after a restart.
+
+tuning:
+  apply_sysctl: true                # Write /etc/sysctl.d/99-norca-production.conf and load bridge/br_netfilter.
+  apply_firewall_rules: true        # Open the Norca ports in ufw/firewalld (or iptables as a fallback).
+  open_ephemeral_ports: true        # Also open 20000-32000, the dynamic ports of the allocations.
+  setup_logrotate: true             # Let the agent log to /var/log/norca/norca.log with size-based rotation.
+  file_descriptor_limit: 65536      # LimitNOFILE of the systemd unit.
+  firewall:
+    api_cidrs: [192.168.1.0/24]     # Only the local network may use the API and UI (4646).
+    ephemeral_cidrs: [192.168.1.0/24]   # ...and the allocation ports 20000-32000.
+    # default_deny: true            # Enable ufw and deny everything else (SSH stays open);
+                                    # needs the ufw package (add it to host_packages).
+
+network:
+  bind_address: 0.0.0.0             # Address the agent listens on.
+  ports:
+    http: 4646                      # HTTP API and web UI.
+    rpc: 4647                       # Server RPC (clients connect here).
+    serf: 4648                      # Serf gossip between servers.
+
+security:
+  tls_enabled: true                 # mTLS for HTTP and RPC with an internal CA (certs/norca-ca.pem).
+  verify_server_hostname: true      # Check the role names (server.<region>.nomad) on RPC connections.
+  verify_https_client: false        # true: the HTTP API also requires a client certificate
+                                    # (the deployer then issues certs/cli.pem for operators).
+  gossip_encryption_key: AUTO_GENERATE   # Generate a gossip key once and keep it in .norca-deployer/gossip.key.
+  acl:
+    enabled: true                   # Turn on the ACL system.
+    auto_bootstrap: true            # Run "acl bootstrap" once and store the management token in
+                                    # .norca-deployer/management-token (encrypted when a master key exists).
+
+host_packages:
+  install:
+    - name: jq                      # A package from the APT sources already configured on the node.
+    - name: curl
+      hold: true                    # apt-mark hold: unattended upgrades will not touch it.
+  # Norca itself as a Debian package (with release.source: host-package):
+  # - name: norca
+  #   version: "0.2.0-1"
+  #   hold: true
+  #   # file: debs/norca_0.2.0-1_{arch}.deb   # or a local .deb instead of a repository
+  # A local package copied from the deployer machine (no repository needed):
+  # - name: my-tool
+  #   file: debs/my-tool_1.0-1_{arch}.deb   # {arch} -> amd64, arm64, armhf, i386
+  #   version: "1.0-1"
+
+scripts:
+  - name: motd                      # Unique script name (also the name of its state marker on the node).
+    phase: post_install             # pre_install | post_packages | post_install
+    inline: |                       # The script body; runs with bash as root (a non-zero exit fails the node).
+      echo "Managed by norca-deployer ($CLUSTER)" > /etc/motd
+    env:
+      CLUSTER: norca-single         # Passed through a 0600 env file, not on the command line.
+    # The script runs again only when its body or env changed (or always: true).
+
+inventory:
+  masters:
+    - host: 192.168.1.50            # SSH address of the machine.
+      hostname: norca-single        # Norca node name.
+      platform: linux               # linux (default) or windows.
+      arch: amd64                   # amd64 (default), arm64, arm or 386.
+      connection:
+        mode: ssh                   # ssh (default) or local (run on this machine).
+        ssh_user: root              # SSH user; a non-root user needs become: true (sudo).
+        ssh_key_path: ~/.ssh/id_ed25519   # Private key on the deployer machine.
+        # ssh_password: "!enc:v1:aes-gcm:..."   # Or a password, encrypted with "secret encrypt".
+        host_key_checking: tofu     # Trust the host key on first use, reject a changed key.
+      server_settings:
+        bootstrap_expect: 1         # Number of servers in the region (1 for a single node).
+      client_settings:              # A master with client_settings also runs the client.
+        drivers: [exec, raw_exec]   # Task drivers allowed on this node (driver.allowlist).
+        enable_raw_exec: true       # raw_exec runs tasks without isolation; enable it explicitly.
+        # meta:                     # Scheduling labels: ${meta.<key>} in constraints and affinities.
+        #   environment: dev
+        # node_class: general       # ${node.class}
+        # reserved:                 # Kept for the OS; not offered to allocations.
+        #   cpu: 200
+        #   memory: 256

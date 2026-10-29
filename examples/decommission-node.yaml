@@ -1,0 +1,101 @@
+# Removing nodes from a running cluster.
+#
+# Deleting a node from masters/clients is not enough: the deployer would
+# simply not touch the machine any more, and Norca would keep running there.
+# Instead, move the node to inventory.decommission. apply then
+#
+#   for a client:  drains it (its allocations move to the other clients),
+#                  stops Norca on it, purges the node from the cluster and
+#                  uninstalls Norca;
+#   for a server:  first restarts the remaining servers without it (one at a
+#                  time, quorum kept), then stops it, removes it from Raft and
+#                  Serf, waits until the remaining servers agree on the new
+#                  peer set, and uninstalls Norca.
+#
+# Clients are removed first, then servers one at a time.
+#
+#   norca-deployer plan  -c examples/decommission-node.yaml   # shows the node as "decommission"
+#   norca-deployer apply -c examples/decommission-node.yaml
+#
+# Safety net: apply keeps a list of the nodes it installed
+# (.norca-deployer/nodes-<region>.json). If a node from that list is neither
+# in the inventory nor under decommission, apply stops before changing
+# anything, so a node is never left running by accident (or removed by a
+# typo). For the same reason a node cannot switch between master and client
+# in place: decommission it, then add it again.
+#
+# Uninstall removes the service, norca.hcl, the certificates and the binary.
+# Host packages, CNI plugins, sysctl and firewall settings stay. With
+# purge_data the data, log and application directories are deleted too.
+# A machine that no longer exists is only removed from the cluster (with a
+# warning that it could not be reached).
+
+metadata:
+  name: norca-prod
+  region: eu-central
+  datacenter: dc1
+
+release:
+  version: v0.2.0
+
+upgrade:
+  max_parallel_clients: 1
+  health_timeout: 240               # Also the wait for the new Raft peer set after removing a server.
+
+security:
+  tls_enabled: true
+  verify_server_hostname: true
+  gossip_encryption_key: AUTO_GENERATE
+  acl:
+    enabled: true                   # Draining and purging use the stored management token.
+    auto_bootstrap: true
+
+inventory:
+  masters:                          # 5 -> 3 servers: bootstrap_expect follows the list (3).
+    - host: 10.8.0.10
+      hostname: norca-server-01
+      connection: &ssh
+        mode: ssh
+        ssh_user: devops
+        ssh_key_path: ~/.ssh/norca_deployer
+        become: true
+    - host: 10.8.0.11
+      hostname: norca-server-02
+      connection: *ssh
+    - host: 10.8.0.12
+      hostname: norca-server-03
+      connection: *ssh
+
+  clients:
+    - host: 10.8.0.20
+      hostname: norca-worker-01
+      connection: *ssh
+      client_settings:
+        drivers: [docker, exec]
+    - host: 10.8.0.22
+      hostname: norca-worker-03
+      connection: *ssh
+      client_settings:
+        drivers: [docker, exec]
+
+  decommission:
+    # A node from the installed list: the hostname is enough, the role and
+    # the connection settings it was installed with come from the list.
+    - hostname: norca-worker-02
+      drain_deadline: 900           # Seconds the allocations have to move (default 600);
+                                    # whatever still runs then is stopped.
+      purge_data: true              # Also delete /var/lib/norca, /var/log/norca, /opt/norca/apps.
+
+    # Two servers of the former five, removed one at a time after the clients.
+    - hostname: norca-server-04
+    - hostname: norca-server-05
+
+    # A node installed before the deployer kept its list (or with another
+    # copy of the state): give the role and the connection explicitly.
+    # - host: 10.8.0.30
+    #   hostname: norca-legacy-01
+    #   role: client                # master or client
+    #   connection: *ssh
+
+# The entries can stay after the apply: a later apply reports them as
+# "decommissioned earlier" and does nothing. Delete them when convenient.
