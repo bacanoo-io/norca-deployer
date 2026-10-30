@@ -31,7 +31,7 @@ func TestExamples(t *testing.T) {
 
 // Examples that exist in one format only.
 func TestExamplesSingleFormat(t *testing.T) {
-	for _, name := range []string{"local-dev.yaml", "add-node.yaml", "decommission-node.yaml"} {
+	for _, name := range []string{"local-dev.yaml", "add-node.yaml", "decommission-node.yaml", "multi-datacenter.yaml"} {
 		if _, err := LoadFromFile(filepath.Join("..", "..", "examples", name)); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}

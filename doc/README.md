@@ -16,10 +16,11 @@ Norca Deployer installs and maintains [Norca](https://github.com/bacanoo-io/norc
 | [Adding and removing nodes](adding-and-removing-nodes.md) | New nodes, decommissioning, the list of installed nodes |
 | [Bootstrap secrets and ACL policies](secrets-and-policies.md) | Secrets and Variables after the cluster is up, generated values, job-bound ACL policies, NATS example |
 | [Packs](packs.md) | Pack registries and pack releases deployed by `apply` |
+| [Several datacenters with NATS](multi-datacenter.md) | One region over several datacenters, a NATS cluster across them and the event bridge |
 | [Multi-region](multi-region.md) | Federated regions with ACL replication |
 | [Windows nodes](windows.md) | What differs on Windows clients and servers |
 
-Complete, commented plans are in [../examples](../examples): a single node and a production-style cluster (YAML and HCL), a local development node, and adding and decommissioning nodes.
+Complete, commented plans are in [../examples](../examples): a single node and a production-style cluster (YAML and HCL), a local development node, one region over three datacenters with NATS, and adding and decommissioning nodes.
 
 ## Architecture in one picture
 

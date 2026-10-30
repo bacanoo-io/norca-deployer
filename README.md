@@ -74,6 +74,7 @@ Complete plans with a comment on every setting are in [examples/](examples):
 | File | Content |
 | --- | --- |
 | [single-node.yaml](examples/single-node.yaml) / [single-node.hcl](examples/single-node.hcl) | One machine running server and client: TLS, gossip encryption, ACLs, host packages, a script |
+| [multi-datacenter.yaml](examples/multi-datacenter.yaml) | One region over three datacenters: a server per datacenter, NATS with one server per datacenter, the event bridge into a JetStream stream with 3 replicas |
 | [add-node.yaml](examples/add-node.yaml) | Adding a client to a running cluster (only the new node is installed) |
 | [decommission-node.yaml](examples/decommission-node.yaml) | Removing clients and servers: drain, Raft removal, uninstall |
 | [local-dev.yaml](examples/local-dev.yaml) | Development node on the machine running the deployer (`connection.mode: local`, run with `sudo`): loopback only, no TLS or ACLs, docker/exec/raw_exec, optional local Norca build |
@@ -125,5 +126,6 @@ The user documentation is in [doc/](doc/README.md):
 - [Adding and removing nodes](doc/adding-and-removing-nodes.md)
 - [Bootstrap secrets and ACL policies](doc/secrets-and-policies.md)
 - [Packs](doc/packs.md)
+- [Several datacenters with NATS](doc/multi-datacenter.md)
 - [Multi-region](doc/multi-region.md)
 - [Windows nodes](doc/windows.md)
