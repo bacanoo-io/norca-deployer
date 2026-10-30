@@ -1,6 +1,6 @@
 # One Region over Several Datacenters with NATS
 
-A region can span several datacenters: availability zones of a cloud region, or buildings of a campus. The servers form one Raft cluster across them, the clients of every datacenter run jobs, and a NATS cluster with one server per datacenter carries the events of the region. Example: [multi-datacenter.yaml](../examples/multi-datacenter.yaml).
+A region can span several datacenters: availability zones of a cloud region, or buildings of a campus. The servers form one Raft cluster across them, the clients of every datacenter run jobs, and the system bus of the servers keeps the event stream of the region on every server. The example also runs a NATS cluster with one server per datacenter for the applications. Example: [multi-datacenter.yaml](../examples/multi-datacenter.yaml).
 
 ```mermaid
 flowchart LR
@@ -25,7 +25,7 @@ flowchart LR
     NA ---|"routes :6222"| NB
     NB --- NC
     NC --- NA
-    BR["natsbridge"] -->|"events nomad.eu.*"| NA
+    SA -.-|"system bus :4650 (events NORCA_EVENTS_eu)"| SB
 ```
 
 ## Datacenters or regions
@@ -101,30 +101,24 @@ secrets:
   bootstrap:
     - path: nats/users/app
       items: {password: "!generate:nats-app"}       # generated once, kept locally
-    - path: nats/users/natsbridge
-      items: {seed: "!nkey-seed:natsbridge"}         # the bridge's NKey seed
 ```
 
 The passwords of the users are in `.norca-deployer/generated/<name>` on the operator machine, for the applications that connect.
 
-## The event bridge
+## The event stream
 
-With `bridge_enabled: true` the pack also runs `norca-natsbridge`, which forwards the event stream of the region (jobs, deployments, evaluations, allocations, nodes, services, scaling) to NATS:
+The servers embed NATS with JetStream: their system bus. The leader publishes the event stream of the region (jobs, deployments, evaluations, allocations, nodes, services, scaling, ...) on it:
 
 - **Subjects:** `nomad.<region>.<topic>`, e.g. `nomad.eu.Allocation`.
-- **JetStream:** into the stream `NORCA_EVENTS_<region>`. `bridge_jetstream_replicas: 3` keeps it on three servers, so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication.
-- **Stream limits:** `bridge_jetstream_max_age: 72h` and `bridge_jetstream_max_bytes: 512MB` (per server) drop the oldest events; without a limit the stream fills the servers' JetStream store and the bridge stops. `bridge_jetstream_compression: s2` shrinks the JSON events on disk and on the replication between the datacenters. The bridge applies these (and the replicas) to an existing stream too, on every start.
-- **Without history:** if only live notifications are needed, an empty `bridge_jetstream_stream` publishes with core NATS: nothing is stored, the bridge still resumes from its checkpoint.
-- **Instances:** `bridge_count: 2` runs two bridges on different nodes; one publishes, the other takes over through a Variables lease when it fails, and continues from the stored checkpoint.
-- **Binary:** `release.natsbridge: true` installs `norca-natsbridge` from the Norca release on the clients (`bridge_driver: exec`, `bridge_binary: /usr/local/bin/norca-natsbridge`).
-- **Identity:** the ACL policy `natsbridge` is bound to the job (`security.acl.policies[].job`), so the bridge reads the events with its workload identity. Its NATS user is an NKey user: the deployer generates the key pair, writes the seed into the secret `nats/users/natsbridge` and passes the public key with `bridge_nkey: "!nkey-public:natsbridge"`.
-
-A consumer subscribes to the subjects or reads the stream:
+- **Stream:** `NORCA_EVENTS_<region>` with one replica per server (up to three), so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication; a new leader continues after the newest event of the stream.
+- **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra_hcl`).
+- **Ports:** the routes between the servers use `network.ports.bus_cluster` (4650), consumers connect to `network.ports.bus` (4649); with `apply_firewall_rules` both are opened to `cluster_cidrs`.
+- **Access:** a consumer needs an ACL token whose policy has a `bus` rule, for example [events-reader.hcl](../examples/policies/events-reader.hcl).
 
 ```sh
-nats --server nats://10.10.1.11:4222 --user app --password "$(cat .norca-deployer/generated/nats-app)" \
+nats --server tls://10.10.1.11:4649 --tlsca .norca-deployer/certs/ca.pem --user "$TOKEN" \
   sub 'nomad.eu.>'
-nats stream info NORCA_EVENTS_eu        # (with the ops user of the SYS account: nats server report jetstream)
+norca operator bus status               # streams, routes and JetStream state of a server
 ```
 
 ## When a datacenter fails
@@ -135,7 +129,7 @@ nats stream info NORCA_EVENTS_eu        # (with the ops user of the SYS account:
 | Clients in eu-a, eu-c | Those connected to the lost server switch to another one; `heartbeat_grace` keeps them from being marked down meanwhile |
 | Jobs | Allocations of eu-b are rescheduled to eu-a and eu-c (within the limits of `datacenters`, `spread` and `separate`) |
 | NATS | Two servers remain; JetStream streams with 3 replicas keep their majority |
-| Bridge | The standby takes over the lease and continues from the checkpoint |
+| Event stream | Two of three replicas remain; the leader (or a new one) keeps publishing |
 
 `separate_required: true` keeps the third NATS server pending while eu-b is down, instead of putting two NATS servers into one datacenter; it is placed again when eu-b comes back.
 

@@ -73,8 +73,7 @@ func (r *Resolver) NorcaBinary(goos, arch string) (*File, error) {
 	return r.ReleaseBinary("norca", goos, arch)
 }
 
-// ReleaseBinary returns a binary of the release archive for a platform:
-// "norca" or "norca-natsbridge".
+// ReleaseBinary returns a binary of the release archive for a platform.
 func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
 	return r.memo(name+"/"+goos+"/"+arch, func() (*File, error) {
 		rel := r.plan.Release
@@ -94,10 +93,6 @@ func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
 					return nil, err
 				}
 				return fileWithDigest(dest)
-			}
-			if name != "norca" {
-				// A plain binary release: the other binaries have their own path.
-				return fileWithDigest(r.plan.ResolveLocalPath(expand(rel.NATSBridgeLocalPath, goos, arch)))
 			}
 			if err := verifyOptional(src, rel.ChecksumSHA256); err != nil {
 				return nil, err

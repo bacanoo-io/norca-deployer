@@ -42,6 +42,8 @@ tuning:
 | TCP 4646 (HTTP API, UI) | Servers | `api_cidrs` |
 | TCP 4647 (RPC) | Servers | `cluster_cidrs` |
 | TCP/UDP 4648 (Serf) | Servers | `cluster_cidrs` (servers of other regions must be in it) |
+| TCP 4649 (system bus clients) | Servers | `cluster_cidrs` |
+| TCP 4650 (system bus routes between the servers) | Servers | `cluster_cidrs` |
 | TCP/UDP 20000-32000 (allocations) | Nodes running a client, with `open_ephemeral_ports` | `ephemeral_cidrs`, default `cluster_cidrs` |
 | SSH | All, with `default_deny` | Any source |
 | `extra_ports` | Nodes of their `roles` (default: nodes running a client) | Their `cidrs`, default `cluster_cidrs` |

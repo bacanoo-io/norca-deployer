@@ -59,8 +59,6 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `local_binary_path` | | File for `local-path`: a binary or a `.tar.gz` / `.zip` archive; `{os}` and `{arch}` are replaced |
 | `checksum_sha256` | | Optional digest the artifact must match |
 | `package` | `norca` | Package name for `host-package`; it must be installed on every node |
-| `natsbridge` | `false` | Also install `norca-natsbridge` from the release archive on the nodes that run a client (with `host-package` the package must provide it) |
-| `natsbridge_local_path` | | `norca-natsbridge` binary for `local-path` when `local_binary_path` is a plain binary |
 
 ## cni
 
@@ -110,6 +108,7 @@ See [Networking and tuning](networking-and-tuning.md#firewall) for the firewall 
 | `bind_address` | | Listen address; empty: the cluster address of each node (HTTP also `127.0.0.1`) |
 | `dynamic_ports.min` / `dynamic_ports.max` | 20000 / 32000 | Allocation port range; the firewall opens the same range |
 | `ports.http` / `ports.rpc` / `ports.serf` | `4646` / `4647` / `4648` | Agent ports |
+| `ports.bus` / `ports.bus_cluster` | `4649` / `4650` | Ports of the system bus of the servers (NATS embedded in Norca): consumers, and the routes between the servers |
 | `interface_prefix` | | Advertise the address of the first interface whose name starts with this |
 | `interface_suffix` | | Same, matching the end of the name |
 | `vpn.enabled` | `false` | Use the VPN interface settings below for the advertise address |

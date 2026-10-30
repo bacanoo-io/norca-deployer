@@ -58,25 +58,25 @@ security:
     enabled: true
     auto_bootstrap: true
     policies:
-      - name: natsbridge
-        description: Event stream to NATS bridge
-        rules_file: policies/natsbridge.hcl     # or rules: | inline
+      - name: events-reader
+        description: Reads the event stream from the system bus
+        rules_file: policies/events-reader.hcl  # or rules: | inline
         job:                                    # optional: bind to a job
           namespace: default
-          job_id: natsbridge
-          # group: bridge
-          # task: bridge
+          job_id: audit
+          # group: archive
+          # task: archive
 ```
 
 A policy with `job` is bound to the workload identity of that job (as `norca acl policy apply -job`), so the job needs no static token. The deployer writes a policy again only when its name, description, rules or binding changed. In a replica region the policies are not written: they replicate from the authoritative region.
 
-## Example: NATS with the event bridge
+## Example: NATS for the applications
 
-The cluster example ([cluster.yaml](../examples/cluster.yaml)) deploys the `nats` pack of the Norca pack registry with user/password authentication and the event stream bridge:
+The cluster example ([cluster.yaml](../examples/cluster.yaml)) deploys the `nats` pack of the Norca pack registry with user/password authentication:
 
-1. `release.natsbridge: true` installs `norca-natsbridge` from the release archive on the clients.
-2. The ACL policy `natsbridge` ([policies/natsbridge.hcl](../examples/policies/natsbridge.hcl)) is bound to the `natsbridge` job.
-3. The secrets `nats/users/app` and `nats/users/ops` get generated passwords; `nats/users/natsbridge` gets the generated NKey seed of the bridge's user.
-4. The pack values name the users and pass the public key of the bridge's NKey (`bridge_nkey: "!nkey-public:natsbridge"`).
+1. The secrets `nats/users/app` and `nats/users/ops` get generated passwords.
+2. The pack values name the users; the pack reads their passwords from the secrets.
 
 The passwords of `app` and `ops` are in `.norca-deployer/generated/nats-app` and `nats-ops` for the clients that connect.
+
+The event stream of the region is not on this NATS but on the system bus of the servers; the ACL policy `events-reader` ([policies/events-reader.hcl](../examples/policies/events-reader.hcl)) lets a token read it.

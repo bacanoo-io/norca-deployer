@@ -25,11 +25,9 @@ release:
   version: v0.2.0                   # Norca release tag.
   source: official                  # official | custom-url | local-path | host-package
   # checksum_sha256: "<64 hex>"     # Optional pin of the release archive digest.
-  natsbridge: true                  # Also install norca-natsbridge (from the same release archive)
-                                    # on the clients, for the bridge job of the nats pack below.
   # Norca from a Debian package instead (Linux-only clusters; your own APT
-  # repository or a local .deb). The package installs norca (and
-  # norca-natsbridge); the deployer only checks the binary:
+  # repository or a local .deb). The package installs norca; the
+  # deployer only checks the binary:
   # source: host-package
   # package: norca                  # The package name (default norca); add it to host_packages.install.
 
@@ -117,12 +115,12 @@ security:
     auto_bootstrap: true            # Bootstrap once; the token goes to management_token_output.
     management_token_output: .norca-deployer/management-token   # Default location.
     policies:                       # Created after the bootstrap (replicated to other regions).
-      - name: natsbridge
-        description: Event stream to NATS bridge
-        rules_file: policies/natsbridge.hcl   # Relative to this file; or rules: | inline.
-        job:                        # Bound to the job: its workload identity gets the policy.
-          namespace: default
-          job_id: natsbridge
+      - name: events-reader
+        description: Reads the event stream from the system bus
+        rules_file: policies/events-reader.hcl   # Relative to this file; or rules: | inline.
+        # job:                      # Or bound to a job: its workload identity gets the policy.
+        #   namespace: default
+        #   job_id: audit
 
 backup:
   enabled: false                    # Set to true after filling in a real destination and age recipient.
@@ -219,11 +217,6 @@ secrets:                            # Written after the cluster is up, before th
     - path: nats/users/ops
       items:
         password: "!generate:nats-ops"
-    # The NKey seed of the bridge's NATS user; its public key goes into the
-    # pack values below (!nkey-public with the same name).
-    - path: nats/users/natsbridge
-      items:
-        seed: "!nkey-seed:natsbridge"
     # Further forms of item values:
     # - path: apps/mailer               # A secret of an application.
     #   namespace: default              # Default "default".
@@ -260,7 +253,7 @@ packs:
         count: 1
         memory: 256
 
-    # NATS cluster (JetStream) and the event stream -> NATS bridge.
+    # NATS cluster (JetStream) for the applications.
     - name: nats
       registry: norca
       pack: nats
@@ -275,17 +268,11 @@ packs:
         users:
           - name: app
             publish_allow: ["app.>", "$JS.API.>"]
-            subscribe_allow: ["app.>", "nomad.>", "_INBOX.>"]
+            subscribe_allow: ["app.>", "_INBOX.>"]
           - name: ops
             account: SYS            # nats server report, raft peer-remove.
         # tls_enabled: true         # TLS: put tls_ca/tls_cert/tls_key into the Variable
                                     # nomad/jobs/nats (a secrets entry of type variable).
-        bridge_enabled: true        # The natsbridge job: Norca events to <prefix>.<region>.<topic>.
-        bridge_nkey: "!nkey-public:natsbridge"   # Public key of the NKey generated above.
-        bridge_driver: exec         # Runs /usr/local/bin/norca-natsbridge (release.natsbridge).
-        bridge_binary: /usr/local/bin/norca-natsbridge
-        # bridge_sync_pushes: true  # Also sync pack registries on push notices; then add the
-                                    # registry permissions to policies/natsbridge.hcl.
 
 # Defaults for every node that runs a client. A node's own client_settings
 # win: values when set, meta entries by key, lists and blocks when given.

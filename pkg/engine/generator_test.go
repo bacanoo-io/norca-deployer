@@ -183,3 +183,25 @@ func TestWriteConsulToken(t *testing.T) {
 		t.Errorf("consul block without plan.consul has a token:\n%s", sb.String())
 	}
 }
+
+func TestGenerateBusPorts(t *testing.T) {
+	gen := func(ports config.PortsConfig) string {
+		plan := &config.DeploymentPlan{
+			Network:   config.NetworkConfig{Ports: ports},
+			Inventory: config.InventoryConfig{Masters: []config.NodeConfig{{Host: "203.0.113.10", ClusterAddress: "10.8.0.10", Hostname: "m1"}}},
+		}
+		plan.SetDefaults()
+		node := &plan.Inventory.Masters[0]
+		return GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	}
+
+	if hcl := gen(config.PortsConfig{}); !strings.Contains(hcl, "bus  = 4649") || !strings.Contains(hcl, "bus_cluster = 4650") {
+		t.Errorf("default bus ports missing:\n%s", hcl)
+	}
+	hcl := gen(config.PortsConfig{Bus: 5649, BusCluster: 5650})
+	for _, want := range []string{"bus  = 5649", "bus_cluster = 5650"} {
+		if !strings.Contains(hcl, want) {
+			t.Errorf("norca.hcl lacks %q:\n%s", want, hcl)
+		}
+	}
+}

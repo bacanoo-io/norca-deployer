@@ -221,3 +221,26 @@ func TestCustomDynamicRange(t *testing.T) {
 		t.Fatalf("rules: %v", r)
 	}
 }
+
+func TestRulesBusPorts(t *testing.T) {
+	// Servers open the bus ports to the cluster; clients don't.
+	p := ports
+	p.Bus, p.BusCluster = 4649, 4650
+	s := Spec{Ports: p, Server: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
+	var ids []string
+	for _, r := range s.Rules() {
+		ids = append(ids, r.ID())
+	}
+	got := strings.Join(ids, " ")
+	for _, want := range []string{"norca:4649/tcp:10.8.0.0/24", "norca:4650/tcp:10.8.0.0/24"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rules %s lack %s", got, want)
+		}
+	}
+	s = Spec{Ports: p, Client: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
+	for _, r := range s.Rules() {
+		if r.Port == "4649" || r.Port == "4650" {
+			t.Fatalf("client opens the bus port: %s", r.ID())
+		}
+	}
+}

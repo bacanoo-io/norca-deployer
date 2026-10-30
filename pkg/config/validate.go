@@ -190,9 +190,6 @@ func (p *DeploymentPlan) validateCluster() error {
 	if err := p.validateACLPolicies(); err != nil {
 		return err
 	}
-	if r.NATSBridge && r.Source == ReleaseLocalPath && !isArchivePath(r.LocalBinaryPath) && r.NATSBridgeLocalPath == "" {
-		return fmt.Errorf("release.natsbridge with a plain local_binary_path needs release.natsbridge_local_path")
-	}
 	return nil
 }
 

@@ -82,6 +82,9 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 	sb.WriteString(fmt.Sprintf("  http = %d\n", plan.Network.Ports.HTTP))
 	sb.WriteString(fmt.Sprintf("  rpc  = %d\n", plan.Network.Ports.RPC))
 	sb.WriteString(fmt.Sprintf("  serf = %d\n", plan.Network.Ports.Serf))
+	busPort, busClusterPort := plan.Network.Ports.BusPorts()
+	sb.WriteString(fmt.Sprintf("  bus  = %d\n", busPort))
+	sb.WriteString(fmt.Sprintf("  bus_cluster = %d\n", busClusterPort))
 	sb.WriteString("}\n\n")
 
 	// Without bind_address the agent listens on its cluster address only;

@@ -131,12 +131,6 @@ type ReleaseConfig struct {
 	// Package is the host package that provides the binary for source
 	// host-package (default "norca").
 	Package string `yaml:"package,omitempty" json:"package,omitempty"`
-	// NATSBridge also installs norca-natsbridge (from the same release
-	// archive) on the nodes that run a client, for the NATS bridge job.
-	NATSBridge bool `yaml:"natsbridge,omitempty" json:"natsbridge,omitempty"`
-	// NATSBridgeLocalPath is the norca-natsbridge binary for source
-	// local-path when local_binary_path is a plain binary, not an archive.
-	NATSBridgeLocalPath string `yaml:"natsbridge_local_path,omitempty" json:"natsbridge_local_path,omitempty"`
 }
 
 // Release sources.
@@ -282,6 +276,30 @@ type PortsConfig struct {
 	HTTP int `yaml:"http" json:"http"` // 4646
 	RPC  int `yaml:"rpc" json:"rpc"`   // 4647
 	Serf int `yaml:"serf" json:"serf"` // 4648
+
+	// Bus and BusCluster are the ports of the system bus of the servers
+	// (embedded NATS): client connections and the routes between the
+	// servers; 4649 and 4650 when 0.
+	Bus        int `yaml:"bus,omitempty" json:"bus,omitempty"`
+	BusCluster int `yaml:"bus_cluster,omitempty" json:"bus_cluster,omitempty"`
+}
+
+// Default ports of the system bus of the servers.
+const (
+	DefaultBusPort        = 4649
+	DefaultBusClusterPort = 4650
+)
+
+// BusPorts returns the effective ports of the system bus.
+func (p PortsConfig) BusPorts() (bus, cluster int) {
+	bus, cluster = p.Bus, p.BusCluster
+	if bus == 0 {
+		bus = DefaultBusPort
+	}
+	if cluster == 0 {
+		cluster = DefaultBusClusterPort
+	}
+	return bus, cluster
 }
 
 type SecurityConfig struct {
@@ -329,7 +347,7 @@ type ACLConfig struct {
 }
 
 // ACLPolicyConfig is an ACL policy, optionally bound to a job so that the
-// job's workload identity gets it (e.g. the NATS bridge).
+// job's workload identity gets it (e.g. a service archiving the events).
 type ACLPolicyConfig struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`

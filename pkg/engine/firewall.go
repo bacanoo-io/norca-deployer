@@ -16,8 +16,12 @@ func (r *Runner) configureFirewall(t *target) error {
 	if fw == nil {
 		fw = &config.FirewallConfig{}
 	}
+	busPort, busClusterPort := r.plan.Network.Ports.BusPorts()
 	spec := firewall.Spec{
-		Ports:          firewall.Ports{HTTP: r.plan.Network.Ports.HTTP, RPC: r.plan.Network.Ports.RPC, Serf: r.plan.Network.Ports.Serf},
+		Ports: firewall.Ports{
+			HTTP: r.plan.Network.Ports.HTTP, RPC: r.plan.Network.Ports.RPC, Serf: r.plan.Network.Ports.Serf,
+			Bus: busPort, BusCluster: busClusterPort,
+		},
 		Server:         t.isMaster,
 		Client:         t.needsClient(),
 		OpenEphemeral:  r.plan.Tuning.OpenEphemeralPorts,

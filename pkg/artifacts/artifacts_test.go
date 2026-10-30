@@ -104,29 +104,3 @@ func TestLocalArchiveWithPlaceholders(t *testing.T) {
 		t.Fatalf("extracted %q", data)
 	}
 }
-
-func TestNATSBridgeFromTheSameArchive(t *testing.T) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-	for name, content := range map[string]string{"norca_1.2.3_linux_amd64/norca": "norca", "norca_1.2.3_linux_amd64/norca-natsbridge": "bridge"} {
-		tw.WriteHeader(&tar.Header{Name: name, Mode: 0755, Size: int64(len(content)), Typeflag: tar.TypeReg})
-		tw.Write([]byte(content))
-	}
-	tw.Close()
-	gz.Close()
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "release.tar.gz"), buf.Bytes(), 0644)
-
-	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{Source: config.ReleaseLocalPath, LocalBinaryPath: filepath.Join(dir, "release.tar.gz")}}
-	res := NewResolver(plan, t.TempDir())
-	for name, want := range map[string]string{"norca": "norca", "norca-natsbridge": "bridge"} {
-		f, err := res.ReleaseBinary(name, "linux", "amd64")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if data, _ := os.ReadFile(f.Path); string(data) != want {
-			t.Fatalf("%s: extracted %q", name, data)
-		}
-	}
-}

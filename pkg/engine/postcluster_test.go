@@ -54,14 +54,14 @@ security:
     enabled: true
     auto_bootstrap: true
     policies:
-      - name: natsbridge
+      - name: audit
         rules_file: bridge.hcl
-        job: {job_id: natsbridge}
+        job: {job_id: audit}
 secrets:
   bootstrap:
     - path: nats/users/app
       items: {password: "!generate:nats-app"}
-    - path: nats/users/natsbridge
+    - path: nats/users/audit
       items: {seed: "!nkey-seed:bridge"}
     - type: variable
       path: nomad/jobs/nats
@@ -116,7 +116,7 @@ func TestBootstrapSecretsCreateOnceAndGenerate(t *testing.T) {
 	}
 	want := []string{
 		"PUT /v1/secret/nats/users/app?cas=0&namespace=default",
-		"PUT /v1/secret/nats/users/natsbridge?cas=0&namespace=default",
+		"PUT /v1/secret/nats/users/audit?cas=0&namespace=default",
 		"PUT /v1/var/nomad/jobs/nats?namespace=default",
 	}
 	if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
@@ -146,7 +146,7 @@ func TestBootstrapSecretsCreateOnceAndGenerate(t *testing.T) {
 	// overwrite entry is not written again.
 	api.calls = nil
 	api.conflict["/v1/secret/nats/users/app"] = true
-	api.conflict["/v1/secret/nats/users/natsbridge"] = true
+	api.conflict["/v1/secret/nats/users/audit"] = true
 	if err := r.bootstrapSecrets(first, "token"); err != nil {
 		t.Fatal(err)
 	}
@@ -174,8 +174,8 @@ func TestACLPolicyBoundToJob(t *testing.T) {
 		Name, Rules string
 		JobACL      map[string]string
 	}
-	json.Unmarshal([]byte(api.bodies["POST /v1/acl/policy/natsbridge"]), &body)
-	if body.Name != "natsbridge" || !strings.Contains(body.Rules, "node") || body.JobACL["JobID"] != "natsbridge" || body.JobACL["Namespace"] != "default" {
+	json.Unmarshal([]byte(api.bodies["POST /v1/acl/policy/audit"]), &body)
+	if body.Name != "audit" || !strings.Contains(body.Rules, "node") || body.JobACL["JobID"] != "audit" || body.JobACL["Namespace"] != "default" {
 		t.Fatalf("policy body: %+v", body)
 	}
 	api.calls = nil

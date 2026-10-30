@@ -310,14 +310,6 @@ func (r *Runner) prepareNode(t *target) error {
 	if after := r.binaryDigest(t); after != binaryBefore {
 		t.changed = true
 	}
-	// The NATS bridge runs as a job on the clients; installing it does not
-	// restart the agent.
-	if r.plan.Release.NATSBridge && t.needsClient() {
-		if err := r.installNATSBridge(t); err != nil {
-			return fmt.Errorf("norca-natsbridge: %w", err)
-		}
-	}
-
 	// 4. CNI plugins
 	if t.needsClient() && !isWin && r.plan.CNI != nil && r.plan.CNI.Install != nil && *r.plan.CNI.Install {
 		if err := r.installCNI(t); err != nil {

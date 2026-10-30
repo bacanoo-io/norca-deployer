@@ -19,7 +19,6 @@ metadata {
 release {
   version = "v0.2.0"
   source  = "official"                 # official | custom-url | local-path | host-package
-  natsbridge = true                    # Also install norca-natsbridge on the clients (nats pack bridge).
 
   # Norca from a Debian package instead (Linux-only clusters); add the
   # package to host_packages:
@@ -114,13 +113,9 @@ security {
     management_token_output = ".norca-deployer/management-token"
 
     policies {                         # Created after the bootstrap.
-      name        = "natsbridge"
-      description = "Event stream to NATS bridge"
-      rules_file  = "policies/natsbridge.hcl"
-      job {                            # Bound to the job's workload identity.
-        namespace = "default"
-        job_id    = "natsbridge"
-      }
+      name        = "events-reader"
+      description = "Reads the event stream from the system bus"
+      rules_file  = "policies/events-reader.hcl"
     }
   }
 }
@@ -227,11 +222,6 @@ secrets {                              # Written after the cluster is up, before
     path  = "nats/users/ops"
     items = { password = "!generate:nats-ops" }
   }
-  # NKey seed of the bridge's NATS user; the public key goes into the pack.
-  bootstrap {
-    path  = "nats/users/natsbridge"
-    items = { seed = "!nkey-seed:natsbridge" }
-  }
   # bootstrap {
   #   path      = "apps/mailer"
   #   items     = { user = "mailer", password = "!enc:v1:aes-gcm:...", ca = "@certs/smtp-ca.pem" }
@@ -271,7 +261,7 @@ packs {
     }
   }
 
-  # NATS cluster (JetStream) and the event stream -> NATS bridge.
+  # NATS cluster (JetStream) for the applications.
   deploy {
     name     = "nats"
     registry = "norca"
@@ -284,13 +274,9 @@ packs {
       jetstream_enabled = true
       auth_mode         = "userpass"
       users = [
-        { name = "app", publish_allow = ["app.>", "$JS.API.>"], subscribe_allow = ["app.>", "nomad.>", "_INBOX.>"] },
+        { name = "app", publish_allow = ["app.>", "$JS.API.>"], subscribe_allow = ["app.>", "_INBOX.>"] },
         { name = "ops", account = "SYS" },
       ]
-      bridge_enabled = true
-      bridge_nkey    = "!nkey-public:natsbridge"
-      bridge_driver  = "exec"
-      bridge_binary  = "/usr/local/bin/norca-natsbridge"
     }
   }
 }

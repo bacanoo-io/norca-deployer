@@ -20,6 +20,10 @@ import (
 // Ports are the agent ports from the plan.
 type Ports struct {
 	HTTP, RPC, Serf int
+
+	// Bus and BusCluster are the ports of the system bus of the servers;
+	// 0 opens nothing.
+	Bus, BusCluster int
 }
 
 const (
@@ -114,6 +118,14 @@ func (s Spec) Rules() []Rule {
 		add(strconv.Itoa(s.Ports.RPC), "tcp", s.ClusterCIDRs, false)
 		add(strconv.Itoa(s.Ports.Serf), "tcp", s.ClusterCIDRs, false)
 		add(strconv.Itoa(s.Ports.Serf), "udp", s.ClusterCIDRs, false)
+		// The system bus: nodes connect to the bus port, the servers of
+		// the region route to each other on the cluster port.
+		if s.Ports.Bus != 0 {
+			add(strconv.Itoa(s.Ports.Bus), "tcp", s.ClusterCIDRs, false)
+		}
+		if s.Ports.BusCluster != 0 {
+			add(strconv.Itoa(s.Ports.BusCluster), "tcp", s.ClusterCIDRs, false)
+		}
 	}
 	if s.Client && s.OpenEphemeral {
 		eph := s.EphemeralCIDRs
@@ -313,8 +325,10 @@ func configureFirewalld(conn connector.Connector, s Spec) (*Result, error) {
 	wantPorts := map[string]bool{}
 	wantRich := map[string]bool{}
 	managed := map[string]bool{} // ports the deployer owns
-	for _, p := range []int{s.Ports.HTTP, s.Ports.RPC, s.Ports.Serf} {
-		managed[strconv.Itoa(p)] = true
+	for _, p := range []int{s.Ports.HTTP, s.Ports.RPC, s.Ports.Serf, s.Ports.Bus, s.Ports.BusCluster} {
+		if p != 0 {
+			managed[strconv.Itoa(p)] = true
+		}
 	}
 	// The default range and the configured one, so that a changed range
 	// replaces the old rule.
