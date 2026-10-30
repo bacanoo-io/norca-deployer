@@ -16,6 +16,7 @@ type DeploymentPlan struct {
 	CNI             *CNIConfig     `yaml:"cni,omitempty" json:"cni,omitempty"`
 	Upgrade         UpgradeConfig  `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`
 	Federation      *Federation    `yaml:"federation,omitempty" json:"federation,omitempty"`
+	Consul          *ConsulConfig  `yaml:"consul,omitempty" json:"consul,omitempty"`
 	HostPackages    *HostPackages  `yaml:"host_packages,omitempty" json:"host_packages,omitempty"`
 	Scripts         []ScriptConfig `yaml:"scripts,omitempty" json:"scripts,omitempty"`
 	Secrets         *SecretsConfig `yaml:"secrets,omitempty" json:"secrets,omitempty"`
@@ -159,6 +160,21 @@ type CNIConfig struct {
 // Federation joins the servers of this plan (one region) to the servers of
 // other regions. ACLs are bootstrapped in the authoritative region only; the
 // other regions replicate them with a management token of that region.
+// ConsulConfig wires the agents to a Consul agent on every node, such as
+// the one of the consul pack. Without it the agents do not use Consul: they
+// do not register themselves there and do not look up servers there.
+type ConsulConfig struct {
+	// Address of the HTTP API of the local Consul agent (default
+	// 127.0.0.1:8500).
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	// AutoAdvertise registers the agents as Consul services (default
+	// true). The servers are still joined by the plan, not through Consul.
+	AutoAdvertise *bool `yaml:"auto_advertise,omitempty" json:"auto_advertise,omitempty"`
+	// TokenFile is a local file with the Consul ACL token of the agents
+	// (relative to the plan); needed when Consul's ACLs deny by default.
+	TokenFile string `yaml:"token_file,omitempty" json:"token_file,omitempty"`
+}
+
 type Federation struct {
 	AuthoritativeRegion string `yaml:"authoritative_region" json:"authoritative_region"`
 	// Join lists server addresses of other regions (host or host:serf_port).

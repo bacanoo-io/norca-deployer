@@ -16,6 +16,8 @@ type GenOptions struct {
 	GossipKey string
 	// ReplicationToken is the ACL replication token of a replica region.
 	ReplicationToken string
+	// ConsulToken is the Consul ACL token of the agents (plan.consul).
+	ConsulToken string
 }
 
 // ClusterAddress is the address other nodes use to reach a node.
@@ -135,6 +137,8 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		sb.WriteString("}\n\n")
 	}
 
+	writeConsul(&sb, plan.Consul, opts.ConsulToken)
+
 	// Server block
 	if isMaster {
 		sb.WriteString("server {\n")
@@ -224,6 +228,28 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 	}
 
 	return sb.String()
+}
+
+// writeConsul writes the consul block. Without plan.consul it turns off
+// what the agent would otherwise try against 127.0.0.1:8500: registering
+// itself and discovering the servers. The servers are always joined by the
+// plan.
+func writeConsul(sb *strings.Builder, c *config.ConsulConfig, token string) {
+	sb.WriteString("consul {\n")
+	if c == nil {
+		sb.WriteString("  auto_advertise   = false\n")
+	} else {
+		if c.Address != "" {
+			sb.WriteString(fmt.Sprintf("  address          = %q\n", c.Address))
+		}
+		sb.WriteString(fmt.Sprintf("  auto_advertise   = %t\n", c.AutoAdvertise == nil || *c.AutoAdvertise))
+		if token != "" {
+			sb.WriteString(fmt.Sprintf("  token            = %q\n", token))
+		}
+	}
+	sb.WriteString("  server_auto_join = false\n")
+	sb.WriteString("  client_auto_join = false\n")
+	sb.WriteString("}\n\n")
 }
 
 // clientDrivers returns the driver allowlist. raw_exec is only listed when it

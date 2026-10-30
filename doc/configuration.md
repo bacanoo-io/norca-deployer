@@ -32,6 +32,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `security` | | TLS, gossip, PKI, ACLs |
 | `backup` | | Built-in server backups |
 | `federation` | | Multi-region settings |
+| `consul` | | A Consul agent on every node; without it the agents do not use Consul |
 | `host_packages` | | Debian packages |
 | `scripts` | | Bash scripts |
 | `client_defaults` | | Client settings merged into every node that runs a client |
@@ -162,6 +163,16 @@ Built-in snapshots of the server state, written to the server block of `norca.hc
 | `replication_token_file` | Management token of the authoritative region; required in a replica region with ACLs |
 
 See [Multi-region](multi-region.md).
+
+## consul
+
+Norca does not need Consul. Without this section every agent gets `auto_advertise = false`, so it does not try to register itself in a Consul agent on `127.0.0.1:8500`. With it, the agents register in the Consul agent of their node, for example the one of the `consul` pack. The servers are always joined by the plan, never through Consul (`server_auto_join` and `client_auto_join` are always `false`).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `address` | `127.0.0.1:8500` | HTTP API of the local Consul agent |
+| `auto_advertise` | `true` | Register the agents as Consul services |
+| `token_file` | | Local file (relative to the plan) with the Consul ACL token of the agents, for a Consul whose ACLs deny by default |
 
 ## host_packages
 

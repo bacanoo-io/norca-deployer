@@ -37,6 +37,8 @@ type Runner struct {
 	store     *state.Store
 	artifacts *artifacts.Resolver
 	gossipKey string
+	// consulToken is the Consul ACL token of the agents (plan.consul).
+	consulToken string
 	// replicationToken is the ACL token of the authoritative region (replica
 	// regions only).
 	replicationToken string
@@ -117,6 +119,17 @@ func (r *Runner) Apply() error {
 				path, r.plan.Federation.AuthoritativeRegion)
 		}
 		r.replicationToken = token
+	}
+	if c := r.plan.Consul; c != nil && c.TokenFile != "" {
+		path := r.plan.ResolveLocalPath(c.TokenFile)
+		token, ok, err := store.ReadSecret(path)
+		if err != nil {
+			return fmt.Errorf("consul token: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("consul token file %s not found", path)
+		}
+		r.consulToken = token
 	}
 
 	masters := r.targets(r.plan.Inventory.Masters, true)
@@ -322,7 +335,7 @@ func (r *Runner) prepareNode(t *target) error {
 	}
 
 	// 6. Generate and write configuration file (norca.hcl)
-	hclContent := GenerateNorcaConfig(node, r.plan, paths, t.isMaster, GenOptions{GossipKey: r.gossipKey, ReplicationToken: r.replicationToken})
+	hclContent := GenerateNorcaConfig(node, r.plan, paths, t.isMaster, GenOptions{GossipKey: r.gossipKey, ReplicationToken: r.replicationToken, ConsulToken: r.consulToken})
 	configPath := joinPath(paths, paths.ConfigDir, "norca.hcl")
 	changed, err := connector.SyncFile(conn, configPath, []byte(hclContent), 0640)
 	if err != nil {

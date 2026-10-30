@@ -128,3 +128,58 @@ func TestGenerateClientLabels(t *testing.T) {
 		t.Errorf("dynamic ports written without a configured range")
 	}
 }
+
+func TestGenerateConsulBlock(t *testing.T) {
+	gen := func(c *config.ConsulConfig) string {
+		plan := &config.DeploymentPlan{
+			Consul:    c,
+			Inventory: config.InventoryConfig{Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "m1"}}},
+		}
+		plan.SetDefaults()
+		node := &plan.Inventory.Masters[0]
+		return GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	}
+	check := func(hcl string, want, unwanted []string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(hcl, w) {
+				t.Errorf("generated config lacks %q:\n%s", w, hcl)
+			}
+		}
+		for _, u := range unwanted {
+			if strings.Contains(hcl, u) {
+				t.Errorf("generated config has %q:\n%s", u, hcl)
+			}
+		}
+	}
+
+	// Without Consul in the plan the agents neither advertise nor join
+	// through it.
+	check(gen(nil), []string{
+		"auto_advertise   = false",
+		"server_auto_join = false",
+		"client_auto_join = false",
+	}, []string{"address          ="})
+
+	// With it they advertise to the given agent; the plan still joins them.
+	check(gen(&config.ConsulConfig{Address: "127.0.0.1:18500"}), []string{
+		`address          = "127.0.0.1:18500"`,
+		"auto_advertise   = true",
+		"server_auto_join = false",
+	}, nil)
+	off := false
+	check(gen(&config.ConsulConfig{AutoAdvertise: &off}), []string{"auto_advertise   = false"}, []string{"address          =", "token"})
+}
+
+func TestWriteConsulToken(t *testing.T) {
+	var sb strings.Builder
+	writeConsul(&sb, &config.ConsulConfig{}, "c0ffee")
+	if !strings.Contains(sb.String(), `token            = "c0ffee"`) {
+		t.Errorf("consul block lacks the token:\n%s", sb.String())
+	}
+	sb.Reset()
+	writeConsul(&sb, nil, "c0ffee")
+	if strings.Contains(sb.String(), "token") {
+		t.Errorf("consul block without plan.consul has a token:\n%s", sb.String())
+	}
+}
