@@ -8,7 +8,7 @@
 #   - a NATS cluster with one server per datacenter (the "separate" rule on
 #     ${node.datacenter}), JetStream, users with generated passwords
 #   - the event stream on the system bus of the servers: the Norca events of
-#     the region go to nomad.eu.<topic> in the stream NORCA_EVENTS_eu with 3
+#     the region go to nomad.eu.<namespace>.<topic> in the stream NORCA_EVENTS_eu with 3
 #     replicas, one per server, so the event history survives a datacenter
 #     loss as well
 #

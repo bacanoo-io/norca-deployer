@@ -109,7 +109,7 @@ The passwords of the users are in `.norca-deployer/generated/<name>` on the oper
 
 The servers embed NATS with JetStream: their system bus. The leader publishes the event stream of the region (jobs, deployments, evaluations, allocations, nodes, services, scaling, ...) on it:
 
-- **Subjects:** `nomad.<region>.<topic>`, e.g. `nomad.eu.Allocation`.
+- **Subjects:** `nomad.<region>.<namespace>.<topic>`, e.g. `nomad.eu.default.Allocation` (`_` for events without a namespace, such as `nomad.eu._.Node`).
 - **Stream:** `NORCA_EVENTS_<region>` with one replica per server (up to three), so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication; a new leader continues after the newest event of the stream.
 - **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra_hcl`).
 - **Ports:** the routes between the servers use `network.ports.bus_cluster` (4650), consumers connect to `network.ports.bus` (4649); with `apply_firewall_rules` both are opened to `cluster_cidrs`.
