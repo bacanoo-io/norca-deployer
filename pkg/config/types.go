@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // DeploymentPlan represents the entire cluster deployment plan.
 type DeploymentPlan struct {
 	Version         string         `yaml:"version" json:"version"`
@@ -13,6 +15,7 @@ type DeploymentPlan struct {
 	Security        SecurityConfig `yaml:"security" json:"security"`
 	Backup          *BackupConfig  `yaml:"backup,omitempty" json:"backup,omitempty"`
 	Packs           *PacksConfig   `yaml:"packs,omitempty" json:"packs,omitempty"`
+	GitOps          *GitOpsConfig  `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 	CNI             *CNIConfig     `yaml:"cni,omitempty" json:"cni,omitempty"`
 	Upgrade         UpgradeConfig  `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`
 	Federation      *Federation    `yaml:"federation,omitempty" json:"federation,omitempty"`
@@ -31,6 +34,15 @@ type DeploymentPlan struct {
 	// baseDir is the directory of the loaded configuration file; relative
 	// script paths are resolved against it.
 	baseDir string
+}
+
+// AllGitOpsBindings returns all configured GitOps bindings across packs and top-level gitops.
+func (p *DeploymentPlan) AllGitOpsBindings() []GitOpsBinding {
+	var res []GitOpsBinding
+	if p.Packs != nil {
+		res = append(res, p.Packs.GitOps.AllBindings()...)
+	}
+	return append(res, p.GitOps.AllBindings()...)
 }
 
 // Node roles used by the role filters of host packages and scripts.
@@ -437,7 +449,8 @@ type PacksConfig struct {
 	// Registry is a single registry (shorthand); Registries lists several.
 	Registry   PackRegistryConfig   `yaml:"registry,omitempty" json:"registry,omitempty"`
 	Registries []PackRegistryConfig `yaml:"registries,omitempty" json:"registries,omitempty"`
-	Deploy     []PackDeployItem     `yaml:"deploy" json:"deploy"`
+	Deploy     []PackDeployItem     `yaml:"deploy,omitempty" json:"deploy,omitempty"`
+	GitOps     *GitOpsConfig        `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 }
 
 // AllRegistries returns the registries of registry and registries.
@@ -468,6 +481,148 @@ type PackDeployItem struct {
 	Version  string                 `yaml:"version,omitempty" json:"version,omitempty"`
 	Enabled  bool                   `yaml:"enabled" json:"enabled"`
 	Values   map[string]interface{} `yaml:"values,omitempty" json:"values,omitempty"`
+}
+
+// GitOpsConfig defines continuous GitOps reconcilers and bindings.
+type GitOpsConfig struct {
+	Enabled          bool            `yaml:"enabled" json:"enabled"`
+	LogBufferSize    int             `yaml:"log_buffer_size,omitempty" json:"log_buffer_size,omitempty"`
+	DebounceDuration string          `yaml:"debounce_duration,omitempty" json:"debounce_duration,omitempty"`
+	Bindings         []GitOpsBinding `yaml:"bindings,omitempty" json:"bindings,omitempty"`
+	Binding          []GitOpsBinding `yaml:"binding,omitempty" json:"binding,omitempty"`
+}
+
+// AllBindings returns the GitOps bindings regardless of syntax; none when
+// GitOps is not enabled.
+func (g *GitOpsConfig) AllBindings() []GitOpsBinding {
+	if g == nil || !g.Enabled {
+		return nil
+	}
+	res := append([]GitOpsBinding{}, g.Bindings...)
+	res = append(res, g.Binding...)
+	return res
+}
+
+// GitOpsBinding maps a Git repository source to a Norca pack release deployment.
+type GitOpsBinding struct {
+	Name        string                 `yaml:"name" json:"name"`
+	ReleaseName string                 `yaml:"release_name" json:"release_name"`
+	Namespace   string                 `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	Region      string                 `yaml:"region,omitempty" json:"region,omitempty"`
+	Atomic      bool                   `yaml:"atomic,omitempty" json:"atomic,omitempty"`
+	MaxHistory  int                    `yaml:"max_history,omitempty" json:"max_history,omitempty"`
+	Values      map[string]interface{} `yaml:"values,omitempty" json:"values,omitempty"`
+
+	// Provider settings
+	Provider string        `yaml:"provider,omitempty" json:"provider,omitempty"` // forgejo (default), gitea, github, gitlab
+	Forgejo  *RepoConfig   `yaml:"forgejo,omitempty" json:"forgejo,omitempty"`
+	Gitea    *RepoConfig   `yaml:"gitea,omitempty" json:"gitea,omitempty"`
+	GitHub   *GitHubConfig `yaml:"github,omitempty" json:"github,omitempty"`
+	GitLab   *GitLabConfig `yaml:"gitlab,omitempty" json:"gitlab,omitempty"`
+
+	// Webhook trigger settings
+	Webhook *WebhookConfig `yaml:"webhook,omitempty" json:"webhook,omitempty"`
+
+	// Verify requires a signed commit or tag
+	Verify *VerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
+}
+
+// VerifyConfig requires a pack to come from a commit or tag signed with one of
+// the keys. The block turns it on; enabled = false turns it off.
+type VerifyConfig struct {
+	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+
+	// PublicKeys are armored PGP public keys, or !file: paths of them.
+	PublicKeys []string `yaml:"public_keys,omitempty" json:"public_keys,omitempty"`
+}
+
+// Active reports whether signatures are required.
+func (v *VerifyConfig) Active() bool {
+	return v != nil && (v.Enabled == nil || *v.Enabled)
+}
+
+// EffectiveProvider returns the canonical provider name for this binding.
+func (b *GitOpsBinding) EffectiveProvider() string {
+	if b.Provider != "" {
+		return strings.ToLower(b.Provider)
+	}
+	if b.Gitea != nil {
+		return "gitea"
+	}
+	if b.GitHub != nil {
+		return "github"
+	}
+	if b.GitLab != nil {
+		return "gitlab"
+	}
+	return "forgejo"
+}
+
+// EffectiveAPIURL returns the API URL of a GitHub binding.
+func (b *GitOpsBinding) EffectiveAPIURL() string {
+	if b.EffectiveProvider() == "github" && b.GitHub != nil {
+		return b.GitHub.APIURL
+	}
+	return ""
+}
+
+// EffectiveRepo returns the repository configuration for this binding.
+func (b *GitOpsBinding) EffectiveRepo() *RepoConfig {
+	switch b.EffectiveProvider() {
+	case "gitea":
+		if b.Gitea != nil {
+			return b.Gitea
+		}
+	case "github":
+		if b.GitHub != nil {
+			return &b.GitHub.RepoConfig
+		}
+	case "gitlab":
+		if b.GitLab != nil {
+			return &b.GitLab.RepoConfig
+		}
+	default: // forgejo
+		if b.Forgejo != nil {
+			return b.Forgejo
+		}
+	}
+	if b.Forgejo != nil {
+		return b.Forgejo
+	}
+	return &RepoConfig{}
+}
+
+// RepoConfig defines common repository settings for Forgejo and Gitea.
+type RepoConfig struct {
+	URL                string `yaml:"url" json:"url"`
+	Branch             string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Ref                string `yaml:"ref,omitempty" json:"ref,omitempty"`
+	Subpath            string `yaml:"subpath,omitempty" json:"subpath,omitempty"`
+	AuthSecret         string `yaml:"auth_secret,omitempty" json:"auth_secret,omitempty"`
+	SSHPrivateKey      string `yaml:"ssh_private_key,omitempty" json:"ssh_private_key,omitempty"`
+	KnownHosts         string `yaml:"known_hosts,omitempty" json:"known_hosts,omitempty"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify,omitempty"`
+	CACertPEM          string `yaml:"ca_cert_pem,omitempty" json:"ca_cert_pem,omitempty"`
+}
+
+// GitHubConfig defines settings for GitHub Cloud or GitHub Enterprise Server.
+type GitHubConfig struct {
+	RepoConfig `yaml:",inline"`
+	APIURL     string `yaml:"api_url,omitempty" json:"api_url,omitempty"`
+}
+
+// GitLabConfig defines settings for GitLab Cloud or Self-Managed.
+type GitLabConfig struct {
+	RepoConfig  `yaml:",inline"`
+	ProjectPath string `yaml:"project_path,omitempty" json:"project_path,omitempty"`
+}
+
+// WebhookConfig defines webhook callback authentication and filtering.
+type WebhookConfig struct {
+	SecretKey      string   `yaml:"secret_key,omitempty" json:"secret_key,omitempty"`
+	Events         []string `yaml:"events,omitempty" json:"events,omitempty"`
+	FilterBranches []string `yaml:"filter_branches,omitempty" json:"filter_branches,omitempty"`
+	FilterTags     []string `yaml:"filter_tags,omitempty" json:"filter_tags,omitempty"`
 }
 
 type InventoryConfig struct {

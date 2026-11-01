@@ -20,6 +20,7 @@ Windows nodes are supported as clients (typically for native `.exe` workloads wi
 | Tuning | `tuning.windows_long_paths: true` sets `LongPathsEnabled = 1` and the execution policy `RemoteSigned` |
 | Paths | Separate defaults under `C:\Program Files\norca` and `C:\ProgramData\norca` (see [Networking and tuning](networking-and-tuning.md)) |
 | Host packages, scripts | Skipped with a warning |
+| [GitOps](gitops.md) bindings on `apply` | Not possible when the first server runs Windows: `apply` fails; `gitops run` works |
 | CNI plugins | Not installed |
 | `release.source: host-package` | Not possible; `validate` rejects it |
 

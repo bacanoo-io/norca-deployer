@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bacanoo-io/norca-deployer/pkg/config"
+	"github.com/bacanoo-io/norca-deployer/pkg/gitops"
 )
 
 // resolveValue resolves a value of a secret item or a pack value: an
@@ -314,4 +316,86 @@ func (r *Runner) applyNodePools(first *target, token string) error {
 		fmt.Printf("    [OK] Node pool %s applied\n", np.Name)
 	}
 	return nil
+}
+
+// deployGitOps deploys the GitOps bindings: every apply fetches them, and a
+// marker skips the deployment of a pack and values that were deployed before.
+func (r *Runner) deployGitOps(first *target, token string) error {
+	if len(r.plan.AllGitOpsBindings()) == 0 {
+		return nil
+	}
+	bindings, err := r.plan.ResolvedGitOpsBindings(r.resolveSecret)
+	if err != nil {
+		return err
+	}
+	if r.plan.Security.ACL != nil && r.plan.Security.ACL.Enabled && token == "" {
+		fmt.Printf("    [WARN] No management token: %d GitOps binding(s) not deployed\n", len(bindings))
+		return nil
+	}
+	cli := first.cli(r, token)
+	if cli.isWindows() {
+		return fmt.Errorf("gitops: a pack archive can't be sent through a Windows server; run the first master on Linux or use gitops run")
+	}
+	api := remoteAPI{cli}
+
+	for i := range bindings {
+		b := &bindings[i]
+		resolved, err := r.resolveValues(b.Values)
+		if err != nil {
+			return fmt.Errorf("gitops %q values: %w", b.Name, err)
+		}
+		values, _ := resolved.(map[string]any)
+
+		if err := gitops.CheckBinding(b); err != nil {
+			return err
+		}
+		fmt.Printf("    Fetching GitOps pack %s (%s, %s)...\n", b.Name, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		res, err := gitops.FetchPackInMemory(ctx, gitops.FetchOptionsFor(b))
+		cancel()
+		if err != nil {
+			return fmt.Errorf("gitops %q in-memory fetch: %w", b.Name, err)
+		}
+
+		if res.Signer != "" {
+			fmt.Printf("    [OK] GitOps binding %s verified: %s\n", b.Name, res.Signer)
+		}
+
+		rel := gitops.ReleaseOf(b, values, res)
+		summary, err := json.Marshal(map[string]any{
+			"Pack":       gitops.PackDigest(res.PackFiles),
+			"Release":    rel.Name,
+			"Namespace":  rel.Namespace,
+			"Region":     rel.Region,
+			"Values":     rel.Values,
+			"Atomic":     rel.Atomic,
+			"MaxHistory": rel.MaxHistory,
+		})
+		if err != nil {
+			return fmt.Errorf("gitops %q: %w", b.Name, err)
+		}
+		sum := sha256.Sum256(summary)
+		marker := r.store.Path(filepath.Join("gitops", b.Name+".sha256"))
+		if prev, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(prev)) == hex.EncodeToString(sum[:]) {
+			fmt.Printf("    GitOps binding %s unchanged (skipped)\n", b.Name)
+			continue
+		}
+
+		if err := gitops.Deploy(context.Background(), api, res, rel); err != nil {
+			return fmt.Errorf("gitops %q: %w", b.Name, err)
+		}
+		if err := os.MkdirAll(filepath.Dir(marker), 0700); err == nil {
+			_ = os.WriteFile(marker, []byte(hex.EncodeToString(sum[:])+"\n"), 0600)
+		}
+		fmt.Printf("    [OK] GitOps binding %s deployed (release %s, %s)\n", b.Name, b.ReleaseName, res.CommitSHA)
+	}
+
+	return nil
+}
+
+// remoteAPI calls the cluster through the CLI of a server.
+type remoteAPI struct{ cli *remoteCLI }
+
+func (a remoteAPI) API(_ context.Context, method, path string, body []byte) (int, string, error) {
+	return a.cli.api(method, path, body)
 }

@@ -672,7 +672,10 @@ func (r *Runner) postClusterTasks(first *target) error {
 	if err := r.bootstrapSecrets(first, token); err != nil {
 		return err
 	}
-	return r.deployPacks(first, token)
+	if err := r.deployPacks(first, token); err != nil {
+		return err
+	}
+	return r.deployGitOps(first, token)
 }
 
 // aclBootstrap bootstraps the ACL system once and stores the management

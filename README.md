@@ -16,6 +16,7 @@ A single-binary installer and lifecycle tool for [Norca](https://github.com/baca
 - **Node lifecycle:** new nodes are installed by adding them to the plan; `inventory.decommission` drains or removes nodes from Raft and uninstalls them. A list of installed nodes stops an apply when a node was only deleted from the plan.
 - **Bootstrap secrets and policies:** after the cluster is up, secrets of the built-in secret store and Variables (plain, encrypted, from files, or generated once: passwords, NATS NKeys) and ACL policies bound to jobs.
 - **Packs:** creates pack registries and installs packs with the server-side `deploy-pack`. A pack is deployed again only when its settings changed.
+- **GitOps:** deploys packs straight from Forgejo, Gitea, GitHub and GitLab repositories, read into memory: once with `gitops run`, on every `apply`, and on every push with the `gitops daemon` webhook listener (HMAC-verified, debounced). Bindings can require a signed commit or tag.
 - **SSH host keys:** trust on first use (`tofu`), `strict` or `off`.
 
 ## Build
@@ -126,6 +127,7 @@ The user documentation is in [doc/](doc/README.md):
 - [Adding and removing nodes](doc/adding-and-removing-nodes.md)
 - [Bootstrap secrets and ACL policies](doc/secrets-and-policies.md)
 - [Packs](doc/packs.md)
+- [GitOps](doc/gitops.md)
 - [Several datacenters with NATS](doc/multi-datacenter.md)
 - [Multi-region](doc/multi-region.md)
 - [Windows nodes](doc/windows.md)

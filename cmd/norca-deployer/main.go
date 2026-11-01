@@ -215,6 +215,14 @@ func main() {
 					fmt.Printf("  - %s: %s/%s enabled=%t\n", d.Name, reg, d.Pack, d.Enabled)
 				}
 			}
+			if bindings := plan.AllGitOpsBindings(); len(bindings) > 0 {
+				fmt.Printf("GitOps Bindings (%d):\n", len(bindings))
+				for _, b := range bindings {
+					repo := b.EffectiveRepo()
+					fmt.Printf("  - %s: release=%s provider=%s url=%s branch=%s atomic=%t\n",
+						b.Name, b.ReleaseName, b.EffectiveProvider(), repo.URL, repo.Branch, b.Atomic)
+				}
+			}
 
 			// Plan compared with the nodes installed by earlier applies.
 			report, err := engine.InventoryReport(plan, vaultIfAvailable())
@@ -350,7 +358,7 @@ func main() {
 	initCmd.Flags().BoolVar(&force, "force", false, "Overwrite an existing configuration file")
 	applyCmd.Flags().BoolVar(&forceRestart, "force-restart", false, "Restart every agent (rolling), even when nothing changed")
 
-	rootCmd.AddCommand(initCmd, validateCmd, planCmd, applyCmd, secretCmd, pkiCmd, versionCmd)
+	rootCmd.AddCommand(initCmd, validateCmd, planCmd, applyCmd, secretCmd, pkiCmd, newGitOpsCmd(), versionCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Println(err)

@@ -370,6 +370,9 @@ func (p *DeploymentPlan) Validate() error {
 	if err := p.validateNodeSettings(); err != nil {
 		return err
 	}
+	if err := p.validateGitOps(); err != nil {
+		return err
+	}
 
 	return nil
 }

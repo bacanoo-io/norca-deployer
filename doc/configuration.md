@@ -38,7 +38,8 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `client_defaults` | | Client settings merged into every node that runs a client |
 | `node_pools` | | Node pool descriptions |
 | `secrets` | | Secrets and Variables written after the cluster is up |
-| `packs` | | Pack registries and releases |
+| `packs` | | Pack registries and releases; `packs.gitops` holds GitOps bindings |
+| `gitops` | | GitOps bindings, the same as `packs.gitops` |
 | `inventory` | | Servers and clients |
 
 ## metadata

@@ -80,6 +80,12 @@ func shape(v interface{}, t reflect.Type, path string) (interface{}, error) {
 				return nil, fmt.Errorf("%s: expected a list", where(path))
 			}
 		}
+		if t.Elem() == reflect.TypeOf(GitOpsBinding{}) {
+			var err error
+			if list, err = expandLabelledBindings(list, path); err != nil {
+				return nil, err
+			}
+		}
 		res := make([]interface{}, 0, len(list))
 		for i, item := range list {
 			s, err := shape(item, t.Elem(), fmt.Sprintf("%s[%d]", path, i))
