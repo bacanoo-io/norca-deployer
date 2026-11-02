@@ -62,7 +62,7 @@ network:
 
 security:
   tls_enabled: true                 # mTLS for HTTP and RPC with an internal CA (certs/norca-ca.pem).
-  verify_server_hostname: true      # Check the role names (server.<region>.nomad) on RPC connections.
+  verify_server_hostname: true      # Check the role names (server.<region>.norca) on RPC connections.
   verify_https_client: false        # true: the HTTP API also requires a client certificate
                                     # (the deployer then issues certs/cli.pem for operators).
   gossip_encryption_key: AUTO_GENERATE   # Generate a gossip key once and keep it in .norca-deployer/gossip.key.

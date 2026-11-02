@@ -28,14 +28,13 @@ type Identity struct {
 
 // ServerIdentity returns the identity of a server certificate.
 //
-// Norca keeps Nomad's TLS naming: with verify_server_hostname the agents
-// expect "server.<region>.nomad" (helper/tlsutil/config.go, norca/rpc.go) and
-// "client.<region>.nomad" for clients (norca/util.go).
+// With verify_server_hostname the agents
+// expect "server.<region>.norca" (helper/tlsutil/config.go, norca/rpc.go) and
+// "client.<region>.norca" for clients (norca/util.go).
 func ServerIdentity(region string, ips []string, extraDNS []string) Identity {
-	cn := fmt.Sprintf("server.%s.nomad", region)
+	cn := fmt.Sprintf("server.%s.norca", region)
 	dnsSANs := []string{
 		cn,
-		fmt.Sprintf("server.%s.norca", region),
 		fmt.Sprintf("*.server.%s.norca", region),
 		fmt.Sprintf("*.%s.norca", region),
 		"localhost",
@@ -49,10 +48,9 @@ func ServerIdentity(region string, ips []string, extraDNS []string) Identity {
 // IP-agnostic; the loopback names let the local CLI reach the client agent's
 // HTTPS API with hostname verification.
 func ClientIdentity(region string) Identity {
-	cn := fmt.Sprintf("client.%s.nomad", region)
+	cn := fmt.Sprintf("client.%s.norca", region)
 	dnsSANs := []string{
 		cn,
-		fmt.Sprintf("client.%s.norca", region),
 		fmt.Sprintf("*.client.%s.norca", region),
 		"localhost",
 	}
