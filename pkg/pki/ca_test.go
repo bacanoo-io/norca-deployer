@@ -17,7 +17,7 @@ func parse(t *testing.T, certPEM []byte) *x509.Certificate {
 	return cert
 }
 
-// Norca agents verify "server.<region>.nomad" and "client.<region>.nomad"
+// Norca agents verify "server.<region>.norca" and "client.<region>.norca"
 // when verify_server_hostname is on.
 func TestCertificateNamesMatchNorcaVerification(t *testing.T) {
 	ca, err := NewCA("test", 1, nil)
@@ -28,8 +28,8 @@ func TestCertificateNamesMatchNorcaVerification(t *testing.T) {
 	pool.AddCert(ca.Certificate)
 
 	for name, id := range map[string]Identity{
-		"server.global.nomad": ServerIdentity("global", []string{"10.0.0.1"}, nil),
-		"client.global.nomad": ClientIdentity("global"),
+		"server.global.norca": ServerIdentity("global", []string{"10.0.0.1"}, nil),
+		"client.global.norca": ClientIdentity("global"),
 	} {
 		b, err := ca.Issue(id, 3)
 		if err != nil {

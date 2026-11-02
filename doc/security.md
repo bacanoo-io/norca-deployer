@@ -13,8 +13,8 @@ With `security.tls_enabled: true`, HTTP and RPC use mutual TLS.
 
 | Role | Common name | DNS SANs | IP SANs |
 | --- | --- | --- | --- |
-| Server | `server.<region>.nomad` | `server.<region>.nomad`, `server.<region>.norca`, `*.server.<region>.norca`, `*.<region>.norca`, `localhost`, `*.norca.internal`, `pki.server_additional_dns_sans` | `host`, `cluster_address`, `127.0.0.1`, `pki.server_additional_ip_sans` |
-| Client | `client.<region>.nomad` | `client.<region>.nomad`, `client.<region>.norca`, `*.client.<region>.norca`, `localhost` | `127.0.0.1` |
+| Server | `server.<region>.norca` | `server.<region>.norca`, `*.server.<region>.norca`, `*.<region>.norca`, `localhost`, `*.norca.internal`, `pki.server_additional_dns_sans` | `host`, `cluster_address`, `127.0.0.1`, `pki.server_additional_ip_sans` |
+| Client | `client.<region>.norca` | `client.<region>.norca`, `*.client.<region>.norca`, `localhost` | `127.0.0.1` |
 
 Node certificates are valid for 3 years.
 

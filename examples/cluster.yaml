@@ -93,7 +93,7 @@ network:
 
 security:
   tls_enabled: true                 # mTLS for HTTP and RPC.
-  verify_server_hostname: true      # RPC peers must present server.<region>.nomad / client.<region>.nomad.
+  verify_server_hostname: true      # RPC peers must present server.<region>.norca / client.<region>.norca.
   verify_https_client: false        # true: require client certificates on the HTTP API (certs/cli.pem is issued).
   gossip_encryption_key: AUTO_GENERATE   # Or a base64 key, or an "!enc:v1:..." secret.
   pki:
