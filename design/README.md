@@ -1,0 +1,53 @@
+# Norca Deployer – Design Documentation
+
+This directory contains the system design, architecture specifications and user interface drafts of the **Norca Deployer**.
+
+## Contents
+
+- [Norca Deployer – System Design and Architecture Specification (v1.6.0)](norca-deployer-design.md)
+  - 1. Executive Summary and Goals
+  - 2. System Architecture and Modular Structure (Storage & Paths, Lifecycle, PKI, Tuning, Secrets, Engine, PAL, Post-Cluster Pack layers)
+  - 3. Configurable Base Directories (Configurable Path Layout: global and per-platform overrides of bin, config, data, log, tls, cni, apps_dir)
+  - 4. Volumes of Native Executables and Binary Applications (Native App Volumes: bin, work, config, data layout, `raw_exec`/`exec` permissions)
+  - 5. Dynamic Node Management and Flexible PKI / mTLS (role-based SANs, reusable worker pool certificate `client-pool.pem`, zero-downtime `SIGHUP` reload)
+  - 6. ACL System and Initial Bootstrap Token Management (automatic management token generation, AES-256-GCM encryption, default policies)
+  - 7. Production Hardening, CNI and Firewall Optimization:
+    - 7.1. Kernel Sysctl Parameters (bridge-nf, ip_forward, fs.file-max, inotify, vm.max_map_count)
+    - 7.2. CNI MTU & IPAM Alignment (WireGuard VPN MTU alignment, non-overlapping worker subnets)
+    - 7.3. Firewall Matrix and Dynamic Application Port Range (20000 - 32000 opened for tasks)
+  - 8. Zero-Downtime Version Upgrade and Lifecycle (rolling upgrade and safe node drain for application continuity)
+  - 9. Log Rotation and Protection Against Full Disks (`/etc/logrotate.d/norca`, Prometheus telemetry)
+  - 10. Air-Gapped / Offline Installation Packaging (bundle mode for closed networks without internet)
+  - 11. Windows-Specific System Settings (registry `LongPathsEnabled = 1`, PowerShell ExecutionPolicy, `LocalSystem` account)
+  - 12. Extended Configuration Specification (complete YAML and HCL2 examples with all new features and paths)
+  - 13. CLI Command Catalog (`volumes list`, `volumes prepare`, `upgrade`, `bundle create`, `acl bootstrap`, `tuning`, `secret`, `pack`)
+  - 13b. Debian Packages and Executable Bash Scripts (APT repositories as deb822 with Signed-By keyring, version pinning and hold, idempotent `pre_install` / `post_packages` / `post_install` scripts)
+  - 13c. How `apply` Works (rolling restart with health checks, copying the binary and CNI plugins from the deployer with SHA-256 verification, gossip encryption, ACL bootstrap, packs, SSH host key TOFU, Windows PowerShell)
+  - 14. Summary and Maturity Level
+- [Norca Deployer – Git Operations & In-Memory GitOps Architecture (v1.7.0)](git-operations-design.md)
+  - 1. Executive Summary and Goals (on-demand deploy, continuous daemon, pure in-memory)
+  - 2. Integration into Norca Deployer Architecture (modular layers, engine, CLI, postcluster)
+  - 3. Configuration Specification: HCL and YAML Parity (`cluster-deploy.hcl` & `cluster-deploy.yaml`)
+  - 4. Multi-Provider Feature Matrix (Forgejo default, Gitea, GitHub, GitLab)
+  - 5. In-Memory Git Engine (`go-git/v6` Apache-2.0, tarball streaming, S3 redirect security)
+  - 6. Post-Cluster Provisioning & Server Task Deployment (`postcluster.go`, leader lifecycle)
+  - 7. Webhook Handler & Multi-Provider Ingestion (HMAC-SHA256, debouncing, concurrency locks)
+  - 8. In-Memory Ring-Buffer Logging & Audit Trail (`RingLogger`, release provenance)
+  - 9. CLI Command Catalog (`norca-deployer gitops run`, `daemon`, `status`, `logs`)
+  - 10. Security & Hardening Guarantees (ephemeral execution, path traversal protection)
+- [Norca Deployer – Platform Management (Directory-Based GitOps for Norca Objects)](platform-management-design.md) (proposal)
+  - 1. Goal and Non-Goals (API objects only, no node install, not a Terraform clone)
+  - 2. What Norca Offers (object inventory: ACL, namespaces, quotas, node pools, policies, jobs, packs, secrets, intentions, volumes, custom objects)
+  - 3. Boundary with the Existing Deployer Plan (packs and GitOps pack bindings stay with the existing engine, referenced as externals)
+  - 4. Directory Layout (`global/`, `namespaces/<ns>/`, `regions/<r>/`), file formats (HCL first, YAML as the equivalent secondary form) and naming rules
+  - 5. `platform.hcl`
+  - 6. Multi-Region and Environment Handling (scope by directory, file-level overlay, per-region var files)
+  - 7. Reconciliation Model (plan/apply, per-kind compare, opt-in prune with an in-cluster ledger, fixed ordering, safety rails, version check and reconciliation with Norca, validation stages and rollback with journal, local state directory and `--state-dir`, dependency graph of units with install, update and delete order (§7.10), actions: external programs run on events with templated arguments, result only logged (§7.11), Consul KV entries (§7.12))
+  - 8. Kind Table (implementation contract)
+  - 9. Secrets and Sensitive Values
+  - 10. CLI (`platform validate|plan|apply|diff|import|status|init`)
+  - 11. GitOps Integration (a `platform` binding on the existing webhook daemon)
+  - 11a. Service Mode: Continuous Watching (`platform watch`, source and drift loops, OS service or Norca job, HA lease, self-management and region topologies, API and metrics)
+  - 11b. Placement: Where the Tool Runs and How It Reaches the Cluster (local, proxy, client node; proxy profiles, probes, design by placement)
+  - 12. Implementation Plan (five phases)
+  - 13. Open Questions
