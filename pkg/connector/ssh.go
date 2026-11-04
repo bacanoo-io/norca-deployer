@@ -43,7 +43,8 @@ type SSHOptions struct {
 	Become         bool
 	BecomePassword string
 
-	// HostKeyCallback checks the host key; nil accepts any key.
+	// HostKeyCallback checks the host key. It is required: a nil callback is
+	// an error, and accepting any key is HostKeyCallback("off", ...).
 	HostKeyCallback ssh.HostKeyCallback
 
 	// Windows wraps commands in PowerShell and maps paths for the Windows
@@ -90,9 +91,11 @@ func NewSSHConnector(opts SSHOptions) (*SSHConnector, error) {
 		return nil, fmt.Errorf("no valid authentication method provided for SSH target (%s@%s)", opts.User, opts.Host)
 	}
 
+	// Fail closed: a connection without a host key check is an explicit choice
+	// (HostKeyCallback("off", ...)), never the result of a missing option.
 	hostKeyCallback := opts.HostKeyCallback
 	if hostKeyCallback == nil {
-		hostKeyCallback = ssh.InsecureIgnoreHostKey()
+		return nil, fmt.Errorf("no host key check for SSH target (%s@%s): set HostKeyCallback, HostKeyCallback(\"off\", ...) accepts any key explicitly", opts.User, opts.Host)
 	}
 	config := &ssh.ClientConfig{
 		User:            opts.User,
@@ -187,15 +190,25 @@ func (s *SSHConnector) CopyFile(srcReader io.Reader, destPath string, mode os.Fi
 	if err != nil {
 		return fmt.Errorf("failed to open remote destination file (%s): %w", destPath, err)
 	}
-	defer destFile.Close()
 
-	if _, err := io.Copy(destFile, srcReader); err != nil {
-		return fmt.Errorf("SFTP file transfer error (%s): %w", destPath, err)
+	// Set the mode before any content is written. SFTP creates the file with
+	// the default mode (typically 0644), and a private key must not sit in
+	// such a file, not even briefly, nor stay there when the chmod fails: fail
+	// closed. Windows SFTP servers do not map POSIX modes, so a failure is
+	// tolerated there.
+	if err := s.sftpClient.Chmod(destPath, mode); err != nil && !s.windows {
+		_ = destFile.Close() // still empty
+		return fmt.Errorf("failed to set the mode of the remote file (%s): %w", destPath, err)
 	}
 
-	if err := s.sftpClient.Chmod(destPath, mode); err != nil {
-		// Non-fatal warning on Windows SFTP servers
-		_ = err
+	_, copyErr := io.Copy(destFile, srcReader)
+	// Closing a written file can fail (the server reports a write error late);
+	// the content is not on the target then.
+	if closeErr := destFile.Close(); copyErr == nil && closeErr != nil {
+		return fmt.Errorf("failed to close remote file (%s): %w", destPath, closeErr)
+	}
+	if copyErr != nil {
+		return fmt.Errorf("SFTP file transfer error (%s): %w", destPath, copyErr)
 	}
 	return nil
 }
@@ -213,9 +226,17 @@ func (s *SSHConnector) copyFileBecome(srcReader io.Reader, destPath string, mode
 	if err != nil {
 		return fmt.Errorf("failed to open remote temporary file (%s): %w", tmpPath, err)
 	}
-	_ = s.sftpClient.Chmod(tmpPath, 0600)
+	// The content may be a private key: if the temporary file cannot be
+	// restricted, it is not written (fail closed).
+	if err := s.sftpClient.Chmod(tmpPath, 0600); err != nil {
+		_ = tmpFile.Close()
+		_ = s.sftpClient.Remove(tmpPath)
+		return fmt.Errorf("failed to restrict the remote temporary file (%s): %w", tmpPath, err)
+	}
 	_, copyErr := io.Copy(tmpFile, srcReader)
-	tmpFile.Close()
+	if closeErr := tmpFile.Close(); copyErr == nil {
+		copyErr = closeErr
+	}
 	if copyErr != nil {
 		_ = s.sftpClient.Remove(tmpPath)
 		return fmt.Errorf("SFTP file transfer error (%s): %w", destPath, copyErr)

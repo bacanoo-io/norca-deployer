@@ -334,11 +334,23 @@ func extractBinary(archive, binName, dest string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, src); err != nil {
-		out.Close()
+	// The archive is checksummed, but a binary that inflates without bound
+	// would still fill the disk before anyone looks at it.
+	n, err := io.Copy(out, io.LimitReader(src, maxBinaryBytes+1))
+	if err == nil && n > maxBinaryBytes {
+		err = fmt.Errorf("%s in %s is larger than %d MiB", binName, filepath.Base(archive), maxBinaryBytes>>20)
+	}
+	// Closing a written file can report a late write error: a binary that is
+	// not complete must not be renamed into place.
+	if closeErr := out.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
 		os.Remove(tmp)
 		return err
 	}
-	out.Close()
 	return os.Rename(tmp, dest)
 }
+
+// maxBinaryBytes bounds the size of a binary extracted from an archive.
+const maxBinaryBytes = 1 << 30
