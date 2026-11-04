@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/bacanoo-io/norca-deployer/pkg/config"
 	"github.com/bacanoo-io/norca-deployer/pkg/connector"
@@ -201,9 +202,15 @@ func (r *Runner) provisionCertificates(t *target) (bool, error) {
 // NodeCAOptions are the settings of `pki issue-node-ca`.
 type NodeCAOptions struct {
 	Region string // default: the region of the plan
-	Years  int
+	Days   int    // validity in days; DefaultNodeCADays when neither Days nor Years is set
+	Years  int    // validity in years; not together with Days
 	Force  bool
 }
+
+// DefaultNodeCADays is the validity of a node CA when none is given. The
+// validity bounds what a stolen node CA key is worth (there is no
+// revocation), so it is short; the operator rotates the node CA well before.
+const DefaultNodeCADays = 180
 
 // IssueNodeCA signs the name-constrained intermediate CA of a region with
 // which an operator issues the certificates of nodes that come up by
@@ -218,8 +225,18 @@ func IssueNodeCA(plan *config.DeploymentPlan, o NodeCAOptions) ([]string, error)
 	if o.Region == "" {
 		return nil, fmt.Errorf("no region: set --region or metadata.region in the plan")
 	}
-	if o.Years <= 0 {
-		return nil, fmt.Errorf("years must be positive")
+	if o.Days < 0 || o.Years < 0 {
+		return nil, fmt.Errorf("the validity must be positive")
+	}
+	if o.Days > 0 && o.Years > 0 {
+		return nil, fmt.Errorf("give the validity in days or in years, not both")
+	}
+	validity := time.Duration(DefaultNodeCADays) * 24 * time.Hour
+	switch {
+	case o.Days > 0:
+		validity = time.Duration(o.Days) * 24 * time.Hour
+	case o.Years > 0:
+		validity = time.Until(time.Now().AddDate(o.Years, 0, 0))
 	}
 	caCert, caKey, _ := caPaths(plan)
 	ca, err := pki.LoadCA(caCert, caKey)
@@ -230,7 +247,7 @@ func IssueNodeCA(plan *config.DeploymentPlan, o NodeCAOptions) ([]string, error)
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := ca.IssueNodeCA(fmt.Sprintf("%s %s Node CA", plan.Metadata.Name, o.Region), o.Region, o.Years, td)
+	bundle, err := ca.IssueNodeCA(fmt.Sprintf("%s %s Node CA", plan.Metadata.Name, o.Region), o.Region, validity, td)
 	if err != nil {
 		return nil, err
 	}

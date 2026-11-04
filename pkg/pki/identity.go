@@ -148,9 +148,23 @@ const NoSPIFFEURIDomain = "no-spiffe.invalid"
 // issue a server certificate (server.<region>.norca), a certificate of
 // another region, or a foreign name, address or trust domain. It is limited
 // to server and client authentication.
-func (ca *CertificateAuthority) IssueNodeCA(cn, region string, validYears int, trustDomain *url.URL) (*CertificateBundle, error) {
+//
+// validity is how long the node CA lives. There is no revocation: the servers
+// trust the cluster CA, so a new node CA does not end the validity of an older
+// one, and the certificates a stolen key signs stay valid until the node CA
+// itself expires. The validity is therefore the bound on a compromise, and it
+// is given in time, not in years. It cannot reach beyond the cluster CA.
+func (ca *CertificateAuthority) IssueNodeCA(cn, region string, validity time.Duration, trustDomain *url.URL) (*CertificateBundle, error) {
 	if !regionRe.MatchString(region) {
 		return nil, fmt.Errorf("region %q may only contain letters, digits, '.', '-' and '_'", region)
+	}
+	if validity <= 0 {
+		return nil, fmt.Errorf("the validity of the node CA must be positive")
+	}
+	notAfter := time.Now().Add(validity)
+	if notAfter.After(ca.Certificate.NotAfter) {
+		return nil, fmt.Errorf("the cluster CA expires on %s, before the node CA would (%s)",
+			ca.Certificate.NotAfter.Format("2006-01-02"), notAfter.Format("2006-01-02"))
 	}
 	uriDomain := NoSPIFFEURIDomain
 	if trustDomain != nil {
@@ -168,10 +182,14 @@ func (ca *CertificateAuthority) IssueNodeCA(cn, region string, validYears int, t
 		PermittedIPRanges:           []*net.IPNet{{IP: net.IPv4(127, 0, 0, 1), Mask: net.CIDRMask(32, 32)}},
 		PermittedURIDomains:         []string{uriDomain},
 	}
-	return ca.sign(template, validYears)
+	return ca.signUntil(template, notAfter)
 }
 
 func (ca *CertificateAuthority) sign(template *x509.Certificate, validYears int) (*CertificateBundle, error) {
+	return ca.signUntil(template, time.Now().AddDate(validYears, 0, 0))
+}
+
+func (ca *CertificateAuthority) signUntil(template *x509.Certificate, notAfter time.Time) (*CertificateBundle, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
@@ -181,7 +199,7 @@ func (ca *CertificateAuthority) sign(template *x509.Certificate, validYears int)
 		return nil, err
 	}
 	template.NotBefore = time.Now().Add(-1 * time.Hour)
-	template.NotAfter = time.Now().AddDate(validYears, 0, 0)
+	template.NotAfter = notAfter
 	template.BasicConstraintsValid = true
 
 	derBytes, err := x509.CreateCertificate(rand.Reader, template, ca.Certificate, &priv.PublicKey, ca.PrivateKey)

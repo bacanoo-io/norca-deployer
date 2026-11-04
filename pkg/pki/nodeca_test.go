@@ -6,7 +6,10 @@ import (
 	"net"
 	"net/url"
 	"testing"
+	"time"
 )
+
+const day = 24 * time.Hour
 
 func mustURL(t *testing.T, s string) *url.URL {
 	t.Helper()
@@ -38,7 +41,7 @@ func TestNodeCASignsOnlyNodeCertificates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := root.IssueNodeCA("test eu Node CA", "eu", 5, td)
+	b, err := root.IssueNodeCA("test eu Node CA", "eu", 180*day, td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +102,7 @@ func TestNodeCASignsOnlyNodeCertificates(t *testing.T) {
 
 func TestNodeCAWithoutSPIFFEAllowsNoURI(t *testing.T) {
 	root, _ := NewCA("test", 1, nil)
-	b, err := root.IssueNodeCA("test eu Node CA", "eu", 5, nil)
+	b, err := root.IssueNodeCA("test eu Node CA", "eu", 180*day, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,8 +126,33 @@ func TestNodeCAWithoutSPIFFEAllowsNoURI(t *testing.T) {
 func TestNodeCARegionIsChecked(t *testing.T) {
 	root, _ := NewCA("test", 1, nil)
 	for _, region := range []string{"", "eu west", "eu/../x", "-eu"} {
-		if _, err := root.IssueNodeCA("x", region, 1, nil); err == nil {
+		if _, err := root.IssueNodeCA("x", region, 30*day, nil); err == nil {
 			t.Errorf("region %q accepted", region)
+		}
+	}
+}
+
+// The validity is the only bound on a stolen node CA key (no revocation), so
+// it is exact, in days, and never reaches beyond the cluster CA.
+func TestNodeCAValidity(t *testing.T) {
+	root, _ := NewCA("test", 1, nil) // valid for one year
+
+	b, err := root.IssueNodeCA("x", "eu", 90*day, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := parse(t, b.CertPEM)
+	if got := time.Until(c.NotAfter); got < 89*day || got > 91*day {
+		t.Fatalf("node CA expires in %v, want about 90 days", got)
+	}
+
+	for name, validity := range map[string]time.Duration{
+		"zero":                  0,
+		"negative":              -day,
+		"beyond the cluster CA": 400 * day,
+	} {
+		if _, err := root.IssueNodeCA("x", "eu", validity, nil); err == nil {
+			t.Errorf("%s: a node CA with this validity was issued", name)
 		}
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bacanoo-io/norca-deployer/pkg/config"
 	"github.com/bacanoo-io/norca-deployer/pkg/connector"
@@ -138,7 +139,7 @@ func TestIssueNodeCA(t *testing.T) {
 	if err := NewRunner(plan, nil).initPKI(); err != nil {
 		t.Fatal(err)
 	}
-	files, err := IssueNodeCA(plan, NodeCAOptions{Years: 5}) // the region of the plan
+	files, err := IssueNodeCA(plan, NodeCAOptions{}) // the region of the plan, the default validity
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +154,9 @@ func TestIssueNodeCA(t *testing.T) {
 	node, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if left := time.Until(node.NotAfter); left < (DefaultNodeCADays-1)*24*time.Hour || left > (DefaultNodeCADays+1)*24*time.Hour {
+		t.Fatalf("default validity: expires in %v, want %d days", left, DefaultNodeCADays)
 	}
 	if want := []string{"client." + plan.Metadata.Region + ".norca", "localhost"}; !reflect.DeepEqual(node.PermittedDNSDomains, want) {
 		t.Fatalf("permitted DNS = %v, want %v", node.PermittedDNSDomains, want)
@@ -174,6 +178,47 @@ func TestIssueNodeCA(t *testing.T) {
 	}
 	if _, err := IssueNodeCA(plan, NodeCAOptions{Region: "eu west", Years: 5}); err == nil {
 		t.Fatal("invalid region accepted")
+	}
+}
+
+func TestIssueNodeCAValidityOptions(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	if err := NewRunner(plan, nil).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	expires := func(files []string) time.Duration {
+		t.Helper()
+		data, _ := os.ReadFile(files[0])
+		block, _ := pem.Decode(data)
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return time.Until(c.NotAfter)
+	}
+
+	files, err := IssueNodeCA(plan, NodeCAOptions{Days: 90, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := expires(files); left < 89*24*time.Hour || left > 91*24*time.Hour {
+		t.Fatalf("--days 90: expires in %v", left)
+	}
+	files, err = IssueNodeCA(plan, NodeCAOptions{Years: 2, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if left := expires(files); left < 729*24*time.Hour || left > 732*24*time.Hour {
+		t.Fatalf("--years 2: expires in %v", left)
+	}
+	for name, o := range map[string]NodeCAOptions{
+		"days and years":    {Days: 30, Years: 1, Force: true},
+		"negative days":     {Days: -1, Force: true},
+		"beyond cluster CA": {Days: 365 * 100, Force: true},
+	} {
+		if _, err := IssueNodeCA(plan, o); err == nil {
+			t.Errorf("%s was accepted", name)
+		}
 	}
 }
 

@@ -354,7 +354,9 @@ func main() {
 			"one region (client.<region>.norca, localhost, 127.0.0.1 and URIs of the SPIFFE trust domain),\n" +
 			"into certs/node-ca-<region>.pem, node-ca-<region>-key.pem and node-ca-<region>-chain.pem.\n" +
 			"An operator that creates nodes (autoscaling) signs their certificates with it, so the key of\n" +
-			"the cluster CA stays with the deployer. It cannot sign a server certificate.",
+			"the cluster CA stays with the deployer. It cannot sign a server certificate.\n" +
+			"There is no revocation: the validity of the node CA (180 days by default, --days) is the bound\n" +
+			"on what a stolen key is worth, and it cannot reach beyond the cluster CA.",
 		Run: func(cmd *cobra.Command, args []string) {
 			plan, err := config.LoadFromFile(configFile)
 			if err != nil {
@@ -374,7 +376,8 @@ func main() {
 		},
 	}
 	nodeCACmd.Flags().StringVar(&nodeCA.Region, "region", "", "Region of the nodes (default: metadata.region of the plan)")
-	nodeCACmd.Flags().IntVar(&nodeCA.Years, "years", 5, "Validity in years")
+	nodeCACmd.Flags().IntVar(&nodeCA.Days, "days", 0, fmt.Sprintf("Validity in days (default %d if neither --days nor --years is given)", engine.DefaultNodeCADays))
+	nodeCACmd.Flags().IntVar(&nodeCA.Years, "years", 0, "Validity in years (instead of --days)")
 	nodeCACmd.Flags().BoolVar(&force, "force", false, "Replace an existing node CA of the region")
 	pkiCmd.AddCommand(nodeCACmd)
 
