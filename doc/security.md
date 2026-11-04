@@ -60,6 +60,20 @@ norca-deployer pki issue-intermediate -c cluster.yaml --name ziti
 
 It writes `certs/ziti-ca.pem`, `certs/ziti-ca-key.pem` (0600) and `certs/ziti-ca-chain.pem` (intermediate and root). The intermediate carries `spiffe://<trust_domain>`, is valid for 5 years (`--years`) and allows one more CA level below it (`--max-path-len`, for OpenZiti's own signer). An existing intermediate is only replaced with `--force`.
 
+### Node CA for nodes that come up by themselves
+
+An operator that creates nodes (autoscaling) has to give every new node a client certificate, and the key of the cluster CA must stay with the deployer. Issue the operator a limited intermediate CA for one region:
+
+```sh
+norca-deployer pki issue-node-ca -c cluster.yaml --region eu
+```
+
+It writes `certs/node-ca-eu.pem`, `certs/node-ca-eu-key.pem` (0600) and `certs/node-ca-eu-chain.pem` (node CA and root). The region defaults to `metadata.region`, the node CA is valid for 5 years (`--years`), and an existing one is only replaced with `--force`.
+
+The node CA signs leaf certificates only (path length 0), for server and client authentication, and **name constraints** limit what it can sign to what a node certificate carries: the DNS names `client.<region>.norca` (and subdomains) and `localhost`, the address `127.0.0.1`, and with SPIFFE the URIs of the trust domain (without SPIFFE, no URI at all). A certificate for a server (`server.<region>.norca`), for another region or with a foreign name, address or trust domain fails verification, so the key of a node CA cannot be used to join the Raft cluster or to impersonate a server. It can still make client certificates of its region, so keep the key where only the operator can read it.
+
+An agent presents the chain it loads from its certificate file: the file of a node signed by a node CA holds the **leaf followed by the node CA**, and without the node CA the servers cannot verify it. The agents keep the cluster CA as their only trusted CA; nothing changes on the servers. After a renewal, send the agent a SIGHUP: it reloads the certificate without a restart and keeps its connections.
+
 ## Gossip encryption
 
 `security.gossip_encryption_key` accepts:

@@ -346,6 +346,38 @@ func main() {
 	_ = interCmd.MarkFlagRequired("name")
 	pkiCmd.AddCommand(interCmd)
 
+	nodeCA := engine.NodeCAOptions{}
+	nodeCACmd := &cobra.Command{
+		Use:   "issue-node-ca",
+		Short: "Issue the name-constrained intermediate CA of a region for nodes that join by themselves",
+		Long: "Issues an intermediate CA signed by the cluster CA that may only sign client certificates of\n" +
+			"one region (client.<region>.norca, localhost, 127.0.0.1 and URIs of the SPIFFE trust domain),\n" +
+			"into certs/node-ca-<region>.pem, node-ca-<region>-key.pem and node-ca-<region>-chain.pem.\n" +
+			"An operator that creates nodes (autoscaling) signs their certificates with it, so the key of\n" +
+			"the cluster CA stays with the deployer. It cannot sign a server certificate.",
+		Run: func(cmd *cobra.Command, args []string) {
+			plan, err := config.LoadFromFile(configFile)
+			if err != nil {
+				fmt.Printf("[ERROR] %v\n", err)
+				os.Exit(1)
+			}
+			nodeCA.Force = force
+			files, err := engine.IssueNodeCA(plan, nodeCA)
+			if err != nil {
+				fmt.Printf("[ERROR] %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("[OK] Node CA issued:")
+			for _, f := range files {
+				fmt.Printf("  %s\n", f)
+			}
+		},
+	}
+	nodeCACmd.Flags().StringVar(&nodeCA.Region, "region", "", "Region of the nodes (default: metadata.region of the plan)")
+	nodeCACmd.Flags().IntVar(&nodeCA.Years, "years", 5, "Validity in years")
+	nodeCACmd.Flags().BoolVar(&force, "force", false, "Replace an existing node CA of the region")
+	pkiCmd.AddCommand(nodeCACmd)
+
 	// 7. Version command
 	versionCmd := &cobra.Command{
 		Use:   "version",

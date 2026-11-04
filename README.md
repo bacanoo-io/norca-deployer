@@ -64,6 +64,7 @@ norca-deployer apply -c cluster-deploy.yaml
 | `secret create-key` | Create a 256-bit master key (`.norca-deployer.key`); never overwrites an existing key |
 | `secret encrypt <text>` | Encrypt a value for the plan (`!enc:v1:aes-gcm:...`) |
 | `pki issue-intermediate --name <name>` | Issue an intermediate CA signed by the cluster CA, e.g. for OpenZiti |
+| `pki issue-node-ca [--region <region>]` | Issue the name-constrained intermediate CA of a region, with which an operator signs the certificates of nodes that join by themselves |
 | `version` | Print the version |
 
 Global flags: `-c, --config` (plan file, `.yaml`/`.yml` or `.hcl`; default `cluster-deploy.yaml`), `--secret-key`, `--secret-key-file`. The master key can also be given in `NORCA_DEPLOYER_SECRET_KEY`.

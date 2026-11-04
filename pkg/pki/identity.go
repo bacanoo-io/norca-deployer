@@ -131,6 +131,46 @@ func (ca *CertificateAuthority) IssueIntermediate(cn string, validYears, maxPath
 	return ca.sign(template, validYears)
 }
 
+var regionRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// NoSPIFFEURIDomain is the URI constraint of a node CA of a cluster without
+// SPIFFE: no certificate it signs may carry a URI SAN.
+const NoSPIFFEURIDomain = "no-spiffe.invalid"
+
+// IssueNodeCA signs the intermediate CA with which an operator issues the
+// client certificates of the nodes it creates (autoscaling), so that the
+// private key of the cluster CA stays with the deployer.
+//
+// The intermediate signs leaves only (path length 0) and is limited by name
+// constraints to exactly what ClientIdentity puts into a node certificate:
+// the DNS names client.<region>.norca (and its subdomains) and localhost, the
+// address 127.0.0.1, and, with SPIFFE, URIs of the trust domain. It cannot
+// issue a server certificate (server.<region>.norca), a certificate of
+// another region, or a foreign name, address or trust domain. It is limited
+// to server and client authentication.
+func (ca *CertificateAuthority) IssueNodeCA(cn, region string, validYears int, trustDomain *url.URL) (*CertificateBundle, error) {
+	if !regionRe.MatchString(region) {
+		return nil, fmt.Errorf("region %q may only contain letters, digits, '.', '-' and '_'", region)
+	}
+	uriDomain := NoSPIFFEURIDomain
+	if trustDomain != nil {
+		uriDomain = trustDomain.Host
+	}
+	template := &x509.Certificate{
+		Subject:                     pkix.Name{CommonName: cn, Organization: ca.Certificate.Subject.Organization},
+		IsCA:                        true,
+		KeyUsage:                    x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		ExtKeyUsage:                 []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		MaxPathLen:                  0,
+		MaxPathLenZero:              true,
+		PermittedDNSDomainsCritical: true,
+		PermittedDNSDomains:         []string{fmt.Sprintf("client.%s.norca", region), "localhost"},
+		PermittedIPRanges:           []*net.IPNet{{IP: net.IPv4(127, 0, 0, 1), Mask: net.CIDRMask(32, 32)}},
+		PermittedURIDomains:         []string{uriDomain},
+	}
+	return ca.sign(template, validYears)
+}
+
 func (ca *CertificateAuthority) sign(template *x509.Certificate, validYears int) (*CertificateBundle, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

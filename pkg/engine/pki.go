@@ -198,6 +198,69 @@ func (r *Runner) provisionCertificates(t *target) (bool, error) {
 	return true, nil
 }
 
+// NodeCAOptions are the settings of `pki issue-node-ca`.
+type NodeCAOptions struct {
+	Region string // default: the region of the plan
+	Years  int
+	Force  bool
+}
+
+// IssueNodeCA signs the name-constrained intermediate CA of a region with
+// which an operator issues the certificates of nodes that come up by
+// themselves (see pki.IssueNodeCA for the limits). Written to
+// certs/node-ca-<region>.pem, node-ca-<region>-key.pem (0600) and
+// node-ca-<region>-chain.pem (intermediate + root, the file an agent loads as
+// its certificate after the leaf).
+func IssueNodeCA(plan *config.DeploymentPlan, o NodeCAOptions) ([]string, error) {
+	if o.Region == "" {
+		o.Region = plan.Metadata.Region
+	}
+	if o.Region == "" {
+		return nil, fmt.Errorf("no region: set --region or metadata.region in the plan")
+	}
+	if o.Years <= 0 {
+		return nil, fmt.Errorf("years must be positive")
+	}
+	caCert, caKey, _ := caPaths(plan)
+	ca, err := pki.LoadCA(caCert, caKey)
+	if err != nil {
+		return nil, fmt.Errorf("cluster CA (%s): %w (run apply first)", caCert, err)
+	}
+	td, err := plan.SPIFFETrustDomain()
+	if err != nil {
+		return nil, err
+	}
+	bundle, err := ca.IssueNodeCA(fmt.Sprintf("%s %s Node CA", plan.Metadata.Name, o.Region), o.Region, o.Years, td)
+	if err != nil {
+		return nil, err
+	}
+
+	dir := filepath.Join(plan.BaseDir(), "certs")
+	prefix := filepath.Join(dir, "node-ca-"+o.Region)
+	files := []string{prefix + ".pem", prefix + "-key.pem", prefix + "-chain.pem"}
+	if !o.Force {
+		for _, f := range files {
+			if _, err := os.Stat(f); err == nil {
+				return nil, fmt.Errorf("%s already exists (use --force to replace the node CA)", f)
+			}
+		}
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, err
+	}
+	chain := append(append([]byte{}, bundle.CertPEM...), ca.CertPEM...)
+	for i, data := range [][]byte{bundle.CertPEM, bundle.KeyPEM, chain} {
+		mode := os.FileMode(0644)
+		if i == 1 {
+			mode = 0600
+		}
+		if err := os.WriteFile(files[i], data, mode); err != nil {
+			return nil, err
+		}
+	}
+	return files, nil
+}
+
 var intermediateNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // IntermediateOptions are the settings of `pki issue-intermediate`.

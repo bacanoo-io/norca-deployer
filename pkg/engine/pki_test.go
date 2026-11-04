@@ -5,6 +5,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -126,6 +127,53 @@ func TestIssueIntermediateForZiti(t *testing.T) {
 	}
 	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "Ziti CA", Years: 5}); err == nil {
 		t.Fatal("invalid name accepted")
+	}
+}
+
+func TestIssueNodeCA(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Years: 5}); err == nil || !strings.Contains(err.Error(), "run apply first") {
+		t.Fatalf("expected a missing CA error, got %v", err)
+	}
+	if err := NewRunner(plan, nil).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	files, err := IssueNodeCA(plan, NodeCAOptions{Years: 5}) // the region of the plan
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(filepath.ToSlash(files[0]), "certs/node-ca-"+plan.Metadata.Region+".pem") {
+		t.Fatalf("files = %v", files)
+	}
+	chain, _ := os.ReadFile(files[2])
+	if strings.Count(string(chain), "BEGIN CERTIFICATE") != 2 {
+		t.Fatalf("chain must hold the node CA and the root:\n%s", chain)
+	}
+	block, _ := pem.Decode(chain)
+	node, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"client." + plan.Metadata.Region + ".norca", "localhost"}; !reflect.DeepEqual(node.PermittedDNSDomains, want) {
+		t.Fatalf("permitted DNS = %v, want %v", node.PermittedDNSDomains, want)
+	}
+	if !reflect.DeepEqual(node.PermittedURIDomains, []string{"prod.example"}) {
+		t.Fatalf("permitted URI domains = %v", node.PermittedURIDomains)
+	}
+	if info, _ := os.Stat(files[1]); info.Mode().Perm()&0o077 != 0 && os.PathSeparator == '/' {
+		t.Fatalf("key mode %v", info.Mode())
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Years: 5}); err == nil {
+		t.Fatal("an existing node CA was replaced without --force")
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Years: 5, Force: true}); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Region: "us", Years: 5}); err != nil {
+		t.Fatalf("another region: %v", err)
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Region: "eu west", Years: 5}); err == nil {
+		t.Fatal("invalid region accepted")
 	}
 }
 
