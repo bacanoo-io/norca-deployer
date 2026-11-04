@@ -2,7 +2,7 @@
 
 A plan describes one region. It is a YAML (`.yaml`, `.yml`) or HCL (`.hcl`) file; both use the same keys. Relative paths in the plan (keys, `.deb` files, scripts, CA files, token files) are resolved against the directory of the plan.
 
-Complete examples: [single-node.yaml](../examples/single-node.yaml), [cluster.yaml](../examples/cluster.yaml) and their [HCL versions](../examples).
+Complete examples: [single-node.yaml](../examples/nodes/single-node.yaml), [cluster.yaml](../examples/nodes/cluster.yaml) and their [HCL versions](../examples).
 
 ## YAML and HCL
 

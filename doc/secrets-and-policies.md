@@ -72,11 +72,11 @@ A policy with `job` is bound to the workload identity of that job (as `norca acl
 
 ## Example: NATS for the applications
 
-The cluster example ([cluster.yaml](../examples/cluster.yaml)) deploys the `nats` pack of the Norca pack registry with user/password authentication:
+The cluster example ([cluster.yaml](../examples/nodes/cluster.yaml)) deploys the `nats` pack of the Norca pack registry with user/password authentication:
 
 1. The secrets `nats/users/app` and `nats/users/ops` get generated passwords.
 2. The pack values name the users; the pack reads their passwords from the secrets.
 
 The passwords of `app` and `ops` are in `.norca-deployer/generated/nats-app` and `nats-ops` for the clients that connect.
 
-The event stream of the region is not on this NATS but on the system bus of the servers; the ACL policy `events-reader` ([policies/events-reader.hcl](../examples/policies/events-reader.hcl)) lets a token read it.
+The event stream of the region is not on this NATS but on the system bus of the servers; the ACL policy `events-reader` ([policies/events-reader.hcl](../examples/nodes/policies/events-reader.hcl)) lets a token read it.

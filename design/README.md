@@ -36,18 +36,34 @@ This directory contains the system design, architecture specifications and user 
   - 9. CLI Command Catalog (`norca-deployer gitops run`, `daemon`, `status`, `logs`)
   - 10. Security & Hardening Guarantees (ephemeral execution, path traversal protection)
 - [Norca Deployer – Platform Management (Directory-Based GitOps for Norca Objects)](platform-management-design.md) (proposal)
-  - 1. Goal and Non-Goals (API objects only, no node install, not a Terraform clone)
+  - 1. Goal and Non-Goals (API objects only, no node install, not a Terraform clone); scope decision: the authoritative region is the only target for now
   - 2. What Norca Offers (object inventory: ACL, namespaces, quotas, node pools, policies, jobs, packs, secrets, intentions, volumes, custom objects)
   - 3. Boundary with the Existing Deployer Plan (packs and GitOps pack bindings stay with the existing engine, referenced as externals)
   - 4. Directory Layout (`global/`, `namespaces/<ns>/`, `regions/<r>/`), file formats (HCL first, YAML as the equivalent secondary form) and naming rules
-  - 5. `platform.hcl`
+  - 5. Configuration: tree manifest `platform.hcl` (in Git) and the startup configuration (outside Git: cluster, token, placement, state, limits, watch)
   - 6. Multi-Region and Environment Handling (scope by directory, file-level overlay, per-region var files)
-  - 7. Reconciliation Model (plan/apply, per-kind compare, opt-in prune with an in-cluster ledger, fixed ordering, safety rails, version check and reconciliation with Norca, validation stages and rollback with journal, local state directory and `--state-dir`, dependency graph of units with install, update and delete order (§7.10), actions: external programs run on events with templated arguments, result only logged (§7.11), Consul KV entries (§7.12))
+  - 7. Reconciliation Model (plan/apply, per-kind compare, opt-in prune with an in-cluster ledger, fixed ordering, safety rails, version check and reconciliation with Norca, validation stages and rollback with journal, local state directory and `--state-dir`, dependency graph of units with install, update and delete order (§7.10), Consul KV entries (§7.12), saved plans and JSON output (§7.13), fields owned by the autoscaler (§7.14), API load and read strategy (§7.15))
   - 8. Kind Table (implementation contract)
   - 9. Secrets and Sensitive Values
   - 10. CLI (`platform validate|plan|apply|diff|import|status|init`)
   - 11. GitOps Integration (a `platform` binding on the existing webhook daemon)
   - 11a. Service Mode: Continuous Watching (`platform watch`, source and drift loops, OS service or Norca job, HA lease, self-management and region topologies, API and metrics)
   - 11b. Placement: Where the Tool Runs and How It Reaches the Cluster (local, proxy, client node; proxy profiles, probes, design by placement)
-  - 12. Implementation Plan (five phases)
-  - 13. Open Questions
+  - 11c. Runbook: From an Empty Cluster to a Running Watcher (tokens, adoption, read-only watcher, step-by-step raise of `auto_apply`)
+  - 12. Implementation Plan (summary of the phases; details in the implementation plan below)
+  - 13. Open Questions (27 questions with an accepted answer each, §13.1: decide / spike / deferred)
+  - 13a. Review Findings: Gaps Still to Design (configuration levels, ACL permissions, saved plan, autoscaler-owned fields, secret digests, kind vocabulary, file-system hazards, ...)
+- [Norca Deployer – Platform Management: Implementation Plan](platform-management-implementation-plan.md)
+  - 1. How the work is cut (vertical slices, nothing existing breaks, safety before breadth)
+  - 2. What exists and is reused (`pkg/config/hcl.go`, gitops daemon, connector, `norca-lab`)
+  - 3. Package layout
+  - 4. Phases P0 to P6 with work packages, sizes, acceptance criteria and milestones M1 to M5
+  - 5. Testing strategy
+  - 6. Risks and mitigations
+  - 7. First slice
+- [Draft issue: replication scope of admission policies, network policies and object kinds (not filed)](issue-norca-replication-scope.md)
+- [Draft issue: read-only capabilities for `plan` tokens, ACL read and plan-job (not filed)](issue-norca-readonly-plan.md)
+- [Draft issue: machine-readable features list, replication scope and resolved KV backend (not filed)](issue-norca-features-endpoint.md)
+- [Draft issue: a `Namespace` topic in the event stream (not filed)](issue-norca-namespace-event-topic.md)
+- [Draft issue: restore a secret version server-side (not filed)](issue-norca-secret-restore.md)
+- [Draft issue: `norca service register` panics with "flag redefined: address" (not filed)](issue-norca-service-register-panic.md)

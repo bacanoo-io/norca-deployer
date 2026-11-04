@@ -1,0 +1,5 @@
+# written by `platform init`: Git must never convert line endings of values
+kv/**        -text
+**/secrets/** -text
+**/*.pem     -text
+**/*.der     -text

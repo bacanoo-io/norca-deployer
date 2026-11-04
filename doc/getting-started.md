@@ -20,7 +20,7 @@ go build -o bin/norca-deployer ./cmd/norca-deployer
 
 ## First deployment
 
-1. **Write a plan.** Start from [examples/single-node.yaml](../examples/single-node.yaml) or [examples/cluster.yaml](../examples/cluster.yaml), or let the tool write a sample:
+1. **Write a plan.** Start from [examples/single-node.yaml](../examples/nodes/single-node.yaml) or [examples/cluster.yaml](../examples/nodes/cluster.yaml), or let the tool write a sample:
 
    ```sh
    norca-deployer init -c cluster-deploy.yaml
@@ -59,7 +59,7 @@ go build -o bin/norca-deployer ./cmd/norca-deployer
 
 ## A local development node
 
-[examples/local-dev.yaml](../examples/local-dev.yaml) installs Norca as server and client on the machine you run the deployer on, without SSH (`connection.mode: local`). It listens on 127.0.0.1 only, without TLS and ACLs. Run it as root on a Linux host with systemd:
+[examples/local-dev.yaml](../examples/nodes/local-dev.yaml) installs Norca as server and client on the machine you run the deployer on, without SSH (`connection.mode: local`). It listens on 127.0.0.1 only, without TLS and ACLs. Run it as root on a Linux host with systemd:
 
 ```sh
 sudo norca-deployer apply -c examples/local-dev.yaml

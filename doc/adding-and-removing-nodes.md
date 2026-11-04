@@ -1,6 +1,6 @@
 # Adding and Removing Nodes
 
-The inventory of the plan is the desired set of nodes. `apply` installs what is new, checks what exists, and removes what is listed under `inventory.decommission`. Examples: [add-node.yaml](../examples/add-node.yaml) and [decommission-node.yaml](../examples/decommission-node.yaml).
+The inventory of the plan is the desired set of nodes. `apply` installs what is new, checks what exists, and removes what is listed under `inventory.decommission`. Examples: [add-node.yaml](../examples/nodes/add-node.yaml) and [decommission-node.yaml](../examples/nodes/decommission-node.yaml).
 
 ## The list of installed nodes
 
