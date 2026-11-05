@@ -20,7 +20,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/tuning"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
-	"github.com/bacanoo-io/norca-deployer/pkg/pki"
+	"github.com/bacanoo-io/norca-pki"
 )
 
 // certMinValidity is the remaining validity below which a node certificate

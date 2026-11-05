@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"regexp"
 
-	"github.com/bacanoo-io/norca-deployer/pkg/pki"
+	"github.com/bacanoo-io/norca-pki"
 )
 
 var portRangeRe = regexp.MustCompile(`^[1-9][0-9]{0,4}(-[1-9][0-9]{0,4})?$`)

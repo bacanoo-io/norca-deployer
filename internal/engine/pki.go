@@ -14,7 +14,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
-	"github.com/bacanoo-io/norca-deployer/pkg/pki"
+	"github.com/bacanoo-io/norca-pki"
 )
 
 // caPaths returns where the cluster CA is: the configured files, or

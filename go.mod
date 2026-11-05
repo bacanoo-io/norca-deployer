@@ -4,6 +4,7 @@ go 1.26.10
 
 require (
 	github.com/ProtonMail/go-crypto v1.5.2
+	github.com/bacanoo-io/norca-pki v0.1.0
 	github.com/go-git/go-billy/v6 v6.0.0-beta.1
 	github.com/go-git/go-git/v6 v6.0.0-beta.1
 	github.com/hashicorp/hcl v1.0.0

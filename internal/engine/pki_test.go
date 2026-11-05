@@ -14,7 +14,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
-	"github.com/bacanoo-io/norca-deployer/pkg/pki"
+	"github.com/bacanoo-io/norca-pki"
 )
 
 func loadPlan(t *testing.T, yaml string) *config.DeploymentPlan {
