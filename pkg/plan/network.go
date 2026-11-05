@@ -112,3 +112,9 @@ func (p *DeploymentPlan) validateNetwork() error {
 	}
 	return nil
 }
+
+// HasDistrustedCAs reports whether the servers get a list of distrusted CAs
+// (security.pki.distrusted_ca_files, with TLS).
+func (p *DeploymentPlan) HasDistrustedCAs() bool {
+	return p.Security.TLSEnabled && p.Security.PKI != nil && len(p.Security.PKI.DistrustedCAFiles) > 0
+}

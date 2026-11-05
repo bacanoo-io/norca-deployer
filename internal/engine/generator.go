@@ -125,7 +125,11 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		sb.WriteString("  rpc  = true\n\n")
 		sb.WriteString(fmt.Sprintf("  ca_file   = %q\n", joinPath(paths, paths.TLSDir, "ca.pem")))
 		sb.WriteString(fmt.Sprintf("  cert_file = %q\n", certFile))
-		sb.WriteString(fmt.Sprintf("  key_file  = %q\n\n", keyFile))
+		sb.WriteString(fmt.Sprintf("  key_file  = %q\n", keyFile))
+		if isMaster && plan.HasDistrustedCAs() {
+			sb.WriteString(fmt.Sprintf("  distrusted_ca_file = %q\n", joinPath(paths, paths.TLSDir, distrustedCAFile)))
+		}
+		sb.WriteString("\n")
 		sb.WriteString(fmt.Sprintf("  verify_server_hostname = %t\n", plan.Security.VerifyServerHostname))
 		sb.WriteString(fmt.Sprintf("  verify_https_client    = %t\n", plan.Security.VerifyHTTPSClient))
 		sb.WriteString("}\n\n")

@@ -342,6 +342,11 @@ type PKIConfig struct {
 	// consumers such as OpenZiti can identify the nodes and find the trust
 	// domain in the chain.
 	SPIFFE *SPIFFEConfig `yaml:"spiffe,omitempty" json:"spiffe,omitempty"`
+	// DistrustedCAFiles are PEM files (on the deployer machine) of CA
+	// certificates the servers no longer trust, such as a node CA whose key
+	// was lost: a client whose chain has one of their public keys is
+	// refused (the tls distrusted_ca_file of the servers).
+	DistrustedCAFiles []string `yaml:"distrusted_ca_files,omitempty" json:"distrusted_ca_files,omitempty"`
 }
 
 // SPIFFEConfig sets the trust domain of the cluster certificates. The node

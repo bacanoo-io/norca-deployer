@@ -240,7 +240,7 @@ func linuxUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	sb.WriteString(`if command -v docker >/dev/null 2>&1; then ids=$(docker ps -aq --filter label=com.hashicorp.nomad.alloc_id); ` +
 		`if [ -n "$ids" ]; then docker rm -f $ids >/dev/null; fi; fi` + "\n")
 	sb.WriteString("rm -f " + q(p.BinDir+"/norca") + " " + q(p.ConfigDir+"/norca.hcl"))
-	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem"} {
+	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem", distrustedCAFile} {
 		sb.WriteString(" " + q(p.TLSDir+"/"+f))
 	}
 	sb.WriteString("\nrmdir " + q(p.TLSDir) + " " + q(p.ConfigDir) + " 2>/dev/null || true\n")
@@ -259,7 +259,7 @@ func windowsUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	sb.WriteString("Stop-Service -Name norca -ErrorAction SilentlyContinue; ")
 	sb.WriteString("if (Get-Service -Name norca -ErrorAction SilentlyContinue) { sc.exe delete norca | Out-Null }; ")
 	files := []string{p.BinDir + `\norca.exe`, p.BinDir + `\norca.exe` + connector.PendingSuffix, p.ConfigDir + `\norca.hcl`}
-	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem"} {
+	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem", distrustedCAFile} {
 		files = append(files, p.TLSDir+`\`+f)
 	}
 	for _, f := range files {

@@ -78,6 +78,23 @@ The node CA signs leaf certificates only (path length 0), for server and client 
 
 An agent presents the chain it loads from its certificate file: the file of a node signed by a node CA holds the **leaf followed by the node CA**, and without the node CA the servers cannot verify it. The agents keep the cluster CA as their only trusted CA; nothing changes on the servers. After a renewal, send the agent a SIGHUP: it reloads the certificate without a restart and keeps its connections.
 
+### Shutting out a node CA
+
+When the key of a node CA is lost, list its certificate on the servers: a client whose chain has a
+certificate with its public key is refused, also a node CA issued again with the same key.
+
+```yaml
+security:
+  pki:
+    distrusted_ca_files: [certs/node-ca-eu.pem]
+```
+
+`apply` joins the files into `distrusted-ca.pem` in the TLS directory of every server and sets
+`distrusted_ca_file` in their `tls` block; the servers restart, which closes the connections of the
+nodes of that CA. Each file must hold at least one certificate. Then issue a new node CA (`--force`)
+for the operator and replace the certificates of the nodes that stay. Remove the entry once the
+listed CA has expired.
+
 ## Gossip encryption
 
 `security.gossip_encryption_key` accepts:

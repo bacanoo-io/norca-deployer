@@ -132,6 +132,7 @@ See [Networking and tuning](networking-and-tuning.md#firewall) for the firewall 
 | `pki.server_additional_ip_sans` | | Extra IP addresses in server certificates |
 | `pki.spiffe.enabled` | `false` | SPIFFE IDs (URI SANs) in all certificates |
 | `pki.spiffe.trust_domain` | `<metadata.name>.norca` | SPIFFE trust domain |
+| `pki.distrusted_ca_files` | | PEM files of CA certificates the servers no longer trust (a node CA whose key was lost); see [security](security.md#shutting-out-a-node-ca) |
 | `acl.enabled` | `false` | Enable ACLs |
 | `acl.auto_bootstrap` | `false` | Bootstrap once and store the token |
 | `acl.management_token_output` | `.norca-deployer/management-token` | Token file |

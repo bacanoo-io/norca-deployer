@@ -2,6 +2,8 @@ package engine
 
 import (
 	"bytes"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -182,6 +184,17 @@ func (r *Runner) provisionCertificates(t *target) (bool, error) {
 	id, err := r.nodeIdentity(t)
 	if err != nil {
 		return false, err
+	}
+	if t.isMaster && r.plan.HasDistrustedCAs() {
+		bundle, err := distrustedBundle(r.plan)
+		if err != nil {
+			return false, err
+		}
+		c, err := connector.SyncFile(conn, joinPath(paths, paths.TLSDir, distrustedCAFile), bundle, 0644)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || c
 	}
 	certName, keyName := "client.pem", "client-key.pem"
 	if t.isMaster {
@@ -407,4 +420,42 @@ func warnPlainCAKey(plain bool, keyPath string) {
 	if plain {
 		fmt.Printf("    [WARN] The CA key is stored UNENCRYPTED in %s (create a master key with 'secret create-key')\n", keyPath)
 	}
+}
+
+// distrustedCAFile is the file of the distrusted CAs in the TLS directory of
+// a server.
+const distrustedCAFile = "distrusted-ca.pem"
+
+// distrustedBundle reads the PEM files of security.pki.distrusted_ca_files
+// into one file. Every file must hold at least one certificate: a list that
+// is set must be in force.
+func distrustedBundle(plan *config.DeploymentPlan) ([]byte, error) {
+	var out []byte
+	for _, f := range plan.Security.PKI.DistrustedCAFiles {
+		path := plan.ResolveLocalPath(f)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("security.pki.distrusted_ca_files: %w", err)
+		}
+		n := 0
+		for rest := data; ; {
+			var block *pem.Block
+			block, rest = pem.Decode(rest)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+				return nil, fmt.Errorf("security.pki.distrusted_ca_files: %s: %w", path, err)
+			}
+			out = append(out, pem.EncodeToMemory(block)...)
+			n++
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("security.pki.distrusted_ca_files: no certificate in %s", path)
+		}
+	}
+	return out, nil
 }
