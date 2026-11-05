@@ -58,14 +58,16 @@ norca-deployer apply -c cluster-deploy.yaml
 | Command | Description |
 | --- | --- |
 | `init [--force]` | Write a sample plan; `--force` overwrites an existing file |
-| `validate` | Check the syntax and the logical constraints of the plan |
-| `plan` | Show what `apply` would do, without changing anything (dry run) |
+| `validate [-o json]` | Check the syntax and the logical constraints of the plan |
+| `plan [-o json]` | Show what `apply` would do, without changing anything (dry run) |
 | `apply [--force-restart]` | Provision the nodes and roll the changes out; `--force-restart` restarts every agent (rolling) even when nothing changed |
 | `secret create-key` | Create a 256-bit master key (`.norca-deployer.key`); never overwrites an existing key |
 | `secret encrypt <text>` | Encrypt a value for the plan (`!enc:v1:aes-gcm:...`) |
 | `pki issue-intermediate --name <name>` | Issue an intermediate CA signed by the cluster CA, e.g. for OpenZiti |
 | `pki issue-node-ca [--region <region>]` | Issue the name-constrained intermediate CA of a region, with which an operator signs the certificates of nodes that join by themselves |
 | `version` | Print the version |
+
+`-o json` prints a JSON document on stdout for scripts. Errors go to stderr as `[ERROR] ...`, never to stdout. Exit codes: `0` success, `1` a failure while the command ran, `2` a wrong command line (unknown command or flag, missing argument).
 
 Global flags: `-c, --config` (plan file, `.yaml`/`.yml` or `.hcl`; default `cluster-deploy.yaml`), `--secret-key`, `--secret-key-file`. The master key can also be given in `NORCA_DEPLOYER_SECRET_KEY`.
 

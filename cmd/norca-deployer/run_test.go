@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -129,5 +130,77 @@ func TestAFailingCommandDoesNotPrintTheUsage(t *testing.T) {
 	_, stdout, stderr := execute(t, "validate", "-c", filepath.Join(t.TempDir(), "missing.yaml"))
 	if strings.Contains(stdout+stderr, "Usage:") {
 		t.Fatalf("usage text printed:\n%s%s", stdout, stderr)
+	}
+}
+
+func TestValidateJSON(t *testing.T) {
+	code, stdout, stderr := execute(t, "validate", "-c", exampleSingleNode, "-o", "json")
+	if code != exitOK || stderr != "" {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	var res struct {
+		Valid   bool   `json:"valid"`
+		Cluster string `json:"cluster"`
+		Masters int    `json:"masters"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if !res.Valid || res.Cluster == "" || res.Masters < 1 {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+// An invalid plan is a JSON document on stdout too (valid: false), and the
+// exit code and the stderr line are those of a failure.
+func TestValidateJSONOfAnInvalidPlan(t *testing.T) {
+	code, stdout, stderr := execute(t, "validate", "-c", filepath.Join(t.TempDir(), "missing.yaml"), "-o", "json")
+	if code != exitError || !strings.Contains(stderr, "[ERROR] invalid configuration") {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	var res struct {
+		Valid bool   `json:"valid"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if res.Valid || res.Error == "" {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestPlanJSON(t *testing.T) {
+	code, stdout, stderr := execute(t, "plan", "-c", exampleSingleNode, "--output", "json")
+	if code != exitOK {
+		t.Fatalf("code=%d stderr=%q", code, stderr)
+	}
+	var res struct {
+		Cluster string `json:"cluster"`
+		Release struct {
+			Version string `json:"version"`
+		} `json:"release"`
+		Masters []struct {
+			Hostname string `json:"hostname"`
+		} `json:"masters"`
+		Nodes []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+		} `json:"nodes"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if res.Cluster == "" || res.Release.Version == "" || len(res.Masters) == 0 || len(res.Nodes) == 0 {
+		t.Fatalf("result = %+v", res)
+	}
+}
+
+func TestUnknownOutputFormatIsAUsageError(t *testing.T) {
+	for _, cmd := range []string{"validate", "plan"} {
+		code, stdout, stderr := execute(t, cmd, "-c", exampleSingleNode, "-o", "yaml")
+		if code != exitUsage || stdout != "" || !strings.Contains(stderr, "unknown output format") {
+			t.Errorf("%s: code=%d stdout=%q stderr=%q", cmd, code, stdout, stderr)
+		}
 	}
 }

@@ -14,14 +14,25 @@ import (
 
 // newPlanCmd builds the `plan` command.
 func newPlanCmd() *cobra.Command {
+	var format *string // set below, read when the command runs
 	planCmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Display execution plan without modifying any infrastructure (Dry-Run)",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := checkFormat(*format); err != nil {
+				return err
+			}
 			out := cmd.OutOrStdout()
 			plan, err := config.LoadFromFile(configFile)
 			if err != nil {
 				return err
+			}
+			if *format == formatJSON {
+				report, err := engine.InventoryReport(plan, vaultIfAvailable())
+				if err != nil {
+					return err
+				}
+				return writeJSON(out, buildPlanResult(plan, report))
 			}
 			fmt.Fprintf(out, "=== Norca Deployment Plan (Dry-Run) ===\n")
 			fmt.Fprintf(out, "Cluster Name:    %s (Region: %s, DC: %s)\n", plan.Metadata.Name, plan.Metadata.Region, plan.Metadata.Datacenter)
@@ -139,6 +150,7 @@ func newPlanCmd() *cobra.Command {
 			return nil
 		},
 	}
+	format = addOutputFlag(planCmd)
 
 	return planCmd
 }
