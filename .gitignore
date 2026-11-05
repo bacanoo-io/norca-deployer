@@ -14,3 +14,6 @@ bin/
 # Binaries built in the repository root.
 /norca-deployer
 /norca-deployer.exe
+
+# Editor settings
+.idea/
