@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -244,6 +245,7 @@ func (f *runFlags) options(b *config.GitOpsBinding) (*gitops.FetchOptions, error
 }
 
 func (f *runFlags) run(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
 	client, err := f.cluster.client()
 	if err != nil {
 		return err
@@ -260,31 +262,31 @@ func (f *runFlags) run(cmd *cobra.Command) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Printf("=== In-Memory GitOps Fetch & Deploy ===\n")
-	fmt.Printf("Provider:     %s\n", b.EffectiveProvider())
-	fmt.Printf("Repository:   %s\n", gitops.SanitizeURL(opts.URL))
+	fmt.Fprintf(out, "=== In-Memory GitOps Fetch & Deploy ===\n")
+	fmt.Fprintf(out, "Provider:     %s\n", b.EffectiveProvider())
+	fmt.Fprintf(out, "Repository:   %s\n", gitops.SanitizeURL(opts.URL))
 	if opts.Subpath != "" {
-		fmt.Printf("Subpath:      %s\n", opts.Subpath)
+		fmt.Fprintf(out, "Subpath:      %s\n", opts.Subpath)
 	}
-	fmt.Printf("Target:       Release %q (namespace: %q, atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
-	fmt.Println("Fetching repository strictly into memory...")
+	fmt.Fprintf(out, "Target:       Release %q (namespace: %q, atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
+	fmt.Fprintln(out, "Fetching repository strictly into memory...")
 
 	start := time.Now()
 	res, err := gitops.FetchPackInMemory(ctx, opts)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[OK] Pack %q (version: %s, commit: %s) fetched into RAM in %dms (%d files)\n",
+	fmt.Fprintf(out, "[OK] Pack %q (version: %s, commit: %s) fetched into RAM in %dms (%d files)\n",
 		res.PackName, res.PackVersion, res.CommitSHA, time.Since(start).Milliseconds(), len(res.PackFiles))
 	if res.Signer != "" {
-		fmt.Printf("[OK] Verified: %s\n", res.Signer)
+		fmt.Fprintf(out, "[OK] Verified: %s\n", res.Signer)
 	}
 
-	fmt.Println("Uploading the pack and deploying it...")
+	fmt.Fprintln(out, "Uploading the pack and deploying it...")
 	if err := gitops.Deploy(ctx, client, res, gitops.ReleaseOf(b, b.Values, res)); err != nil {
 		return err
 	}
-	fmt.Printf("[OK] Release %q successfully deployed in %dms!\n", b.ReleaseName, time.Since(start).Milliseconds())
+	fmt.Fprintf(out, "[OK] Release %q successfully deployed in %dms!\n", b.ReleaseName, time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -297,7 +299,8 @@ type daemonFlags struct {
 	tlsKey      string
 }
 
-func (f *daemonFlags) run() error {
+func (f *daemonFlags) run(cmd *cobra.Command) error {
+	out := cmd.OutOrStdout()
 	plan, err := config.LoadFromFile(configFile)
 	if err != nil {
 		return fmt.Errorf("failed to load configuration (%s): %w", configFile, err)
@@ -307,7 +310,7 @@ func (f *daemonFlags) run() error {
 		return err
 	}
 	if len(bindings) == 0 {
-		fmt.Printf("[WARN] No GitOps bindings configured in %s\n", configFile)
+		fmt.Fprintf(cmd.ErrOrStderr(), "[WARN] No GitOps bindings configured in %s\n", configFile)
 	}
 	for i := range bindings {
 		if err := gitops.CheckBinding(&bindings[i]); err != nil {
@@ -329,12 +332,12 @@ func (f *daemonFlags) run() error {
 		TLSCertFile: f.tlsCert,
 		TLSKeyFile:  f.tlsKey,
 	})
-	fmt.Printf("=== Norca Deployer GitOps Daemon ===\n")
-	fmt.Printf("Listening for webhooks on: %s\n", f.addr)
-	fmt.Printf("Endpoints:  POST /v1/gitops/webhook, GET /v1/gitops/logs, GET /v1/gitops/status\n")
-	fmt.Printf("Bindings registered: %d\n", len(bindings))
+	fmt.Fprintf(out, "=== Norca Deployer GitOps Daemon ===\n")
+	fmt.Fprintf(out, "Listening for webhooks on: %s\n", f.addr)
+	fmt.Fprintf(out, "Endpoints:  POST /v1/gitops/webhook, GET /v1/gitops/logs, GET /v1/gitops/status\n")
+	fmt.Fprintf(out, "Bindings registered: %d\n", len(bindings))
 	for _, b := range bindings {
-		fmt.Printf("  - %s: %s (%s, %s)\n", b.Name, b.ReleaseName, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
+		fmt.Fprintf(out, "  - %s: %s (%s, %s)\n", b.Name, b.ReleaseName, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -348,7 +351,7 @@ func (f *daemonFlags) run() error {
 		}
 		return nil
 	case <-ctx.Done():
-		fmt.Println("Shutting down...")
+		fmt.Fprintln(out, "Shutting down...")
 		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		return d.Shutdown(shutdown)
@@ -403,25 +406,26 @@ func (f *logsFlags) fetch(target string) ([]gitops.LogEntry, error) {
 	return entries, nil
 }
 
-func printLogEntry(e gitops.LogEntry) {
-	fmt.Printf("[%s] [%-7s] [%-12s] %s (trigger: %s, duration: %dms)\n",
+func printLogEntry(out io.Writer, e gitops.LogEntry) {
+	fmt.Fprintf(out, "[%s] [%-7s] [%-12s] %s (trigger: %s, duration: %dms)\n",
 		e.Timestamp.Format("15:04:05"), e.Phase, e.BindingName, e.Details, e.Trigger, e.DurationMs)
 	if e.Error != "" {
-		fmt.Printf("    -> Error: %s\n", e.Error)
+		fmt.Fprintf(out, "    -> Error: %s\n", e.Error)
 	}
 }
 
-func (f *logsFlags) run(binding string) error {
+func (f *logsFlags) run(cmd *cobra.Command, binding string) error {
+	out := cmd.OutOrStdout()
 	target := f.url(binding)
 	entries, err := f.fetch(target)
 	if err != nil {
 		return fmt.Errorf("could not read the logs of the GitOps daemon at %s: %w (start it with: norca-deployer gitops daemon)", target, err)
 	}
-	fmt.Printf("=== GitOps In-Memory Execution Logs (%d entries) ===\n", len(entries))
+	fmt.Fprintf(out, "=== GitOps In-Memory Execution Logs (%d entries) ===\n", len(entries))
 	seen := map[string]bool{}
 	for _, e := range entries {
 		seen[e.ID] = true
-		printLogEntry(e)
+		printLogEntry(out, e)
 	}
 	if !f.follow {
 		return nil
@@ -443,17 +447,10 @@ func (f *logsFlags) run(binding string) error {
 			for _, e := range entries {
 				if !seen[e.ID] {
 					seen[e.ID] = true
-					printLogEntry(e)
+					printLogEntry(out, e)
 				}
 			}
 		}
-	}
-}
-
-func exitOnError(err error) {
-	if err != nil {
-		fmt.Printf("[ERROR] %v\n", err)
-		os.Exit(1)
 	}
 }
 
@@ -468,8 +465,8 @@ func newGitOpsCmd() *cobra.Command {
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Execute an immediate in-memory Git fetch and deployment to the cluster",
-		Run: func(cmd *cobra.Command, args []string) {
-			exitOnError(run.run(cmd))
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return run.run(cmd)
 		},
 	}
 	f := runCmd.Flags()
@@ -505,8 +502,8 @@ func newGitOpsCmd() *cobra.Command {
 	daemonCmd := &cobra.Command{
 		Use:   "daemon",
 		Short: "Run the continuous webhook listener daemon",
-		Run: func(cmd *cobra.Command, args []string) {
-			exitOnError(daemon.run())
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return daemon.run(cmd)
 		},
 	}
 	daemon.cluster.register(daemonCmd)
@@ -520,26 +517,30 @@ func newGitOpsCmd() *cobra.Command {
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Display status of configured GitOps bindings",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
 			plan, err := config.LoadFromFile(configFile)
-			exitOnError(err)
+			if err != nil {
+				return err
+			}
 
 			bindings := plan.AllGitOpsBindings()
-			fmt.Printf("=== Configured GitOps Bindings (%d) ===\n", len(bindings))
+			fmt.Fprintf(out, "=== Configured GitOps Bindings (%d) ===\n", len(bindings))
 			if len(bindings) == 0 {
-				fmt.Println("No bindings configured.")
-				return
+				fmt.Fprintln(out, "No bindings configured.")
+				return nil
 			}
 			for _, b := range bindings {
 				repo := b.EffectiveRepo()
-				fmt.Printf("Binding:   %s\n", b.Name)
-				fmt.Printf("  Release: %s (Namespace: %s, Atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
-				fmt.Printf("  Repo:    %s (%s, branch: %s)\n", gitops.SanitizeURL(repo.URL), b.EffectiveProvider(), repo.Branch)
+				fmt.Fprintf(out, "Binding:   %s\n", b.Name)
+				fmt.Fprintf(out, "  Release: %s (Namespace: %s, Atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
+				fmt.Fprintf(out, "  Repo:    %s (%s, branch: %s)\n", gitops.SanitizeURL(repo.URL), b.EffectiveProvider(), repo.Branch)
 				if b.Webhook != nil && len(b.Webhook.Events) > 0 {
-					fmt.Printf("  Webhook: events: %v, branches: %v\n", b.Webhook.Events, b.Webhook.FilterBranches)
+					fmt.Fprintf(out, "  Webhook: events: %v, branches: %v\n", b.Webhook.Events, b.Webhook.FilterBranches)
 				}
-				fmt.Println()
+				fmt.Fprintln(out)
 			}
+			return nil
 		},
 	}
 
@@ -548,12 +549,12 @@ func newGitOpsCmd() *cobra.Command {
 	logsCmd := &cobra.Command{
 		Use:   "logs [binding-name]",
 		Short: "Display in-memory ring-buffer execution and audit logs",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			binding := ""
 			if len(args) > 0 {
 				binding = args[0]
 			}
-			exitOnError(logs.run(binding))
+			return logs.run(cmd, binding)
 		},
 	}
 	logsCmd.Flags().IntVar(&logs.tail, "tail", 50, "Number of log lines to show")
