@@ -2,9 +2,8 @@
 # security problems. Style linters (wsl, paralleltest, gocyclo, revive, ...) are
 # left out on purpose; the full list is in the golang-lint skill.
 #
-# The code base had findings before this file existed, so CI reports only the
-# issues of new code (golangci-lint-action: only-new-issues). `make lint` shows
-# everything, `make lint-new` what a branch adds to main.
+# The code base is clean under this set: every finding is fixed, or an exception
+# with a //nolint and the reason. A new finding fails CI.
 version: "2"
 
 run:

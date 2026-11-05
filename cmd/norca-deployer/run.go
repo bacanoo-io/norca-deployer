@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,10 +14,14 @@ import (
 // Exit codes. 1 is a failure while the command ran; 2 is a command line the
 // tool could not use (an unknown command or flag, a wrong number of
 // arguments), the Unix convention scripts expect.
+//
+// 130 is 128 plus SIGINT: the command was interrupted and stopped between two
+// steps, the usual code for that.
 const (
-	exitOK    = 0
-	exitError = 1
-	exitUsage = 2
+	exitOK          = 0
+	exitError       = 1
+	exitUsage       = 2
+	exitInterrupted = 130
 )
 
 func main() {
@@ -36,9 +41,20 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return exitOK
 	}
 	fmt.Fprintf(stderr, "[ERROR] %v\n", err)
-	if isUsageError(err) {
+	code := exitCode(err)
+	if code == exitUsage {
 		fmt.Fprintf(stderr, "Run '%s --help' for usage.\n", root.Name())
+	}
+	return code
+}
+
+// exitCode is the code for the error of a command.
+func exitCode(err error) int {
+	switch {
+	case isUsageError(err):
 		return exitUsage
+	case errors.Is(err, context.Canceled):
+		return exitInterrupted
 	}
 	return exitError
 }

@@ -383,8 +383,8 @@ func (f *logsFlags) url(binding string) string {
 	return strings.TrimRight(base, "/") + "/v1/gitops/logs?" + q.Encode()
 }
 
-func (f *logsFlags) fetch(target string) ([]gitops.LogEntry, error) {
-	req, err := http.NewRequest(http.MethodGet, target, nil)
+func (f *logsFlags) fetch(ctx context.Context, target string) ([]gitops.LogEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +417,7 @@ func printLogEntry(out io.Writer, e gitops.LogEntry) {
 func (f *logsFlags) run(cmd *cobra.Command, binding string) error {
 	out := cmd.OutOrStdout()
 	target := f.url(binding)
-	entries, err := f.fetch(target)
+	entries, err := f.fetch(cmd.Context(), target)
 	if err != nil {
 		return fmt.Errorf("could not read the logs of the GitOps daemon at %s: %w (start it with: norca-deployer gitops daemon)", target, err)
 	}
@@ -440,7 +440,7 @@ func (f *logsFlags) run(cmd *cobra.Command, binding string) error {
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			entries, err := f.fetch(target)
+			entries, err := f.fetch(cmd.Context(), target)
 			if err != nil {
 				return err
 			}

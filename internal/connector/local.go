@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -10,19 +11,26 @@ import (
 )
 
 // LocalConnector executes commands and file operations directly on the local operating system.
-type LocalConnector struct{}
+type LocalConnector struct {
+	ctx context.Context
+}
 
-func NewLocalConnector() *LocalConnector {
-	return &LocalConnector{}
+// NewLocalConnector returns a connector for this machine. The commands it
+// starts are killed when ctx is done; a nil ctx never ends them.
+func NewLocalConnector(ctx context.Context) *LocalConnector {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &LocalConnector{ctx: ctx}
 }
 
 func (l *LocalConnector) ExecuteCommand(cmd string) (string, error) {
 	var execCmd *exec.Cmd
 
 	if runtime.GOOS == "windows" {
-		execCmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd)
+		execCmd = exec.CommandContext(l.ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd)
 	} else {
-		execCmd = exec.Command("bash", "-c", cmd)
+		execCmd = exec.CommandContext(l.ctx, "bash", "-c", cmd)
 	}
 
 	var stdout, stderr bytes.Buffer

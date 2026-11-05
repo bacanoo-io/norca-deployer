@@ -53,7 +53,7 @@ func TestOfficialReleaseVerifiedAndCached(t *testing.T) {
 
 	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{Version: "v1.2.3", Source: config.ReleaseCustomURL, DownloadBaseURL: srv.URL}}
 	cache := t.TempDir()
-	f, err := NewResolver(plan, cache).NorcaBinary("linux", "amd64")
+	f, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestOfficialReleaseVerifiedAndCached(t *testing.T) {
 
 	// A second resolver reuses the cached archive (only the sums file is fetched).
 	before := hits.Load()
-	if _, err := NewResolver(plan, cache).NorcaBinary("linux", "amd64"); err != nil {
+	if _, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64"); err != nil {
 		t.Fatal(err)
 	}
 	if hits.Load()-before != 1 {
@@ -82,7 +82,7 @@ func TestChecksumMismatchRejected(t *testing.T) {
 	defer srv.Close()
 
 	plan := &config.DeploymentPlan{CNI: &config.CNIConfig{Version: "v1.9.1", Source: config.ReleaseOfficial, DownloadBaseURL: srv.URL}}
-	_, err := NewResolver(plan, t.TempDir()).CNIArchive("amd64")
+	_, err := NewResolver(plan, t.TempDir()).CNIArchive(t.Context(), "amd64")
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("expected a checksum error, got %v", err)
 	}
@@ -96,7 +96,7 @@ func TestLocalArchiveWithPlaceholders(t *testing.T) {
 	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{
 		Source: config.ReleaseLocalPath, LocalBinaryPath: filepath.Join(dir, "norca_{os}_{arch}.tar.gz"),
 	}}
-	f, err := NewResolver(plan, t.TempDir()).NorcaBinary("linux", "arm64")
+	f, err := NewResolver(plan, t.TempDir()).NorcaBinary(t.Context(), "linux", "arm64")
 	if err != nil {
 		t.Fatal(err)
 	}

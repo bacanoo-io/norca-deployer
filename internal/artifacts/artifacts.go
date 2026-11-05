@@ -9,6 +9,7 @@ import (
 	"archive/zip"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -69,12 +70,12 @@ func (r *Resolver) memo(key string, fn func() (*File, error)) (*File, error) {
 }
 
 // NorcaBinary returns the norca binary for a platform.
-func (r *Resolver) NorcaBinary(goos, arch string) (*File, error) {
-	return r.ReleaseBinary("norca", goos, arch)
+func (r *Resolver) NorcaBinary(ctx context.Context, goos, arch string) (*File, error) {
+	return r.ReleaseBinary(ctx, "norca", goos, arch)
 }
 
 // ReleaseBinary returns a binary of the release archive for a platform.
-func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
+func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (*File, error) {
 	return r.memo(name+"/"+goos+"/"+arch, func() (*File, error) {
 		rel := r.plan.Release
 		binName := name
@@ -114,7 +115,7 @@ func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
 			want := strings.ToLower(rel.ChecksumSHA256)
 			if want == "" {
 				sums := filepath.Join(dir, sumsName)
-				if err := r.download(base+sumsName, sums, ""); err != nil {
+				if err := r.download(ctx, base+sumsName, sums, ""); err != nil {
 					return nil, err
 				}
 				var err error
@@ -122,7 +123,7 @@ func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
 					return nil, err
 				}
 			}
-			if err := r.download(base+archiveName, archive, want); err != nil {
+			if err := r.download(ctx, base+archiveName, archive, want); err != nil {
 				return nil, err
 			}
 			dest := filepath.Join(dir, goos+"_"+arch, binName)
@@ -136,7 +137,7 @@ func (r *Resolver) ReleaseBinary(name, goos, arch string) (*File, error) {
 }
 
 // CNIArchive returns the CNI plugin archive (.tgz) for a Linux architecture.
-func (r *Resolver) CNIArchive(arch string) (*File, error) {
+func (r *Resolver) CNIArchive(ctx context.Context, arch string) (*File, error) {
 	return r.memo("cni/"+arch, func() (*File, error) {
 		c := r.plan.CNI
 		switch c.Source {
@@ -153,7 +154,7 @@ func (r *Resolver) CNIArchive(arch string) (*File, error) {
 			want := strings.ToLower(c.ChecksumSHA256)
 			if want == "" {
 				sumFile := filepath.Join(dir, name+".sha256")
-				if err := r.download(url+".sha256", sumFile, ""); err != nil {
+				if err := r.download(ctx, url+".sha256", sumFile, ""); err != nil {
 					return nil, err
 				}
 				var err error
@@ -162,7 +163,7 @@ func (r *Resolver) CNIArchive(arch string) (*File, error) {
 				}
 			}
 			dest := filepath.Join(dir, name)
-			if err := r.download(url, dest, want); err != nil {
+			if err := r.download(ctx, url, dest, want); err != nil {
 				return nil, err
 			}
 			return &File{Path: dest, SHA256: want}, nil
@@ -180,7 +181,7 @@ func isArchive(p string) bool {
 
 // download fetches url into dest unless dest already has the wanted digest.
 // An empty want accepts any content (used for checksum files).
-func (r *Resolver) download(url, dest, want string) error {
+func (r *Resolver) download(ctx context.Context, url, dest, want string) error {
 	if want != "" {
 		if got, err := FileSHA256(dest); err == nil && got == want {
 			return nil
@@ -190,7 +191,11 @@ func (r *Resolver) download(url, dest, want string) error {
 		return err
 	}
 	fmt.Printf("    Downloading %s\n", url)
-	resp, err := r.client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	resp, err := r.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}

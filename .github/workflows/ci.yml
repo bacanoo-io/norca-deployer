@@ -54,12 +54,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Only the issues of new code: the code base has findings from before
-      # the configuration (see .golangci.yml).
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
-          only-new-issues: true
 
   vulncheck:
     name: Vulnerability check

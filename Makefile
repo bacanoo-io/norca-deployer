@@ -4,7 +4,7 @@ BINARY  := norca-deployer
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
-.PHONY: all build build-all test test-race lint lint-new vuln fmt tidy-check clean help
+.PHONY: all build build-all test test-race lint vuln fmt tidy-check clean help
 
 all: fmt lint test build
 
@@ -27,13 +27,9 @@ test:
 test-race:
 	$(GO) test -race -shuffle=on -count=1 ./...
 
-## lint: Run golangci-lint over everything (the code base has findings from before the config)
+## lint: Run golangci-lint (the code base is clean under .golangci.yml; CI fails on a finding)
 lint:
 	golangci-lint run ./...
-
-## lint-new: Run golangci-lint on what this branch adds to main (what CI checks)
-lint-new:
-	golangci-lint run --new-from-rev=main ./...
 
 ## vuln: Scan the module and the standard library for known vulnerabilities
 vuln:

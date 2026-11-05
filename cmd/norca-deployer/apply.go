@@ -20,9 +20,17 @@ func newApplyCmd() *cobra.Command {
 				return fmt.Errorf("failed to load configuration: %w", err)
 			}
 
+			// The first interrupt finishes the node being restarted and stops;
+			// the second cuts what is in progress.
+			sig, release := notifyInterrupts()
+			defer release()
+			gentle, abort, stop := interruptContexts(cmd.Context(), sig, cmd.ErrOrStderr())
+			defer stop()
+
 			runner := engine.NewRunner(plan, vaultIfAvailable())
 			runner.ForceRestart = forceRestart
-			if err := runner.Apply(); err != nil {
+			runner.Abort = abort
+			if err := runner.Apply(gentle); err != nil {
 				return fmt.Errorf("deployment failed: %w", err)
 			}
 			return nil

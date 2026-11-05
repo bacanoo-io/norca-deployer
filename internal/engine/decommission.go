@@ -137,7 +137,9 @@ func (r *Runner) drain(cli *remoteCLI, id string, d *config.DecommissionNode) er
 		if time.Now().After(wait) {
 			return fmt.Errorf("drain of %s did not finish", d.Hostname)
 		}
-		time.Sleep(healthPollInterval)
+		if err := sleep(r.abortCtx(), healthPollInterval); err != nil {
+			return fmt.Errorf("drain of %s aborted: %w", d.Hostname, err)
+		}
 	}
 }
 
@@ -189,7 +191,9 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 		if time.Now().After(deadline) {
 			return fmt.Errorf("the cluster has %d raft peers after removing %s, want %d: %s", len(peers), d.Hostname, want, out)
 		}
-		time.Sleep(healthPollInterval)
+		if err := sleep(r.abortCtx(), healthPollInterval); err != nil {
+			return fmt.Errorf("removing %s aborted: %w", d.Hostname, err)
+		}
 	}
 }
 

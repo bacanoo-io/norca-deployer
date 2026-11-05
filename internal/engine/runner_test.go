@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,6 +21,8 @@ type fakeCluster struct {
 	events    []string
 	unhealthy map[string]bool
 	peers     int
+	// onHealth runs when a node answers the health check (a test interrupts there).
+	onHealth func(host string)
 }
 
 func (c *fakeCluster) conn(host string) *connector.FakeConnector {
@@ -32,6 +36,9 @@ func (c *fakeCluster) conn(host string) *connector.FakeConnector {
 			return "", nil, true
 		case strings.Contains(cmd, "/v1/agent/health"):
 			c.events = append(c.events, "health "+host)
+			if c.onHealth != nil && !c.unhealthy[host] {
+				c.onHealth(host)
+			}
 			if c.unhealthy[host] {
 				return "< HTTP/1.1 500 Internal Server Error\n{\"server\":{\"ok\":false,\"message\":\"down\"}}", nil, true
 			}
@@ -87,7 +94,7 @@ func TestRollingRestartOneServerAtATime(t *testing.T) {
 	masters[0].changed = true
 	masters[2].changed = true
 
-	if err := r.restartMasters(masters); err != nil {
+	if err := r.restartMasters(t.Context(), masters); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(cluster.events, ", ")
@@ -99,7 +106,7 @@ func TestRollingRestartOneServerAtATime(t *testing.T) {
 
 func TestBootstrapStartsAllServersFirst(t *testing.T) {
 	r, masters, _, cluster := testRunner(t, 3, 0)
-	if err := r.restartMasters(masters); err != nil {
+	if err := r.restartMasters(t.Context(), masters); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.Join(cluster.events[:3], ", ")
@@ -116,7 +123,7 @@ func TestRollingRestartStopsOnUnhealthyServer(t *testing.T) {
 	}
 	cluster.unhealthy["10.0.0.1"] = true
 
-	err := r.restartMasters(masters)
+	err := r.restartMasters(t.Context(), masters)
 	if err == nil || !strings.Contains(err.Error(), "rolling restart stopped") {
 		t.Fatalf("expected the rollout to stop, got %v", err)
 	}
@@ -135,7 +142,7 @@ func TestServerWaitsForAllPeers(t *testing.T) {
 	masters[0].changed = true
 	cluster.peers = 2 // one server missing
 
-	if err := r.restartMasters(masters); err == nil || !strings.Contains(err.Error(), "2 of 3 raft peers") {
+	if err := r.restartMasters(t.Context(), masters); err == nil || !strings.Contains(err.Error(), "2 of 3 raft peers") {
 		t.Fatalf("expected a peer count error, got %v", err)
 	}
 }
@@ -149,7 +156,7 @@ func TestClientBatches(t *testing.T) {
 	}
 	clients[3].changed = false
 
-	if err := r.restartClients(clients); err != nil {
+	if err := r.restartClients(t.Context(), clients); err != nil {
 		t.Fatal(err)
 	}
 	restarts := 0
@@ -172,7 +179,7 @@ func TestClientBatchStopsAfterFailure(t *testing.T) {
 	}
 	cluster.unhealthy["10.0.1.1"] = true
 
-	if err := r.restartClients(clients); err == nil {
+	if err := r.restartClients(t.Context(), clients); err == nil {
 		t.Fatal("expected an error")
 	}
 	for _, e := range cluster.events {
@@ -245,5 +252,97 @@ func TestGenerateGossipAndJoin(t *testing.T) {
 	client = GenerateNorcaConfig(c, plan, storage.ResolveNodePaths(c, plan), false, GenOptions{})
 	if !strings.Contains(client, "plugin \"raw_exec\" {\n  config {\n    enabled = true") {
 		t.Errorf("raw_exec plugin block missing:\n%s", client)
+	}
+}
+
+// An interrupt while a server restarts: that server is finished (restarted and
+// checked), the next one is not touched.
+func TestRollingRestartStopsBetweenServersWhenInterrupted(t *testing.T) {
+	r, masters, _, cluster := testRunner(t, 3, 0)
+	for _, m := range masters {
+		m.wasRunning = true
+		m.changed = true
+	}
+	ctx, interrupt := context.WithCancel(t.Context())
+	cluster.onHealth = func(host string) {
+		if host == "10.0.0.1" {
+			interrupt()
+		}
+	}
+
+	err := r.restartMasters(ctx, masters)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if !strings.Contains(err.Error(), "were not restarted") {
+		t.Fatalf("err = %v", err)
+	}
+	got := strings.Join(cluster.events, ", ")
+	if got != "restart 10.0.0.1, health 10.0.0.1" {
+		t.Fatalf("events = %s, want only the first server, restarted and checked", got)
+	}
+}
+
+func TestClientBatchesStopWhenInterrupted(t *testing.T) {
+	r, _, clients, cluster := testRunner(t, 1, 4)
+	r.plan.Upgrade.MaxParallelClients = 2
+	for _, c := range clients {
+		c.wasRunning = true
+		c.changed = true
+	}
+	ctx, interrupt := context.WithCancel(t.Context())
+	cluster.onHealth = func(string) { interrupt() }
+
+	err := r.restartClients(ctx, clients)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	for _, e := range cluster.events {
+		if e == "restart 10.0.1.3" || e == "restart 10.0.1.4" {
+			t.Fatalf("the second batch started after the interrupt: %v", cluster.events)
+		}
+	}
+}
+
+// The second interrupt cuts the wait for a node to become healthy.
+func TestWaitHealthyIsAbortable(t *testing.T) {
+	r, masters, _, cluster := testRunner(t, 1, 0)
+	cluster.unhealthy["10.0.0.1"] = true
+	r.plan.Upgrade.HealthTimeout = 60
+	abort, cut := context.WithCancel(t.Context())
+	r.Abort = abort
+	cluster.onHealth = nil
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cut()
+	}()
+
+	start := time.Now()
+	err := r.waitHealthy(masters[0], 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want it to wrap context.Canceled", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("the wait did not end with the abort")
+	}
+}
+
+// Nodes that were not started when the interrupt came are skipped.
+func TestPrepareAllSkipsNodesAfterAnInterrupt(t *testing.T) {
+	r, masters, _, _ := testRunner(t, 2, 0)
+	ctx, interrupt := context.WithCancel(t.Context())
+	interrupt()
+	connected := 0
+	r.connect = func(*config.NodeConfig) (connector.Connector, error) {
+		connected++
+		return connector.NewFakeConnector(), nil
+	}
+
+	r.prepareAll(ctx, masters)
+	if connected != 0 {
+		t.Fatalf("%d nodes were connected after the interrupt", connected)
+	}
+	if err := collect(masters); !errors.Is(err, context.Canceled) {
+		t.Fatalf("collect = %v, want it to wrap context.Canceled", err)
 	}
 }

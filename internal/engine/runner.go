@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -56,6 +57,36 @@ type Runner struct {
 
 	// ForceRestart restarts every agent, even when nothing changed.
 	ForceRestart bool
+
+	// Abort ends at once what is in progress: the commands on the nodes, the
+	// downloads and the waits (the second interrupt). nil: never. The context
+	// of Apply is the gentle one: it is looked at between the steps, so that
+	// the step in progress, a node being restarted, is finished.
+	Abort context.Context
+}
+
+func (r *Runner) abortCtx() context.Context {
+	if r.Abort == nil {
+		return context.Background()
+	}
+	return r.Abort
+}
+
+// sleep waits for d or until ctx is done.
+func sleep(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// interrupted is the error of an apply that stopped between two steps.
+func interrupted(ctx context.Context, before string) error {
+	return fmt.Errorf("interrupted before %s: %w", before, ctx.Err())
 }
 
 // NewRunner creates a new Runner instance.
@@ -90,8 +121,10 @@ func (t *target) cli(r *Runner, token string) *remoteCLI {
 	return &remoteCLI{conn: t.conn, plan: r.plan, node: t.node, paths: t.paths, isMaster: t.isMaster, token: token}
 }
 
-// Apply executes the entire cluster deployment plan.
-func (r *Runner) Apply() error {
+// Apply executes the entire cluster deployment plan. When ctx is done it
+// stops between the steps: the node being restarted is finished (and its
+// health checked), the next one is not started.
+func (r *Runner) Apply(ctx context.Context) error {
 	fmt.Printf("==> [1/5] Preparing Security, PKI and artifacts...\n")
 	store, err := state.Open(r.plan, r.vault)
 	if err != nil {
@@ -138,13 +171,16 @@ func (r *Runner) Apply() error {
 	defer closeAll(clients)
 
 	fmt.Printf("==> [2/5] Provisioning Master (Server) nodes (%d nodes)...\n", len(masters))
-	r.prepareAll(masters)
+	r.prepareAll(ctx, masters)
 	if err := collect(masters); err != nil {
 		return fmt.Errorf("master node provisioning failed (no agent was restarted): %w", err)
 	}
 
+	if ctx.Err() != nil {
+		return interrupted(ctx, "the restart of the servers (nothing was restarted)")
+	}
 	fmt.Printf("==> [3/5] Rolling restart of Master nodes...\n")
-	if err := r.restartMasters(masters); err != nil {
+	if err := r.restartMasters(ctx, masters); err != nil {
 		return err
 	}
 	if err := r.recordInstalled(masters, config.RoleMaster); err != nil {
@@ -154,8 +190,8 @@ func (r *Runner) Apply() error {
 	var clientErr error
 	if len(clients) > 0 {
 		fmt.Printf("==> [4/5] Provisioning Client (Worker) nodes (%d nodes)...\n", len(clients))
-		r.prepareAll(clients)
-		clientErr = r.restartClients(clients)
+		r.prepareAll(ctx, clients)
+		clientErr = r.restartClients(ctx, clients)
 		if err := r.recordInstalled(clients, config.RoleClient); err != nil {
 			return err
 		}
@@ -163,6 +199,9 @@ func (r *Runner) Apply() error {
 		fmt.Printf("==> [4/5] No dedicated client nodes configured (skipped).\n")
 	}
 
+	if ctx.Err() != nil {
+		return interrupted(ctx, "the post-cluster phase")
+	}
 	fmt.Printf("==> [5/5] Post-Cluster phase (ACL, decommission, secrets & packs)...\n")
 	if err := r.postClusterTasks(masters[0]); err != nil {
 		return fmt.Errorf("post-cluster tasks failed: %w", err)
@@ -192,26 +231,42 @@ func closeAll(ts []*target) {
 	}
 }
 
+// nodeErrors is the error of several nodes. It keeps the causes, so that
+// errors.Is still finds an interrupt (context.Canceled) in it.
+type nodeErrors struct {
+	msg  string
+	errs []error
+}
+
+func (e *nodeErrors) Error() string   { return e.msg }
+func (e *nodeErrors) Unwrap() []error { return e.errs }
+
 func collect(ts []*target) error {
-	var errs []string
+	var lines []string
+	var errs []error
 	for _, t := range ts {
 		if t.err != nil {
-			errs = append(errs, fmt.Sprintf("node [%s]: %v", t.node.Host, t.err))
+			lines = append(lines, fmt.Sprintf("node [%s]: %v", t.node.Host, t.err))
+			errs = append(errs, t.err)
 		}
 	}
-	if len(errs) > 0 {
-		return fmt.Errorf("\n - %s", strings.Join(errs, "\n - "))
+	if len(lines) > 0 {
+		return &nodeErrors{msg: fmt.Sprintf("\n - %s", strings.Join(lines, "\n - ")), errs: errs}
 	}
 	return nil
 }
 
 // prepareAll provisions the nodes in parallel without restarting agents.
-func (r *Runner) prepareAll(ts []*target) {
+func (r *Runner) prepareAll(ctx context.Context, ts []*target) {
 	var wg sync.WaitGroup
 	for _, t := range ts {
 		wg.Add(1)
 		go func(t *target) {
 			defer wg.Done()
+			if ctx.Err() != nil {
+				t.err = interrupted(ctx, "the provisioning of the node")
+				return
+			}
 			t.err = r.prepareNode(t)
 		}(t)
 	}
@@ -367,7 +422,7 @@ func (r *Runner) needsRestart(t *target) bool {
 // elect a leader before bootstrap_expect servers joined. An existing cluster
 // restarts one server at a time and waits until it is healthy, has a leader
 // and sees all peers, so that quorum is kept.
-func (r *Runner) restartMasters(masters []*target) error {
+func (r *Runner) restartMasters(ctx context.Context, masters []*target) error {
 	bootstrap := true
 	for _, t := range masters {
 		if t.wasRunning {
@@ -390,6 +445,9 @@ func (r *Runner) restartMasters(masters []*target) error {
 		}
 	} else {
 		for _, t := range masters {
+			if ctx.Err() != nil {
+				return fmt.Errorf("%w (rolling restart stopped; the remaining servers were not restarted)", interrupted(ctx, "the restart of "+t.node.Host))
+			}
 			if !r.needsRestart(t) {
 				fmt.Printf("    [%s] unchanged, not restarted\n", t.node.Host)
 				continue
@@ -415,7 +473,7 @@ func (r *Runner) restartMasters(masters []*target) error {
 // restartClients restarts changed clients in batches of max_parallel_clients.
 // Allocations keep running while the client agent restarts. A failed node
 // is reported and the others continue.
-func (r *Runner) restartClients(clients []*target) error {
+func (r *Runner) restartClients(ctx context.Context, clients []*target) error {
 	var ready []*target
 	for _, t := range clients {
 		if t.err == nil {
@@ -425,6 +483,9 @@ func (r *Runner) restartClients(clients []*target) error {
 
 	batch := r.plan.Upgrade.MaxParallelClients
 	for start := 0; start < len(ready); start += batch {
+		if ctx.Err() != nil {
+			return fmt.Errorf("%w (rolling restart stopped; the remaining clients were not restarted)", interrupted(ctx, "the next batch of clients"))
+		}
 		end := min(start+batch, len(ready))
 		group := ready[start:end]
 		var wg sync.WaitGroup
@@ -474,7 +535,9 @@ func (r *Runner) waitHealthy(t *target, expectPeers int) error {
 		if time.Now().After(deadline) {
 			return fmt.Errorf("node [%s] not healthy after %ds: %s", t.node.Host, r.plan.Upgrade.HealthTimeout, last)
 		}
-		time.Sleep(healthPollInterval)
+		if err := sleep(r.abortCtx(), healthPollInterval); err != nil {
+			return fmt.Errorf("node [%s]: waiting for it to be healthy aborted: %w", t.node.Host, err)
+		}
 	}
 }
 
@@ -513,7 +576,7 @@ func (r *Runner) installBinary(t *target) error {
 		goos = "windows"
 		dest = t.paths.BinDir + `\norca.exe`
 	}
-	file, err := r.artifacts.NorcaBinary(goos, t.node.Arch)
+	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch)
 	if err != nil {
 		return err
 	}
@@ -531,7 +594,7 @@ func (r *Runner) installBinary(t *target) error {
 // archive was installed before. CNI plugins are run per allocation, so a new
 // version needs no agent restart.
 func (r *Runner) installCNI(t *target) error {
-	file, err := r.artifacts.CNIArchive(t.node.Arch)
+	file, err := r.artifacts.CNIArchive(r.abortCtx(), t.node.Arch)
 	if err != nil {
 		return err
 	}
@@ -595,7 +658,7 @@ func (r *Runner) prepareHostVolumes(t *target) error {
 
 func (r *Runner) createConnector(node *config.NodeConfig) (connector.Connector, error) {
 	if strings.ToLower(node.Connection.Mode) == "local" {
-		return connector.NewLocalConnector(), nil
+		return connector.NewLocalConnector(r.abortCtx()), nil
 	}
 
 	// Decrypt credentials stored as inline encrypted secrets
@@ -619,6 +682,7 @@ func (r *Runner) createConnector(node *config.NodeConfig) (connector.Connector, 
 
 	isWin := strings.ToLower(node.Platform) == "windows"
 	opts := connector.SSHOptions{
+		Context:         r.abortCtx(),
 		Host:            node.Host,
 		Port:            c.SSHPort,
 		User:            c.SSHUser,

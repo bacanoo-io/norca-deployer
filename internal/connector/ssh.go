@@ -2,6 +2,7 @@ package connector
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -25,6 +26,7 @@ type SSHConnector struct {
 	become         bool
 	becomePassword string
 	windows        bool
+	ctx            context.Context
 }
 
 // SSHOptions provides connection parameters for SSH.
@@ -47,6 +49,11 @@ type SSHOptions struct {
 	// HostKeyCallback checks the host key. It is required: a nil callback is
 	// an error, and accepting any key is HostKeyCallback("off", ...).
 	HostKeyCallback ssh.HostKeyCallback
+
+	// Context ends the connection's commands and the dial when it is done (an
+	// abort of the apply). nil: never. A command that was already started on
+	// the node may run to its end; the session is closed.
+	Context context.Context
 
 	// Windows wraps commands in PowerShell and maps paths for the Windows
 	// OpenSSH SFTP server.
@@ -105,11 +112,24 @@ func NewSSHConnector(opts SSHOptions) (*SSHConnector, error) {
 		Timeout:         opts.Timeout,
 	}
 
+	if opts.Context == nil {
+		opts.Context = context.Background()
+	}
 	addr := net.JoinHostPort(opts.Host, fmt.Sprintf("%d", opts.Port))
-	client, err := ssh.Dial("tcp", addr, config)
+	dialer := net.Dialer{Timeout: opts.Timeout}
+	conn, err := dialer.DialContext(opts.Context, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial SSH target (%s): %w", addr, err)
 	}
+	// The handshake has the same timeout as the dial (ssh.Dial did this).
+	_ = conn.SetDeadline(time.Now().Add(opts.Timeout))
+	sshConn, chans, reqs, err := ssh.NewClientConn(conn, addr, config)
+	if err != nil {
+		_ = conn.Close()
+		return nil, fmt.Errorf("failed to dial SSH target (%s): %w", addr, err)
+	}
+	_ = conn.SetDeadline(time.Time{})
+	client := ssh.NewClient(sshConn, chans, reqs)
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
@@ -125,6 +145,7 @@ func NewSSHConnector(opts SSHOptions) (*SSHConnector, error) {
 		become:         opts.Become && !opts.Windows && opts.User != "" && opts.User != "root",
 		becomePassword: opts.BecomePassword,
 		windows:        opts.Windows,
+		ctx:            opts.Context,
 	}, nil
 }
 
@@ -159,7 +180,13 @@ func (s *SSHConnector) run(cmd string) (string, string, error) {
 	session.Stdout = &stdout
 	session.Stderr = &stderr
 
+	// An abort closes the session, which ends the wait for the command.
+	stop := context.AfterFunc(s.ctx, func() { _ = session.Close() })
+	defer stop()
 	err = session.Run(cmd)
+	if err != nil && s.ctx.Err() != nil {
+		err = fmt.Errorf("command aborted: %w", s.ctx.Err())
+	}
 	return stdout.String(), stderr.String(), err
 }
 
