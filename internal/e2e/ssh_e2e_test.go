@@ -151,8 +151,8 @@ func TestScriptsAndPackages(t *testing.T) {
 	}
 
 	checks := map[string]string{
-		"cat /opt/norca-e2e/hello":                                       "hello from norca-e2e",
-		"apt-mark showhold":                                              "norca-e2e",
+		"cat /opt/norca-e2e/hello": "hello from norca-e2e",
+		"apt-mark showhold":        "norca-e2e",
 		"stat -c '%a' /etc/apt/auth.conf.d/norca-backports.conf":         "600",
 		"grep Signed-By /etc/apt/sources.list.d/norca-backports.sources": "/etc/apt/keyrings/norca-backports.gpg",
 		"grep Pin: /etc/apt/preferences.d/norca-backports.pref":          "Pin: release n=bookworm-backports",
