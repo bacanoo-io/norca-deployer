@@ -29,6 +29,7 @@ func newPkiCmd() *cobra.Command {
 				return err
 			}
 			inter.Force = force
+			inter.Vault = vaultIfAvailable()
 			files, err := engine.IssueIntermediate(plan, inter)
 			if err != nil {
 				return err
@@ -65,6 +66,7 @@ func newPkiCmd() *cobra.Command {
 				return err
 			}
 			nodeCA.Force = force
+			nodeCA.Vault = vaultIfAvailable()
 			files, err := engine.IssueNodeCA(plan, nodeCA)
 			if err != nil {
 				return err

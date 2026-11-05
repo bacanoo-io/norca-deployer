@@ -9,6 +9,8 @@ With `security.tls_enabled: true`, HTTP and RPC use mutual TLS.
 2. `certs/norca-ca.pem` from an earlier `apply`.
 3. A new CA, valid for 10 years, written to `certs/` (key mode 0600).
 
+**The CA key at rest.** The key of a CA the deployer generated is stored **encrypted with the master key** (see [Secrets in the plan](#secrets-in-the-plan)) when one exists, as the gossip key and the management token are. Without a master key it is stored in plain text and `apply` warns; a master key that appears later encrypts the existing key in place on the next `apply`, and the CA stays the same. A key file you name in `security.pki.ca_key_path` is yours and is never rewritten (an encrypted one is decrypted with the master key). An encrypted key without the master key is an error; no second CA is generated.
+
 **Node certificates:**
 
 | Role | Common name | DNS SANs | IP SANs |
@@ -108,7 +110,7 @@ The master key is a 256-bit AES key. It is looked up in this order:
 - `scripts[].env` values
 - `security.gossip_encryption_key`
 
-An encrypted value that cannot be decrypted is an error; it is never sent as is. With a master key, the gossip key and the management token are also stored encrypted.
+An encrypted value that cannot be decrypted is an error; it is never sent as is. With a master key, the gossip key, the management token and the key of the generated CA are also stored encrypted.
 
 ## SSH host keys
 
@@ -123,5 +125,6 @@ An encrypted value that cannot be decrypted is an error; it is never sent as is.
 ## Files
 
 - `init` writes the plan with mode 0600 and overwrites an existing file only with `--force`.
-- `secret create-key` never overwrites an existing key: the key decrypts your existing secrets.
+- `secret create-key` never overwrites an existing key: the key decrypts your existing secrets. Do not lose it: with it gone, the encrypted CA key cannot be read.
+- The key files of `pki issue-intermediate` and `pki issue-node-ca` (`certs/*-ca-key.pem`, mode 0600) are plain text: the operator or the PKI that uses them needs the key itself.
 - On the nodes, the TLS directory is 0700, keys are 0600, and script environment files are 0600 and deleted after use.

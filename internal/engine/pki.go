@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	"github.com/bacanoo-io/norca-deployer/internal/state"
 	"github.com/bacanoo-io/norca-deployer/pkg/pki"
 )
 
@@ -40,12 +43,18 @@ func (r *Runner) initPKI() error {
 	// A configured CA that cannot be loaded is an error: silently
 	// generating a new one would split the cluster.
 	if _, statErr := os.Stat(caCert); configured || statErr == nil {
-		ca, err := pki.LoadCA(caCert, caKey)
+		store := r.secretStore()
+		ca, err := loadCA(store, caCert, caKey)
 		if err != nil {
 			return fmt.Errorf("failed to load the CA (%s): %w", caCert, err)
 		}
 		r.ca = ca
 		fmt.Printf("    Existing CA reused (%s)\n", caCert)
+		if !configured {
+			if err := protectCAKey(store, caKey, ca); err != nil {
+				return err
+			}
+		}
 		r.checkCATrustDomain()
 	} else {
 		ca, err := pki.NewCA(r.plan.Metadata.Name, 10, td)
@@ -59,9 +68,11 @@ func (r *Runner) initPKI() error {
 		if err := os.WriteFile(caCert, ca.CertPEM, 0644); err != nil { //nolint:gosec // G306: a certificate is public
 			return fmt.Errorf("failed to save CA certificate: %w", err)
 		}
-		if err := os.WriteFile(caKey, ca.KeyPEM, 0600); err != nil {
+		plain, err := r.secretStore().WriteSecret(caKey, string(ca.KeyPEM))
+		if err != nil {
 			return fmt.Errorf("failed to save CA key: %w", err)
 		}
+		warnPlainCAKey(plain, caKey)
 		fmt.Printf("    New internal mTLS CA generated (valid for 10 years)\n")
 	}
 
@@ -201,9 +212,10 @@ func (r *Runner) provisionCertificates(t *target) (bool, error) {
 
 // NodeCAOptions are the settings of `pki issue-node-ca`.
 type NodeCAOptions struct {
-	Region string // default: the region of the plan
-	Days   int    // validity in days; DefaultNodeCADays when neither Days nor Years is set
-	Years  int    // validity in years; not together with Days
+	Vault  *crypto.Vault // decrypts the CA key; nil without a master key
+	Region string        // default: the region of the plan
+	Days   int           // validity in days; DefaultNodeCADays when neither Days nor Years is set
+	Years  int           // validity in years; not together with Days
 	Force  bool
 }
 
@@ -239,7 +251,7 @@ func IssueNodeCA(plan *config.DeploymentPlan, o NodeCAOptions) ([]string, error)
 		validity = time.Until(time.Now().AddDate(o.Years, 0, 0))
 	}
 	caCert, caKey, _ := caPaths(plan)
-	ca, err := pki.LoadCA(caCert, caKey)
+	ca, err := loadCA(state.OpenReadOnly(plan, o.Vault), caCert, caKey)
 	if err != nil {
 		return nil, fmt.Errorf("cluster CA (%s): %w (run apply first)", caCert, err)
 	}
@@ -282,7 +294,8 @@ var intermediateNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 
 // IntermediateOptions are the settings of `pki issue-intermediate`.
 type IntermediateOptions struct {
-	Name       string // file prefix and part of the subject, e.g. "ziti"
+	Vault      *crypto.Vault // decrypts the CA key; nil without a master key
+	Name       string        // file prefix and part of the subject, e.g. "ziti"
 	Years      int
 	MaxPathLen int // CA levels allowed below the intermediate
 	Force      bool
@@ -300,7 +313,7 @@ func IssueIntermediate(plan *config.DeploymentPlan, o IntermediateOptions) ([]st
 		return nil, fmt.Errorf("years must be positive and the path length not negative")
 	}
 	caCert, caKey, _ := caPaths(plan)
-	ca, err := pki.LoadCA(caCert, caKey)
+	ca, err := loadCA(state.OpenReadOnly(plan, o.Vault), caCert, caKey)
 	if err != nil {
 		return nil, fmt.Errorf("cluster CA (%s): %w (run apply first)", caCert, err)
 	}
@@ -340,4 +353,58 @@ func IssueIntermediate(plan *config.DeploymentPlan, o IntermediateOptions) ([]st
 		}
 	}
 	return files, nil
+}
+
+// secretStore is the store that reads and writes the secret files of the
+// deployer (the CA key among them): encrypted when a master key is available.
+func (r *Runner) secretStore() *state.Store {
+	if r.store != nil {
+		return r.store
+	}
+	return state.OpenReadOnly(r.plan, r.vault)
+}
+
+// loadCA loads the CA; the key file may be encrypted with the master key.
+func loadCA(store *state.Store, certPath, keyPath string) (*pki.CertificateAuthority, error) {
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA certificate file: %w", err)
+	}
+	key, ok, err := store.ReadSecret(keyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA key file: %w", err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("failed to read CA key file: %s does not exist", keyPath)
+	}
+	return pki.ParseCA(certPEM, []byte(key))
+}
+
+// protectCAKey encrypts the key of a CA that the deployer generated and that
+// is still in plain text, once a master key is available. A key file named in
+// the plan (ca_key_path) is the user's and is never rewritten.
+func protectCAKey(store *state.Store, keyPath string, ca *pki.CertificateAuthority) error {
+	data, err := os.ReadFile(keyPath)
+	if err != nil {
+		return err
+	}
+	if strings.HasPrefix(strings.TrimSpace(string(data)), crypto.EncryptedPrefix) {
+		return nil
+	}
+	plain, err := store.WriteSecret(keyPath, string(ca.KeyPEM))
+	if err != nil {
+		return fmt.Errorf("failed to encrypt the CA key: %w", err)
+	}
+	if plain {
+		warnPlainCAKey(true, keyPath)
+		return nil
+	}
+	fmt.Printf("    CA key %s encrypted with the master key\n", keyPath)
+	return nil
+}
+
+func warnPlainCAKey(plain bool, keyPath string) {
+	if plain {
+		fmt.Printf("    [WARN] The CA key is stored UNENCRYPTED in %s (create a master key with 'secret create-key')\n", keyPath)
+	}
 }

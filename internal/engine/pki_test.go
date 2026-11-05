@@ -12,6 +12,7 @@ import (
 
 	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	"github.com/bacanoo-io/norca-deployer/pkg/pki"
 )
@@ -229,4 +230,141 @@ func loadPlanFile(t *testing.T, path string) *config.DeploymentPlan {
 		t.Fatal(err)
 	}
 	return plan
+}
+
+func testVault(t *testing.T) *crypto.Vault {
+	t.Helper()
+	_, key, err := crypto.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	v, err := crypto.NewVault(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func caKeyFile(plan *config.DeploymentPlan) string {
+	_, key, _ := caPaths(plan)
+	return key
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+// With a master key the key of the CA the deployer generates is stored
+// encrypted, and the next apply loads it and reuses the CA.
+func TestCAKeyIsEncryptedWithAMasterKey(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	vault := testVault(t)
+	if err := NewRunner(plan, vault).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, caKeyFile(plan)); !strings.HasPrefix(got, crypto.EncryptedPrefix) || strings.Contains(got, "PRIVATE KEY") {
+		t.Fatalf("CA key file is not encrypted:\n%s", got)
+	}
+	certBefore := readFile(t, plan.BaseDir()+"/certs/norca-ca.pem")
+
+	r := NewRunner(plan, vault)
+	if err := r.initPKI(); err != nil {
+		t.Fatalf("second run: %v", err)
+	}
+	if r.ca == nil || r.ca.PrivateKey == nil {
+		t.Fatal("the encrypted CA was not loaded")
+	}
+	if readFile(t, plan.BaseDir()+"/certs/norca-ca.pem") != certBefore {
+		t.Fatal("a new CA was generated instead of reusing the encrypted one")
+	}
+}
+
+// Without a master key the key stays in plain text (with a warning); a master
+// key that appears later encrypts it in place, and the CA stays the same.
+func TestPlainCAKeyIsEncryptedWhenAMasterKeyAppears(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	if err := NewRunner(plan, nil).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, caKeyFile(plan)); !strings.Contains(got, "PRIVATE KEY") {
+		t.Fatalf("without a master key the key should be PEM:\n%s", got)
+	}
+	certBefore := readFile(t, plan.BaseDir()+"/certs/norca-ca.pem")
+
+	vault := testVault(t)
+	if err := NewRunner(plan, vault).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, caKeyFile(plan)); !strings.HasPrefix(got, crypto.EncryptedPrefix) {
+		t.Fatalf("the key was not encrypted once a master key was available:\n%s", got)
+	}
+	if readFile(t, plan.BaseDir()+"/certs/norca-ca.pem") != certBefore {
+		t.Fatal("the CA changed")
+	}
+	if err := NewRunner(plan, vault).initPKI(); err != nil {
+		t.Fatalf("the encrypted key does not load: %v", err)
+	}
+}
+
+// An encrypted key without the master key is an error that says so, and no
+// new CA is generated over it.
+func TestEncryptedCAKeyWithoutAMasterKeyFails(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	if err := NewRunner(plan, testVault(t)).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	err := NewRunner(plan, nil).initPKI()
+	if err == nil || !strings.Contains(err.Error(), "encrypted but no master key") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+// A key file named in the plan belongs to the user: it is read (and decrypted
+// if it is encrypted), never rewritten.
+func TestConfiguredCAKeyIsNotRewritten(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	dir := t.TempDir()
+	td, _ := pki.TrustDomain("prod.example")
+	ca, err := pki.NewCA("external", 1, td)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPath, keyPath := filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca-key.pem")
+	if err := os.WriteFile(certPath, ca.CertPEM, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, ca.KeyPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	plan.Security.PKI.CACertPath, plan.Security.PKI.CAKeyPath = certPath, keyPath
+
+	if err := NewRunner(plan, testVault(t)).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, keyPath); got != string(ca.KeyPEM) {
+		t.Fatal("the key file named in the plan was rewritten")
+	}
+}
+
+// pki issue-node-ca and issue-intermediate read the CA key through the vault.
+func TestIssueFromAnEncryptedCAKey(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	vault := testVault(t)
+	if err := NewRunner(plan, vault).initPKI(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Vault: vault}); err != nil {
+		t.Fatalf("with the master key: %v", err)
+	}
+	if _, err := IssueNodeCA(plan, NodeCAOptions{Force: true}); err == nil || !strings.Contains(err.Error(), "encrypted but no master key") {
+		t.Fatalf("without the master key: %v", err)
+	}
+	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "ziti", Years: 1, MaxPathLen: 1, Vault: vault}); err != nil {
+		t.Fatalf("intermediate with the master key: %v", err)
+	}
 }

@@ -97,7 +97,12 @@ func LoadCA(certPath, keyPath string) (*CertificateAuthority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read CA key file: %w", err)
 	}
+	return ParseCA(certData, keyData)
+}
 
+// ParseCA builds a CA from the PEM of its certificate and private key. The
+// key may come from an encrypted file that the caller has decrypted.
+func ParseCA(certData, keyData []byte) (*CertificateAuthority, error) {
 	certBlock, _ := pem.Decode(certData)
 	if certBlock == nil {
 		return nil, errors.New("invalid CA certificate PEM format")
