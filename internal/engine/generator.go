@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -272,12 +273,7 @@ func clientDrivers(cs *config.ClientSettings) []string {
 }
 
 func containsString(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }
 
 func writeBackup(sb *strings.Builder, b *config.BackupConfig) {
@@ -398,7 +394,7 @@ func writeExtraHCL(sb *strings.Builder, extra string) {
 		return
 	}
 	sb.WriteString("\n  # extra_hcl from the plan\n")
-	for _, line := range strings.Split(extra, "\n") {
+	for line := range strings.SplitSeq(extra, "\n") {
 		sb.WriteString("  " + line + "\n")
 	}
 }

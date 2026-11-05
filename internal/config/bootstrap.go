@@ -228,7 +228,3 @@ func (p *DeploymentPlan) PolicyRules(pol *ACLPolicyConfig) (string, error) {
 	data, err := os.ReadFile(p.ResolveLocalPath(pol.RulesFile))
 	return string(data), err
 }
-
-func isArchivePath(p string) bool {
-	return strings.HasSuffix(p, ".tar.gz") || strings.HasSuffix(p, ".tgz") || strings.HasSuffix(p, ".zip")
-}

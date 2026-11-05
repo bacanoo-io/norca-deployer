@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -48,13 +49,7 @@ func AppliesTo(roles, hosts []string, node *NodeConfig, isMaster bool) bool {
 		if isMaster {
 			role = RoleMaster
 		}
-		found := false
-		for _, r := range roles {
-			if r == role {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(roles, role)
 		if !found {
 			return false
 		}

@@ -46,7 +46,7 @@ type HTTPClient struct {
 func NewHTTPClient(baseURL, token, caPEM string, insecure bool) (*HTTPClient, error) {
 	c := &HTTPClient{BaseURL: strings.TrimRight(baseURL, "/"), Token: token, HTTP: &http.Client{}}
 	if caPEM != "" || insecure {
-		cfg := &tls.Config{InsecureSkipVerify: insecure}
+		cfg := &tls.Config{InsecureSkipVerify: insecure} //nolint:gosec // G402: --norca-insecure-skip-tls-verify is the user's explicit choice
 		if caPEM != "" {
 			pool := x509.NewCertPool()
 			if !pool.AppendCertsFromPEM([]byte(caPEM)) {

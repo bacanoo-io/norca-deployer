@@ -18,7 +18,7 @@ func PowerShellCommand(script string) string {
 	u := utf16.Encode([]rune(full))
 	b := make([]byte, len(u)*2)
 	for i, c := range u {
-		b[2*i] = byte(c)
+		b[2*i] = byte(c & 0xff) // UTF-16LE: low byte first
 		b[2*i+1] = byte(c >> 8)
 	}
 	return "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +

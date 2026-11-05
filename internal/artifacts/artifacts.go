@@ -205,13 +205,16 @@ func (r *Resolver) download(url, dest, want string) error {
 	}
 	h := sha256.New()
 	_, err = io.Copy(io.MultiWriter(f, h), resp.Body)
-	f.Close()
+	// A Close error of a written file is a file that is not complete.
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("download %s: %w", url, err)
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); want != "" && got != want {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return fmt.Errorf("download %s: sha256 %s does not match the expected %s", url, got, want)
 	}
 	return os.Rename(tmp, dest)
@@ -296,7 +299,7 @@ func extractBinary(archive, binName, dest string) error {
 				if err != nil {
 					return err
 				}
-				src, closer = rc, func() { rc.Close() }
+				src, closer = rc, func() { _ = rc.Close() }
 				break
 			}
 		}
@@ -330,7 +333,7 @@ func extractBinary(archive, binName, dest string) error {
 	}
 	defer closer()
 	tmp := dest + ".part"
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700)
+	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0700) //nolint:gosec // G302: a binary the deployer copies to the nodes must be executable
 	if err != nil {
 		return err
 	}
@@ -346,7 +349,7 @@ func extractBinary(archive, binName, dest string) error {
 		err = closeErr
 	}
 	if err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return os.Rename(tmp, dest)

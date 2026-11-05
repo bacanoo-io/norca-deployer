@@ -76,20 +76,21 @@ func (c *remoteCLI) run(args []string, body []byte) (string, error) {
 	if err := c.conn.CopyFile(bytes.NewReader([]byte(sb.String())), envFile, 0600); err != nil {
 		return "", err
 	}
-	cmd := "set -a; . " + connector.ShellQuote(envFile) + "; set +a; " +
-		connector.ShellQuote(c.paths.BinDir+"/norca")
+	var cmd strings.Builder
+	cmd.WriteString("set -a; . " + connector.ShellQuote(envFile) + "; set +a; " +
+		connector.ShellQuote(c.paths.BinDir+"/norca"))
 	for _, a := range args {
-		cmd += " " + connector.ShellQuote(a)
+		cmd.WriteString(" " + connector.ShellQuote(a))
 	}
 	cleanup := "rm -f " + connector.ShellQuote(envFile)
 	if body != nil {
 		if err := c.conn.CopyFile(bytes.NewReader(body), bodyFile, 0600); err != nil {
 			return "", err
 		}
-		cmd += " < " + connector.ShellQuote(bodyFile)
+		cmd.WriteString(" < " + connector.ShellQuote(bodyFile))
 		cleanup += " " + connector.ShellQuote(bodyFile)
 	}
-	return c.conn.ExecuteCommand(cmd + "; rc=$?; " + cleanup + "; exit $rc")
+	return c.conn.ExecuteCommand(cmd.String() + "; rc=$?; " + cleanup + "; exit $rc")
 }
 
 func (c *remoteCLI) runWindows(args []string, body []byte, env map[string]string) (string, error) {
@@ -148,7 +149,7 @@ func (c *remoteCLI) api(method, path string, body []byte) (int, string, error) {
 	}
 	status, _ := strconv.Atoi(m[1])
 	var bodyLines []string
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.HasPrefix(line, "> ") || strings.HasPrefix(line, "< ") || strings.HasPrefix(line, "* ") ||
 			line == ">" || line == "<" {
 			continue

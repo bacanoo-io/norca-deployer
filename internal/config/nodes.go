@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"regexp"
 	"strconv"
@@ -94,12 +95,8 @@ func mergeClientSettings(d, n *ClientSettings) *ClientSettings {
 	}
 	if len(d.Meta) > 0 {
 		meta := map[string]string{}
-		for k, v := range d.Meta {
-			meta[k] = v
-		}
-		for k, v := range n.Meta {
-			meta[k] = v
-		}
+		maps.Copy(meta, d.Meta)
+		maps.Copy(meta, n.Meta)
 		r.Meta = meta
 	}
 	return &r

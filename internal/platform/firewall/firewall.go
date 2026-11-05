@@ -194,7 +194,7 @@ func detectSSHPorts(conn connector.Connector) []int {
 		return nil
 	}
 	var ports []int
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(line)
 		if len(f) < 4 {
 			continue
@@ -265,14 +265,14 @@ func configureUFW(conn connector.Connector, s Spec, enable bool) (*Result, error
 
 	// Remove the deployer's rules the plan no longer asks for.
 	out, _ := conn.ExecuteCommand("ufw show added")
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		spec, comment, ok := splitUFWLine(line)
 		if !ok || !(strings.HasPrefix(comment, idPrefix) || strings.HasPrefix(comment, legacyPrefix)) || want[spec] {
 			continue
 		}
-		if strings.HasPrefix(spec, "route ") {
-			res.run(conn, "ufw route delete "+strings.TrimPrefix(spec, "route "))
+		if after, ok0 := strings.CutPrefix(spec, "route "); ok0 {
+			res.run(conn, "ufw route delete "+after)
 		} else {
 			res.run(conn, "ufw delete "+spec)
 		}
@@ -361,14 +361,14 @@ func configureFirewalld(conn connector.Connector, s Spec) (*Result, error) {
 
 	// Remove Norca ports and rich rules the plan no longer asks for.
 	out, _ := conn.ExecuteCommand("firewall-cmd --permanent --list-ports")
-	for _, p := range strings.Fields(out) {
+	for p := range strings.FieldsSeq(out) {
 		port, _, _ := strings.Cut(p, "/")
 		if managed[port] && !wantPorts[p] {
 			res.run(conn, "firewall-cmd --permanent --remove-port="+p)
 		}
 	}
 	out, _ = conn.ExecuteCommand("firewall-cmd --permanent --list-rich-rules")
-	for _, rich := range strings.Split(out, "\n") {
+	for rich := range strings.SplitSeq(out, "\n") {
 		rich = strings.TrimSpace(rich)
 		if rich == "" || wantRich[rich] {
 			continue
@@ -430,7 +430,7 @@ func configureIPTables(conn connector.Connector, s Spec) (*Result, error) {
 	// Remove tagged rules the plan no longer asks for, and legacy rules.
 	for _, chain := range []string{"INPUT", "FORWARD"} {
 		out, _ := conn.ExecuteCommand("iptables -S " + chain)
-		for _, line := range strings.Split(out, "\n") {
+		for line := range strings.SplitSeq(out, "\n") {
 			line = strings.TrimSpace(line)
 			i := strings.Index(line, "--comment ")
 			if !strings.HasPrefix(line, "-A ") || i < 0 {

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"golang.org/x/crypto/ssh"
@@ -24,7 +25,7 @@ var knownHostsMu sync.Mutex
 //     recorded in tofuFile; a changed key is always rejected.
 func HostKeyCallback(mode, knownHostsFile, tofuFile string) (ssh.HostKeyCallback, error) {
 	if mode == "off" {
-		return ssh.InsecureIgnoreHostKey(), nil
+		return ssh.InsecureIgnoreHostKey(), nil //nolint:gosec // G106: host_key_checking: off is the user's explicit choice
 	}
 
 	var files []string
@@ -87,10 +88,5 @@ func HostKeyCallback(mode, knownHostsFile, tofuFile string) (ssh.HostKeyCallback
 }
 
 func contains(list []string, s string) bool {
-	for _, v := range list {
-		if v == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(list, s)
 }

@@ -52,7 +52,7 @@ packs {
 		t.Fatal(err)
 	}
 	v := p.Packs.Deploy[0].Values
-	env, ok := v["extra_env"].(map[string]interface{})
+	env, ok := v["extra_env"].(map[string]any)
 	if v["count"] != 2 || !ok || env["LOG"] != "debug" {
 		t.Fatalf("values = %#v", v)
 	}

@@ -79,7 +79,7 @@ func (r *Runner) decommissionClient(cli *remoteCLI, d *config.DecommissionNode) 
 	r.uninstall(d)
 	if id != "" {
 		if status, out, err := cli.api("POST", "/v1/node/"+id+"/purge", nil); err != nil || status != 200 {
-			return fmt.Errorf("purge node %s: HTTP %d: %v %s", id, status, err, out)
+			return fmt.Errorf("purge node %s: HTTP %d: %w %s", id, status, err, out)
 		}
 		fmt.Printf("    [OK] %s purged from the cluster\n", d.Hostname)
 	} else {
@@ -92,7 +92,7 @@ func (r *Runner) decommissionClient(cli *remoteCLI, d *config.DecommissionNode) 
 func nodeID(cli *remoteCLI, name string) (string, error) {
 	status, out, err := cli.api("GET", "/v1/nodes", nil)
 	if err != nil || status != 200 {
-		return "", fmt.Errorf("list nodes: HTTP %d: %v %s", status, err, out)
+		return "", fmt.Errorf("list nodes: HTTP %d: %w %s", status, err, out)
 	}
 	var nodes []struct{ ID, Name string }
 	if err := json.Unmarshal([]byte(out), &nodes); err != nil {
@@ -115,7 +115,7 @@ func (r *Runner) drain(cli *remoteCLI, id string, d *config.DecommissionNode) er
 		"MarkEligible": false,
 	})
 	if status, out, err := cli.api("POST", "/v1/node/"+id+"/drain", body); err != nil || status != 200 {
-		return fmt.Errorf("drain: HTTP %d: %v %s", status, err, out)
+		return fmt.Errorf("drain: HTTP %d: %w %s", status, err, out)
 	}
 	fmt.Printf("    Draining %s (deadline %s)...\n", d.Hostname, deadline)
 
@@ -149,7 +149,7 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 	member := d.Hostname + "." + r.plan.Metadata.Region
 	status, out, err := cli.api("GET", "/v1/operator/raft/configuration", nil)
 	if err != nil || status != 200 {
-		return fmt.Errorf("raft configuration: HTTP %d: %v %s", status, err, out)
+		return fmt.Errorf("raft configuration: HTTP %d: %w %s", status, err, out)
 	}
 	var cfg struct {
 		Servers []struct{ ID, Node, Address string }
@@ -163,7 +163,7 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 			continue
 		}
 		if status, out, err := cli.api("DELETE", "/v1/operator/raft/peer?id="+url.QueryEscape(s.ID), nil); err != nil || status != 200 {
-			return fmt.Errorf("remove raft peer %s: HTTP %d: %v %s", s.ID, status, err, out)
+			return fmt.Errorf("remove raft peer %s: HTTP %d: %w %s", s.ID, status, err, out)
 		}
 		removed = true
 	}

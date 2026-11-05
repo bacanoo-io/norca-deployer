@@ -59,7 +59,7 @@ func TestAlwaysAndRoles(t *testing.T) {
 	node := &config.NodeConfig{Host: "10.0.0.1", Platform: "linux"}
 	conn := connector.NewFakeConnector()
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := Run(conn, plan, config.PhasePostInstall, node, true, nil); err != nil {
 			t.Fatal(err)
 		}

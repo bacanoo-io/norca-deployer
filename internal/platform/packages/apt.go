@@ -361,7 +361,7 @@ func copyDeb(conn connector.Connector, plan *config.DeploymentPlan, p *config.Ho
 			return "", "", err
 		}
 		err = conn.CopyFile(f, remote, 0644)
-		f.Close()
+		_ = f.Close() // read only
 		if err != nil {
 			return "", "", fmt.Errorf("package %q: upload failed: %w", p.Name, err)
 		}
@@ -373,7 +373,7 @@ func copyDeb(conn connector.Connector, plan *config.DeploymentPlan, p *config.Ho
 		return "", "", fmt.Errorf("package %q: %s is not a valid .deb: %w", p.Name, filepath.Base(local), err)
 	}
 	fields := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if k, v, ok := strings.Cut(line, ":"); ok {
 			fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
 		}
@@ -404,7 +404,7 @@ func RemoteSHA256(conn connector.Connector, p string) string {
 // ParseDpkgQuery parses "name version" lines.
 func ParseDpkgQuery(out string) map[string]string {
 	res := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) == 2 {
 			res[fields[0]] = fields[1]

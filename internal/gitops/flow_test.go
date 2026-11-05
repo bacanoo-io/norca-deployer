@@ -57,7 +57,6 @@ func tarball(t *testing.T, commit string, files map[string]string) []byte {
 type fakeNorca struct {
 	mu      sync.Mutex
 	calls   []string
-	tokens  []string
 	deploy  map[string]any
 	archive []byte
 	uploads []string
@@ -615,7 +614,7 @@ func TestDaemon_ProviderOfTheSignatureMustFitTheBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if resp.StatusCode != 401 {
+	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status %d", resp.StatusCode)
 	}
 }

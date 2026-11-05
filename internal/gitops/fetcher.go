@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -89,7 +90,7 @@ func FetchPackInMemory(ctx context.Context, opts *FetchOptions) (*FetchResult, e
 	files, commit, signer, err := fetchWithGoGit(ctx, opts, subpath)
 	if err != nil {
 		if archiveErr != nil {
-			return nil, fmt.Errorf("in-memory fetch failed for %s (%s): archive: %v; clone: %w", SanitizeURL(opts.URL), ref, archiveErr, err)
+			return nil, fmt.Errorf("in-memory fetch failed for %s (%s): archive: %w; clone: %w", SanitizeURL(opts.URL), ref, archiveErr, err)
 		}
 		return nil, fmt.Errorf("in-memory fetch failed for %s (%s): %w", SanitizeURL(opts.URL), ref, err)
 	}
@@ -134,10 +135,8 @@ func commitOf(opts *FetchOptions, fetched string) string {
 // refuses one that leaves it.
 func cleanSubpath(subpath string) (string, error) {
 	cleaned := path.Clean("/" + strings.ReplaceAll(subpath, `\`, "/"))
-	for _, part := range strings.Split(subpath, "/") {
-		if part == ".." {
-			return "", fmt.Errorf("subpath %q leaves the repository", subpath)
-		}
+	if slices.Contains(strings.Split(subpath, "/"), "..") {
+		return "", fmt.Errorf("subpath %q leaves the repository", subpath)
 	}
 	return strings.TrimPrefix(cleaned, "/"), nil
 }
@@ -200,7 +199,7 @@ func buildHTTPClient(tlsCfg *TLSConfig) *http.Client {
 
 	if tlsCfg != nil {
 		tConfig := &tls.Config{
-			InsecureSkipVerify: tlsCfg.InsecureSkipVerify,
+			InsecureSkipVerify: tlsCfg.InsecureSkipVerify, //nolint:gosec // G402: --insecure-skip-tls-verify is the user's explicit choice
 		}
 		if tlsCfg.CACertPEM != "" {
 			pool, _ := x509.SystemCertPool()
@@ -368,7 +367,7 @@ func extractTarGzStream(body io.Reader, subpath string) (map[string][]byte, stri
 
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -456,7 +455,7 @@ func knownHostsCallback(lines string) (gossh.HostKeyCallback, error) {
 	rest := []byte(lines)
 	for len(rest) > 0 {
 		_, hosts, key, _, next, err := gossh.ParseKnownHosts(rest)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -653,7 +652,7 @@ var packAttrRe = regexp.MustCompile(`^([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"`)
 // app block and nested blocks have attributes of the same name.
 func extractPackAttr(hcl, key string) string {
 	depth, inPack := 0, false
-	for _, line := range strings.Split(hcl, "\n") {
+	for line := range strings.SplitSeq(hcl, "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue

@@ -148,10 +148,10 @@ func ParseWebhookPayload(provider, eventType string, payload []byte) (*WebhookEv
 	}
 
 	// Determine branch or tag
-	if strings.HasPrefix(raw.Ref, "refs/heads/") {
-		event.Branch = strings.TrimPrefix(raw.Ref, "refs/heads/")
-	} else if strings.HasPrefix(raw.Ref, "refs/tags/") {
-		event.Tag = strings.TrimPrefix(raw.Ref, "refs/tags/")
+	if after, ok := strings.CutPrefix(raw.Ref, "refs/heads/"); ok {
+		event.Branch = after
+	} else if after, ok := strings.CutPrefix(raw.Ref, "refs/tags/"); ok {
+		event.Tag = after
 	}
 
 	// Commit SHA. A deleted ref has the zero commit.

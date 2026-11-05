@@ -45,7 +45,13 @@ linters:
     staticcheck:
       # The QF checks are quick-fix suggestions (fmt.Fprintf instead of
       # WriteString(Sprintf), De Morgan), not bugs.
-      checks: ["all", "-QF*", "-ST1000", "-ST1003", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+      # ST1005 wants lower case error strings; "Linux" and "Windows" are names.
+      checks: ["all", "-QF*", "-ST1000", "-ST1003", "-ST1005", "-ST1016", "-ST1020", "-ST1021", "-ST1022"]
+    modernize:
+      disable:
+        # omitzero changes what the YAML and JSON encoders write for the plan
+        # structs; the yaml.v3 tags do not know it.
+        - omitzero
     nolintlint:
       require-explanation: true
       require-specific: true

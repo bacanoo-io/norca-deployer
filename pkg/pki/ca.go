@@ -117,7 +117,7 @@ func LoadCA(certPath, keyPath string) (*CertificateAuthority, error) {
 		// Fallback to PKCS8
 		pkcs8Key, err2 := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
 		if err2 != nil {
-			return nil, fmt.Errorf("failed to parse private key: %v / %v", err, err2)
+			return nil, fmt.Errorf("failed to parse private key: %w / %w", err, err2)
 		}
 		var ok bool
 		privKey, ok = pkcs8Key.(*ecdsa.PrivateKey)

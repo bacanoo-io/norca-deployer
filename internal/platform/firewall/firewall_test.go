@@ -117,10 +117,10 @@ func TestDefaultDenyEnablesUFWWithSSH(t *testing.T) {
 	}
 	cmds := strings.Join(c.Commands, "\n")
 	ssh := strings.Index(cmds, "ufw allow 2200/tcp")
-	ssh22 := strings.Index(cmds, "ufw allow 22/tcp")
+	found := strings.Contains(cmds, "ufw allow 22/tcp")
 	deny := strings.Index(cmds, "ufw default deny incoming")
 	enable := strings.Index(cmds, "ufw --force enable")
-	if ssh < 0 || ssh22 < 0 || deny < ssh || enable < deny {
+	if ssh < 0 || !found || deny < ssh || enable < deny {
 		t.Fatalf("SSH must be allowed before deny and enable:\n%s", cmds)
 	}
 	for _, want := range []string{

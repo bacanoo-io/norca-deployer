@@ -2,10 +2,12 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -18,8 +20,8 @@ var gitOpsNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // expandLabelledBindings turns `binding "name" { ... }` blocks, which HCL
 // decodes as objects keyed by their label, into bindings with a name.
-func expandLabelledBindings(list []interface{}, at string) ([]interface{}, error) {
-	var res []interface{}
+func expandLabelledBindings(list []any, at string) ([]any, error) {
+	var res []any
 	for i, item := range list {
 		obj, err := single(item, fmt.Sprintf("%s[%d]", at, i))
 		if err != nil {
@@ -39,15 +41,13 @@ func expandLabelledBindings(list []interface{}, at string) ([]interface{}, error
 		}
 		sort.Strings(labels)
 		for _, label := range labels {
-			blocks, ok := obj[label].([]map[string]interface{})
+			blocks, ok := obj[label].([]map[string]any)
 			if !ok {
 				return nil, fmt.Errorf("%s[%d]: unknown key %q", at, i, label)
 			}
 			for _, block := range blocks {
-				named := map[string]interface{}{"name": label}
-				for k, v := range block {
-					named[k] = v
-				}
+				named := map[string]any{"name": label}
+				maps.Copy(named, block)
 				res = append(res, named)
 			}
 		}
@@ -112,10 +112,8 @@ func validateBinding(b *GitOpsBinding, seen map[string]bool) error {
 	if repo.URL == "" {
 		return fmt.Errorf("gitops binding %s: the url of the %s block is required", b.Name, b.EffectiveProvider())
 	}
-	for _, part := range strings.Split(repo.Subpath, "/") {
-		if part == ".." {
-			return fmt.Errorf("gitops binding %s: subpath %q leaves the repository", b.Name, repo.Subpath)
-		}
+	if slices.Contains(strings.Split(repo.Subpath, "/"), "..") {
+		return fmt.Errorf("gitops binding %s: subpath %q leaves the repository", b.Name, repo.Subpath)
 	}
 
 	if b.Verify.Active() && len(b.Verify.PublicKeys) == 0 {
@@ -230,20 +228,20 @@ func (p *DeploymentPlan) ResolvedGitOpsBindings(resolve func(string) (string, er
 		if err != nil {
 			return nil, fmt.Errorf("gitops binding %s values: %w", b.Name, err)
 		}
-		b.Values, _ = values.(map[string]interface{})
+		b.Values, _ = values.(map[string]any)
 	}
 	return bindings, nil
 }
 
-func resolveTree(v interface{}, resolve func(string) (string, error)) (interface{}, error) {
+func resolveTree(v any, resolve func(string) (string, error)) (any, error) {
 	switch t := v.(type) {
 	case string:
 		return resolve(t)
-	case map[string]interface{}:
+	case map[string]any:
 		if t == nil {
 			return t, nil
 		}
-		res := make(map[string]interface{}, len(t))
+		res := make(map[string]any, len(t))
 		for k, e := range t {
 			x, err := resolveTree(e, resolve)
 			if err != nil {
@@ -252,8 +250,8 @@ func resolveTree(v interface{}, resolve func(string) (string, error)) (interface
 			res[k] = x
 		}
 		return res, nil
-	case []interface{}:
-		res := make([]interface{}, len(t))
+	case []any:
+		res := make([]any, len(t))
 		for i, e := range t {
 			x, err := resolveTree(e, resolve)
 			if err != nil {
@@ -266,4 +264,4 @@ func resolveTree(v interface{}, resolve func(string) (string, error)) (interface
 	return v, nil
 }
 
-var reflectBinding = reflect.TypeOf(GitOpsBinding{})
+var reflectBinding = reflect.TypeFor[GitOpsBinding]()

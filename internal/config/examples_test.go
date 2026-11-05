@@ -42,7 +42,7 @@ func TestExamplesSingleFormat(t *testing.T) {
 func diffFields(a, b *DeploymentPlan) []string {
 	va, vb := reflect.ValueOf(a).Elem(), reflect.ValueOf(b).Elem()
 	var res []string
-	for i := 0; i < va.NumField(); i++ {
+	for i := range va.NumField() {
 		if !va.Type().Field(i).IsExported() {
 			continue
 		}

@@ -187,7 +187,7 @@ func (r *Runner) targets(nodes []config.NodeConfig, isMaster bool) []*target {
 func closeAll(ts []*target) {
 	for _, t := range ts {
 		if t.conn != nil {
-			t.conn.Close()
+			_ = t.conn.Close()
 		}
 	}
 }
@@ -283,12 +283,10 @@ func (r *Runner) prepareNode(t *target) error {
 		}{paths.CNIConfigDir, 0755})
 		if paths.AppsDir != "" && node.ClientSettings != nil && node.ClientSettings.NativeAppVolumes != nil &&
 			node.ClientSettings.NativeAppVolumes.EnableDefaults {
-			for _, d := range []struct {
+			dirs = append(dirs, []struct {
 				path string
 				mode os.FileMode
-			}{{paths.AppsBinDir, 0755}, {paths.AppsWorkDir, 0770}, {paths.AppsConfigDir, 0750}, {paths.AppsDataDir, 0750}} {
-				dirs = append(dirs, d)
-			}
+			}{{paths.AppsBinDir, 0755}, {paths.AppsWorkDir, 0770}, {paths.AppsConfigDir, 0750}, {paths.AppsDataDir, 0750}}...)
 		}
 	}
 	for _, d := range dirs {
@@ -427,10 +425,7 @@ func (r *Runner) restartClients(clients []*target) error {
 
 	batch := r.plan.Upgrade.MaxParallelClients
 	for start := 0; start < len(ready); start += batch {
-		end := start + batch
-		if end > len(ready) {
-			end = len(ready)
-		}
+		end := min(start+batch, len(ready))
 		group := ready[start:end]
 		var wg sync.WaitGroup
 		for _, t := range group {
@@ -457,7 +452,7 @@ func (r *Runner) restartClients(clients []*target) error {
 		for _, t := range group {
 			if t.err != nil {
 				// Stop the rollout: a failing batch may mean a bad release.
-				return fmt.Errorf("%v (rolling restart stopped)", collect(clients))
+				return fmt.Errorf("%w (rolling restart stopped)", collect(clients))
 			}
 		}
 	}
@@ -553,7 +548,7 @@ func (r *Runner) installCNI(t *target) error {
 		return err
 	}
 	err = t.conn.CopyFile(f, remote, 0600)
-	f.Close()
+	_ = f.Close() // read only
 	if err != nil {
 		return err
 	}

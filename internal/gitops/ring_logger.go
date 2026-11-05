@@ -21,7 +21,7 @@ type RingLogger struct {
 	entries  []LogEntry
 	cursor   int
 	count    int
-	seq      uint64
+	seq      atomic.Uint64
 }
 
 // NewRingLogger creates a new RingLogger with the specified maximum capacity.
@@ -41,7 +41,7 @@ func (r *RingLogger) Log(entry LogEntry) {
 		entry.Timestamp = time.Now().UTC()
 	}
 	if entry.ID == "" {
-		id := atomic.AddUint64(&r.seq, 1)
+		id := r.seq.Add(1)
 		entry.ID = fmt.Sprintf("log-%d", id)
 	}
 
@@ -74,7 +74,7 @@ func (r *RingLogger) Tail(n int, bindingFilter string) []LogEntry {
 	var all []LogEntry
 	// Reconstruct chronological order
 	start := (r.cursor - r.count + r.capacity) % r.capacity
-	for i := 0; i < r.count; i++ {
+	for i := range r.count {
 		idx := (start + i) % r.capacity
 		e := r.entries[idx]
 		if bindingFilter == "" || e.BindingName == bindingFilter {

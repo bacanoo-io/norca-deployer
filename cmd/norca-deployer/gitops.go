@@ -51,7 +51,7 @@ func (f *clusterFlags) client() (*gitops.HTTPClient, error) {
 	}
 	caPEM := ""
 	if caFile != "" {
-		data, err := os.ReadFile(caFile)
+		data, err := os.ReadFile(caFile) //nolint:gosec // G703: the CA file is named by the user (flag or NORCA_CACERT)
 		if err != nil {
 			return nil, err
 		}

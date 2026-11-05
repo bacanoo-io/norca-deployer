@@ -40,7 +40,7 @@ func (c *fakeCluster) conn(host string) *connector.FakeConnector {
 			return "< HTTP/1.1 200 OK\n\"10.0.0.1:4647\"", nil, true
 		case strings.Contains(cmd, "/v1/status/peers"):
 			var peers []string
-			for i := 0; i < c.peers; i++ {
+			for i := range c.peers {
 				peers = append(peers, fmt.Sprintf("\"10.0.0.%d:4647\"", i+1))
 			}
 			return "< HTTP/1.1 200 OK\n[" + strings.Join(peers, ",") + "]", nil, true
@@ -57,10 +57,10 @@ func testRunner(t *testing.T, masters, clients int) (*Runner, []*target, []*targ
 	t.Cleanup(func() { healthPollInterval = old })
 
 	plan := &config.DeploymentPlan{}
-	for i := 0; i < masters; i++ {
+	for i := range masters {
 		plan.Inventory.Masters = append(plan.Inventory.Masters, config.NodeConfig{Host: fmt.Sprintf("10.0.0.%d", i+1)})
 	}
-	for i := 0; i < clients; i++ {
+	for i := range clients {
 		plan.Inventory.Clients = append(plan.Inventory.Clients, config.NodeConfig{Host: fmt.Sprintf("10.0.1.%d", i+1)})
 	}
 	plan.SetDefaults()

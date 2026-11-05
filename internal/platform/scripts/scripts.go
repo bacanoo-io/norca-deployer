@@ -158,7 +158,7 @@ func Run(conn connector.Connector, plan *config.DeploymentPlan, phase string, no
 			return fmt.Errorf("script %q failed: %w", s.Name, runErr)
 		}
 		if trimmed := strings.TrimSpace(out); trimmed != "" {
-			for _, line := range strings.Split(trimmed, "\n") {
+			for line := range strings.SplitSeq(trimmed, "\n") {
 				fmt.Printf("       | %s\n", line)
 			}
 		}

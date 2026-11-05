@@ -56,7 +56,7 @@ func (r *Runner) initPKI() error {
 		if err := os.MkdirAll(certsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create %s: %w", certsDir, err)
 		}
-		if err := os.WriteFile(caCert, ca.CertPEM, 0644); err != nil {
+		if err := os.WriteFile(caCert, ca.CertPEM, 0644); err != nil { //nolint:gosec // G306: a certificate is public
 			return fmt.Errorf("failed to save CA certificate: %w", err)
 		}
 		if err := os.WriteFile(caKey, ca.KeyPEM, 0600); err != nil {
@@ -122,7 +122,7 @@ func (r *Runner) issueLocalClientCert(dir, name, spiffeName string) error {
 	if err := os.WriteFile(filepath.Join(dir, name+"-key.pem"), bundle.KeyPEM, 0600); err != nil {
 		return err
 	}
-	if err := os.WriteFile(certPath, bundle.CertPEM, 0644); err != nil {
+	if err := os.WriteFile(certPath, bundle.CertPEM, 0644); err != nil { //nolint:gosec // G306: a certificate is public
 		return err
 	}
 	fmt.Printf("    Client certificate generated (%s)\n", certPath)

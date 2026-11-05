@@ -476,11 +476,11 @@ type PackRegistryConfig struct {
 type PackDeployItem struct {
 	Name string `yaml:"name" json:"name"`
 	// Registry of the pack; may be empty when the plan has one registry.
-	Registry string                 `yaml:"registry,omitempty" json:"registry,omitempty"`
-	Pack     string                 `yaml:"pack" json:"pack"`
-	Version  string                 `yaml:"version,omitempty" json:"version,omitempty"`
-	Enabled  bool                   `yaml:"enabled" json:"enabled"`
-	Values   map[string]interface{} `yaml:"values,omitempty" json:"values,omitempty"`
+	Registry string         `yaml:"registry,omitempty" json:"registry,omitempty"`
+	Pack     string         `yaml:"pack" json:"pack"`
+	Version  string         `yaml:"version,omitempty" json:"version,omitempty"`
+	Enabled  bool           `yaml:"enabled" json:"enabled"`
+	Values   map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
 }
 
 // GitOpsConfig defines continuous GitOps reconcilers and bindings.
@@ -505,13 +505,13 @@ func (g *GitOpsConfig) AllBindings() []GitOpsBinding {
 
 // GitOpsBinding maps a Git repository source to a Norca pack release deployment.
 type GitOpsBinding struct {
-	Name        string                 `yaml:"name" json:"name"`
-	ReleaseName string                 `yaml:"release_name" json:"release_name"`
-	Namespace   string                 `yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	Region      string                 `yaml:"region,omitempty" json:"region,omitempty"`
-	Atomic      bool                   `yaml:"atomic,omitempty" json:"atomic,omitempty"`
-	MaxHistory  int                    `yaml:"max_history,omitempty" json:"max_history,omitempty"`
-	Values      map[string]interface{} `yaml:"values,omitempty" json:"values,omitempty"`
+	Name        string         `yaml:"name" json:"name"`
+	ReleaseName string         `yaml:"release_name" json:"release_name"`
+	Namespace   string         `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	Region      string         `yaml:"region,omitempty" json:"region,omitempty"`
+	Atomic      bool           `yaml:"atomic,omitempty" json:"atomic,omitempty"`
+	MaxHistory  int            `yaml:"max_history,omitempty" json:"max_history,omitempty"`
+	Values      map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
 
 	// Provider settings
 	Provider string        `yaml:"provider,omitempty" json:"provider,omitempty"` // forgejo (default), gitea, github, gitlab

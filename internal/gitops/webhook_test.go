@@ -4,6 +4,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -18,7 +19,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 	hexSig := hex.EncodeToString(mac.Sum(nil))
 
 	// 1. Forgejo
-	req := httptest.NewRequest("POST", "/webhook", nil)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Forgejo-Signature", hexSig)
 	prov, err := VerifyWebhookSignature(req, payload, secret)
 	if err != nil || prov != "forgejo" {
@@ -26,7 +27,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 	}
 
 	// 2. Gitea
-	req = httptest.NewRequest("POST", "/webhook", nil)
+	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Gitea-Signature", hexSig)
 	prov, err = VerifyWebhookSignature(req, payload, secret)
 	if err != nil || prov != "gitea" {
@@ -34,7 +35,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 	}
 
 	// 3. GitHub
-	req = httptest.NewRequest("POST", "/webhook", nil)
+	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Hub-Signature-256", "sha256="+hexSig)
 	prov, err = VerifyWebhookSignature(req, payload, secret)
 	if err != nil || prov != "github" {
@@ -42,7 +43,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 	}
 
 	// 4. GitLab
-	req = httptest.NewRequest("POST", "/webhook", nil)
+	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Gitlab-Token", secret)
 	prov, err = VerifyWebhookSignature(req, payload, secret)
 	if err != nil || prov != "gitlab" {
@@ -50,7 +51,7 @@ func TestVerifyWebhookSignature(t *testing.T) {
 	}
 
 	// 5. Invalid Signature
-	req = httptest.NewRequest("POST", "/webhook", nil)
+	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Forgejo-Signature", "invalid-sig")
 	_, err = VerifyWebhookSignature(req, payload, secret)
 	if err == nil {

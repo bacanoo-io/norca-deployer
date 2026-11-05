@@ -137,8 +137,7 @@ func (d *Daemon) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	payload, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBytes))
 	if err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 			http.Error(w, "Payload too large", http.StatusRequestEntityTooLarge)
 			return
 		}
@@ -243,7 +242,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	status := make([]map[string]interface{}, 0, len(d.bindings))
+	status := make([]map[string]any, 0, len(d.bindings))
 	for _, b := range d.bindings {
 		repo := b.EffectiveRepo()
 		recent := d.logger.Tail(1, b.Name)
@@ -256,7 +255,7 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 			lastCommit = recent[0].CommitSHA
 		}
 
-		status = append(status, map[string]interface{}{
+		status = append(status, map[string]any{
 			"name":         b.Name,
 			"release_name": b.ReleaseName,
 			"provider":     b.EffectiveProvider(),

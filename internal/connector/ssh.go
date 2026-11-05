@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -112,7 +113,7 @@ func NewSSHConnector(opts SSHOptions) (*SSHConnector, error) {
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		client.Close()
+		_ = client.Close()
 		return nil, fmt.Errorf("failed to initialize SFTP subsystem (%s): %w", addr, err)
 	}
 
@@ -274,7 +275,8 @@ func (s *SSHConnector) FileExists(path string) (bool, error) {
 		if err == nil {
 			return true, nil
 		}
-		if _, ok := err.(*ssh.ExitError); ok {
+		exitError := &ssh.ExitError{}
+		if errors.As(err, &exitError) {
 			return false, nil
 		}
 		return false, err

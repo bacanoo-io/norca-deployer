@@ -255,7 +255,7 @@ func TestGitOpsResolvedBindings(t *testing.T) {
 	if b.Values["password"] != "plain-value" {
 		t.Fatalf("values %v", b.Values)
 	}
-	nested := b.Values["nested"].(map[string]interface{})["list"].([]interface{})
+	nested := b.Values["nested"].(map[string]any)["list"].([]any)
 	if nested[0] != "plain-item" || nested[1] != 5 {
 		t.Fatalf("nested %v", nested)
 	}
