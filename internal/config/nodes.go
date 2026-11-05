@@ -56,6 +56,10 @@ func (p *DeploymentPlan) applyClientDefaults() {
 	}
 }
 
+// MergeClientSettings returns n with the defaults d where n has none, as
+// client_defaults are merged into the settings of a node.
+func MergeClientSettings(d, n *ClientSettings) *ClientSettings { return mergeClientSettings(d, n) }
+
 func mergeClientSettings(d, n *ClientSettings) *ClientSettings {
 	r := *n
 	str := func(dst *string, def string) {

@@ -228,3 +228,26 @@ func (p *DeploymentPlan) PolicyRules(pol *ACLPolicyConfig) (string, error) {
 	data, err := os.ReadFile(p.ResolveLocalPath(pol.RulesFile))
 	return string(data), err
 }
+
+var nodeScalingValidityRe = regexp.MustCompile(`^[1-9][0-9]*(d|h)$`)
+
+// validateNodeScaling checks the node_scaling block.
+func (p *DeploymentPlan) validateNodeScaling() error {
+	ns := p.NodeScaling
+	if ns == nil || !ns.Enabled {
+		return nil
+	}
+	if !p.Security.TLSEnabled {
+		return fmt.Errorf("node_scaling: needs security.tls_enabled: a scaled node joins with a certificate of the node CA")
+	}
+	if p.Metadata.Region == "" {
+		return fmt.Errorf("node_scaling: needs metadata.region")
+	}
+	if ns.Validity != "" && !nodeScalingValidityRe.MatchString(ns.Validity) {
+		return fmt.Errorf("node_scaling.validity: %q must be days (60d) or hours (720h)", ns.Validity)
+	}
+	if ns.Namespace != "" && !releaseNameRe.MatchString(ns.Namespace) {
+		return fmt.Errorf("node_scaling.namespace: %q is not a namespace name", ns.Namespace)
+	}
+	return nil
+}

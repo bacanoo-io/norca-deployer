@@ -731,6 +731,9 @@ func (r *Runner) postClusterTasks(first *target) error {
 	if err := r.bootstrapSecrets(first, token); err != nil {
 		return err
 	}
+	if err := r.publishNodeScaling(first, token); err != nil {
+		return err
+	}
 	if err := r.deployPacks(first, token); err != nil {
 		return err
 	}

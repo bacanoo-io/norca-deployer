@@ -29,7 +29,11 @@ type DeploymentPlan struct {
 	// NodePools describes node pools (created after the cluster is up; a
 	// pool named by a node is also created when the node registers).
 	NodePools []NodePoolConfig `yaml:"node_pools,omitempty" json:"node_pools,omitempty"`
-	Inventory InventoryConfig  `yaml:"inventory" json:"inventory"`
+	// NodeScaling publishes what the node scaling operator needs to create
+	// nodes by itself: the bootstrap template of the region and the
+	// firewall ranges.
+	NodeScaling *NodeScalingConfig `yaml:"node_scaling,omitempty" json:"node_scaling,omitempty"`
+	Inventory   InventoryConfig    `yaml:"inventory" json:"inventory"`
 
 	// baseDir is the directory of the loaded configuration file; relative
 	// script paths are resolved against it.
@@ -757,4 +761,27 @@ type HostVolumeConfig struct {
 	ReadOnly bool   `yaml:"read_only" json:"read_only"`
 	Owner    string `yaml:"owner,omitempty" json:"owner,omitempty"`
 	Mode     string `yaml:"mode,omitempty" json:"mode,omitempty"`
+}
+
+// NodeScalingConfig is the node_scaling block: the deployer writes, after
+// apply, the Variables the node scaling operator (norca-nodescaler) reads:
+// nodescaler/bootstrap/<region> (the cluster CA, the node CA of the region
+// and its key, the agent configuration template of a scaled node) and
+// nodescaler/network/<region> (the firewall ranges). The node CA is issued
+// with `pki issue-node-ca`.
+type NodeScalingConfig struct {
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
+	// Namespace of the Variables (default "default"). The bootstrap Variable
+	// holds the key of the node CA: only the operator may read it.
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+
+	// Validity of a node certificate, in days ("60d", the default) or
+	// hours ("720h").
+	Validity string `yaml:"validity,omitempty" json:"validity,omitempty"`
+
+	// Client are the client settings of a scaled node (drivers, raw_exec,
+	// extra_hcl, reserved resources, host networks), over client_defaults.
+	// The node pool, class and meta come from the node group.
+	Client *ClientSettings `yaml:"client,omitempty" json:"client,omitempty"`
 }

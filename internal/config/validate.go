@@ -184,6 +184,9 @@ func (p *DeploymentPlan) validateCluster() error {
 	if err := p.validatePacks(); err != nil {
 		return err
 	}
+	if err := p.validateNodeScaling(); err != nil {
+		return err
+	}
 	if err := p.validateSecrets(); err != nil {
 		return err
 	}
