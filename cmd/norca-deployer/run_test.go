@@ -84,9 +84,28 @@ func TestPlanPrintsToStdout(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
+	// Set by the linker (make build): it wins over the build information.
+	old := version
+	t.Cleanup(func() { version = old })
+	version = "v9.9.9-test"
+
 	code, stdout, _ := execute(t, "version")
-	if code != exitOK || !strings.Contains(stdout, "Norca Deployer "+version) {
+	if code != exitOK || !strings.Contains(stdout, "Norca Deployer v9.9.9-test ") {
 		t.Fatalf("code=%d stdout=%q", code, stdout)
+	}
+	if code, _, stderr := execute(t, "version", "extra"); code != exitUsage {
+		t.Fatalf("version with an argument: code=%d stderr=%q", code, stderr)
+	}
+}
+
+// Without -ldflags the version is never empty: it comes from the build
+// information of the binary.
+func TestBuildVersionWithoutTheLinker(t *testing.T) {
+	old := version
+	t.Cleanup(func() { version = old })
+	version = ""
+	if v := buildVersion(); v == "" {
+		t.Fatal("empty version")
 	}
 }
 

@@ -10,7 +10,6 @@ var (
 	secretKeyFile string
 	force         bool
 	forceRestart  bool
-	version       = "v1.6.0"
 )
 
 // newRootCmd builds the command tree. It does not run anything, so a test can
