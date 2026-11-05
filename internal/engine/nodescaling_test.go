@@ -9,7 +9,7 @@ import (
 	"testing"
 	"text/template"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 	"github.com/hashicorp/hcl"
 )
 

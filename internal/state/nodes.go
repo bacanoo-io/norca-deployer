@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // InstalledNode is a node that an apply installed. The node definition is

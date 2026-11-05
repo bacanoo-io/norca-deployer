@@ -103,6 +103,23 @@ Plans can be written in YAML or HCL; both formats use the same keys, and the YAM
 
 On the nodes the deployer keeps its markers under `/var/lib/norca-deployer/`.
 
+## The plan as a library
+
+The model of a deployment plan is the public package
+[`pkg/plan`](pkg/plan): its types, loading from a file or from memory (YAML,
+HCL, JSON), the defaults and the validation. Other programs (an operator, a
+user interface, another tool) embed it to read, check and write plans
+without the deployer; it makes no connection and has no state.
+
+```go
+import "github.com/bacanoo-io/norca-deployer/pkg/plan"
+
+p, err := plan.Parse(data, plan.FormatYAML, "")
+```
+
+The rest of the deployer (the installation over SSH, the state, the
+commands) stays internal.
+
 ## Testing
 
 ```sh

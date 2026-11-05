@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // decommission takes the nodes of inventory.decommission out of the cluster

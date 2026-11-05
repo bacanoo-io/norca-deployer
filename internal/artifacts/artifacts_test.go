@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func tarGz(t *testing.T, name string, content []byte) []byte {

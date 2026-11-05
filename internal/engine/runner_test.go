@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // fakeCluster answers the commands of the rolling restart for several nodes

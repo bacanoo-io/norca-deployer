@@ -22,10 +22,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func connect(t *testing.T, knownHosts string) *connector.SSHConnector {

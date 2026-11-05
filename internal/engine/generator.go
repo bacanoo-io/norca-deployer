@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/discovery"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // GenOptions carries values the generator cannot derive from the plan.

@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // File is a local file ready to copy to a node.

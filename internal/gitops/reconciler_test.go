@@ -3,7 +3,7 @@ package gitops
 import (
 	"testing"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func TestReconcilerRegisterAndLock(t *testing.T) {

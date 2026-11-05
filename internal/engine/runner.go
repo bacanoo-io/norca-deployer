@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
@@ -20,6 +19,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/tuning"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 	"github.com/bacanoo-io/norca-pki"
 )
 

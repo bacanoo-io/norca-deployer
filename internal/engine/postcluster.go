@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/gitops"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // resolveValue resolves a value of a secret item or a pack value: an

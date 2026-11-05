@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 const testKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nxyz\n-----END PGP PUBLIC KEY BLOCK-----\n"

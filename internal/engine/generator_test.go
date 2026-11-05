@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func TestGenerateBackupBlock(t *testing.T) {

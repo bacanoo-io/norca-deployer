@@ -1,4 +1,4 @@
-package config
+package plan
 
 import (
 	"os"

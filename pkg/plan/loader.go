@@ -1,4 +1,4 @@
-package config
+package plan
 
 import (
 	"fmt"
@@ -9,41 +9,74 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Format is the syntax of a plan.
+type Format string
+
+// The formats of a plan. They use the same keys; JSON is read as YAML.
+const (
+	FormatYAML Format = "yaml"
+	FormatHCL  Format = "hcl"
+	FormatJSON Format = "json"
+)
+
+// FormatOf returns the format of a plan file by its extension: .hcl is HCL,
+// .json is JSON, anything else YAML.
+func FormatOf(path string) Format {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".hcl":
+		return FormatHCL
+	case ".json":
+		return FormatJSON
+	}
+	return FormatYAML
+}
+
 // LoadFromFile reads and validates a deployment plan configuration file:
-// YAML (.yaml, .yml) or HCL (.hcl). Both formats use the same keys.
+// YAML (.yaml, .yml), HCL (.hcl) or JSON (.json). The formats use the same
+// keys. Relative paths of the plan (scripts, key files) are resolved against
+// the directory of the file.
 func LoadFromFile(path string) (*DeploymentPlan, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read configuration file (%s): %w", path, err)
 	}
+	return Parse(data, FormatOf(path), filepath.Dir(path))
+}
 
+// Parse reads a plan from memory, applies the defaults and validates it:
+// the way to embed the model in another program, which may hold the plan in
+// a database, a request or a form instead of a file. baseDir is the
+// directory relative paths of the plan are resolved against ("" for the
+// working directory).
+func Parse(data []byte, format Format, baseDir string) (*DeploymentPlan, error) {
 	plan := &DeploymentPlan{}
-	ext := strings.ToLower(filepath.Ext(path))
-
-	switch ext {
-	case ".yaml", ".yml":
-		if err := yaml.Unmarshal(data, plan); err != nil {
-			return nil, fmt.Errorf("invalid YAML syntax: %w", err)
-		}
-	case ".hcl":
+	switch format {
+	case FormatHCL:
 		if err := decodeHCL(data, plan); err != nil {
 			return nil, fmt.Errorf("invalid HCL syntax: %w", err)
 		}
-	default:
-		// Default fallback to YAML parser
+	case FormatYAML, FormatJSON, "":
 		if err := yaml.Unmarshal(data, plan); err != nil {
-			return nil, fmt.Errorf("unsupported format or syntax error (%s): %w", ext, err)
+			return nil, fmt.Errorf("invalid %s syntax: %w", strings.ToUpper(string(orYAML(format))), err)
 		}
+	default:
+		return nil, fmt.Errorf("unknown plan format %q (yaml, hcl or json)", format)
 	}
 
-	plan.baseDir = filepath.Dir(path)
+	plan.baseDir = baseDir
 	plan.SetDefaults()
 
 	if err := plan.Validate(); err != nil {
 		return nil, fmt.Errorf("configuration validation error: %w", err)
 	}
-
 	return plan, nil
+}
+
+func orYAML(f Format) Format {
+	if f == "" {
+		return FormatYAML
+	}
+	return f
 }
 
 // SaveToFile serializes the plan to YAML and writes it to disk. The file is

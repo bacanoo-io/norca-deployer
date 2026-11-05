@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func TestResolveAdvertiseAddress(t *testing.T) {

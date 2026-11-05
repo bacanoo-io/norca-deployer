@@ -24,7 +24,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 const packMeta = "app {\n  url = \"https://example.com\"\n  name = \"wrong\"\n}\n\npack {\n  name        = \"demo\"\n  description = \"d\"\n  version     = \"0.1.0\"\n\n  requires {\n    name = \"nested\"\n  }\n}\n"

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 func TestInstalledRoundTripEncrypted(t *testing.T) {

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/firewall"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // configureFirewall opens the ports the node needs, from the sources of

@@ -10,8 +10,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 const (

@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // remoteCLI runs the norca CLI on a node against its local agent, with the

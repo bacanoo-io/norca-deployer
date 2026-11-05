@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/engine"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // newPlanCmd builds the `plan` command.

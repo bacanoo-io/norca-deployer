@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // The list of installed nodes (.norca-deployer/nodes-<region>.json) is what

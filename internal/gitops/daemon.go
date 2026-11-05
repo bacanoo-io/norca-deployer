@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // maxWebhookBytes is the largest payload of the providers.

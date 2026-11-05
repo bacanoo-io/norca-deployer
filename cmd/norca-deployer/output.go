@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/engine"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // The output formats of the commands that report on a plan. Text is for people;

@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // Store is the state directory of one deployment plan.

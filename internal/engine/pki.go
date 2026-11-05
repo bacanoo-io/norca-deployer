@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 	"github.com/bacanoo-io/norca-pki"
 )
 

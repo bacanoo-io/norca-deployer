@@ -16,9 +16,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bacanoo-io/norca-deployer/internal/config"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/gitops"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // clusterFlags are the flags that reach a Norca cluster. The environment
