@@ -4,9 +4,9 @@
 # can schedule jobs on itself. Good for development, demos and small edge
 # sites. Run it with:
 #
-#   norca-deployer validate -c examples/single-node.yaml
-#   norca-deployer plan     -c examples/single-node.yaml
-#   norca-deployer apply    -c examples/single-node.yaml
+#   norca-deployer validate -c examples/nodes/single-node.yaml
+#   norca-deployer plan     -c examples/nodes/single-node.yaml
+#   norca-deployer apply    -c examples/nodes/single-node.yaml
 #
 # Relative paths in this file (keys, scripts, .deb files) are resolved
 # against the directory of this file. The deployer keeps its local state

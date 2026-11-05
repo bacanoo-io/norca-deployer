@@ -1,6 +1,6 @@
 module github.com/bacanoo-io/norca-deployer
 
-go 1.26.0
+go 1.26.10
 
 require (
 	github.com/ProtonMail/go-crypto v1.5.2
@@ -25,7 +25,7 @@ require (
 	github.com/pjbgf/sha1cd v0.7.0 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 )

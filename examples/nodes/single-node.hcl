@@ -4,7 +4,7 @@
 # (metadata { ... }), and list entries of objects are repeated blocks
 # (one "masters" block per server, one "install" block per package).
 #
-#   norca-deployer apply -c examples/single-node.hcl
+#   norca-deployer apply -c examples/nodes/single-node.hcl
 
 version = "norca.io/v1alpha1"          # Plan format version (default; may be omitted).
 kind    = "DeploymentPlan"             # Document kind (default; may be omitted).

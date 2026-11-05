@@ -5,7 +5,7 @@
 # objects is a repeated block (one "masters" block per server, one "install"
 # block per package). Windows paths need doubled backslashes in HCL strings.
 #
-#   norca-deployer apply -c examples/cluster.hcl
+#   norca-deployer apply -c examples/nodes/cluster.hcl
 
 version = "norca.io/v1alpha1"
 kind    = "DeploymentPlan"

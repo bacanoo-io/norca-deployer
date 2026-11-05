@@ -5,9 +5,9 @@
 #   - 1 Windows client for native .exe workloads (raw_exec)
 #   - mTLS, gossip encryption, ACLs, packs and backups
 #
-#   norca-deployer validate -c examples/cluster.yaml
-#   norca-deployer plan     -c examples/cluster.yaml
-#   norca-deployer apply    -c examples/cluster.yaml
+#   norca-deployer validate -c examples/nodes/cluster.yaml
+#   norca-deployer plan     -c examples/nodes/cluster.yaml
+#   norca-deployer apply    -c examples/nodes/cluster.yaml
 #
 # Re-running apply is safe: only nodes whose binary, certificate, configuration
 # or service unit changed are restarted, servers one at a time.

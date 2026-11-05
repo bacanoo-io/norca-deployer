@@ -11,7 +11,7 @@ import (
 func TestExamples(t *testing.T) {
 	for _, name := range []string{"single-node", "cluster"} {
 		t.Run(name, func(t *testing.T) {
-			dir := filepath.Join("..", "..", "examples")
+			dir := filepath.Join("..", "..", "examples", "nodes")
 			fromYAML, err := LoadFromFile(filepath.Join(dir, name+".yaml"))
 			if err != nil {
 				t.Fatalf("yaml: %v", err)
@@ -32,7 +32,7 @@ func TestExamples(t *testing.T) {
 // Examples that exist in one format only.
 func TestExamplesSingleFormat(t *testing.T) {
 	for _, name := range []string{"local-dev.yaml", "add-node.yaml", "decommission-node.yaml", "multi-datacenter.yaml"} {
-		if _, err := LoadFromFile(filepath.Join("..", "..", "examples", name)); err != nil {
+		if _, err := LoadFromFile(filepath.Join("..", "..", "examples", "nodes", name)); err != nil {
 			t.Errorf("%s: %v", name, err)
 		}
 	}

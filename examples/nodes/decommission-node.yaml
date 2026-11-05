@@ -14,8 +14,8 @@
 #
 # Clients are removed first, then servers one at a time.
 #
-#   norca-deployer plan  -c examples/decommission-node.yaml   # shows the node as "decommission"
-#   norca-deployer apply -c examples/decommission-node.yaml
+#   norca-deployer plan  -c examples/nodes/decommission-node.yaml   # shows the node as "decommission"
+#   norca-deployer apply -c examples/nodes/decommission-node.yaml
 #
 # Safety net: apply keeps a list of the nodes it installed
 # (.norca-deployer/nodes-<region>.json). If a node from that list is neither
