@@ -10,3 +10,7 @@ bin/
 # Local deployer state: gossip key, management token, known_hosts, downloads.
 .norca-deployer/
 /design
+
+# Binaries built in the repository root.
+/norca-deployer
+/norca-deployer.exe
