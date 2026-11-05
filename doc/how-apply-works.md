@@ -110,3 +110,8 @@ On the nodes the deployer uses `/var/lib/norca-deployer/` (script markers, copie
 
 - An error on a node is reported with the node address. Servers: the run stops before restarts. Clients: the other clients of the batch finish, then the rollout stops.
 - Fix the cause and run `apply` again. Everything that was already done is skipped.
+
+## Interrupting an apply
+
+- **Ctrl-C (or SIGTERM) once:** the step in progress is finished and the apply stops. A server or client that is being restarted is restarted and checked healthy; the next server, the next batch of clients and the post-cluster phase are not started. Nodes that were not started yet are skipped. The exit code is `130`. Run `apply` again to continue: what was done is skipped.
+- **Ctrl-C a second time:** what is in progress is cut at once. The SSH sessions and local commands are closed, downloads and the wait for a node to become healthy end. A command that had already started on a node may run to its end there.
