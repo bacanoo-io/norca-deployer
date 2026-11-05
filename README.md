@@ -111,7 +111,7 @@ The end-to-end test runs against a real Debian node over SSH (needs `openssh-ser
 
 ```sh
 NORCA_E2E_SSH=127.0.0.1:2222 NORCA_E2E_USER=deploy NORCA_E2E_PASSWORD=... \
-  go test -tags e2e ./pkg/e2e/
+  go test -tags e2e ./internal/e2e/
 ```
 
 ## Documentation

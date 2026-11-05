@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bacanoo-io/norca-deployer/pkg/crypto"
+	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 )
 
 // newSecretCmd builds the `secret` command group (create-key, encrypt).

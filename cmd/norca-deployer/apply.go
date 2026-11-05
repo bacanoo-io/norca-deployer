@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/bacanoo-io/norca-deployer/pkg/config"
-	"github.com/bacanoo-io/norca-deployer/pkg/engine"
+	"github.com/bacanoo-io/norca-deployer/internal/config"
+	"github.com/bacanoo-io/norca-deployer/internal/engine"
 )
 
 // newApplyCmd builds the `apply` command.
