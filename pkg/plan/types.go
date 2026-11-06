@@ -339,7 +339,7 @@ type PKIConfig struct {
 	ServerAdditionalDNSSANs []string `yaml:"server_additional_dns_sans,omitempty" json:"server_additional_dns_sans,omitempty"`
 	ServerAdditionalIPSANs  []string `yaml:"server_additional_ip_sans,omitempty" json:"server_additional_ip_sans,omitempty"`
 	// SPIFFE adds SPIFFE IDs (URI SANs) to the certificates, so that SPIFFE
-	// consumers such as OpenZiti can identify the nodes and find the trust
+	// consumers can identify the nodes and find the trust
 	// domain in the chain.
 	SPIFFE *SPIFFEConfig `yaml:"spiffe,omitempty" json:"spiffe,omitempty"`
 	// DistrustedCAFiles are PEM files (on the deployer machine) of CA

@@ -105,7 +105,7 @@ security:
       - norca.example.com
     server_additional_ip_sans:      # Extra IP addresses in the server certificates.
       - 10.8.0.100
-    spiffe:                         # SPIFFE IDs in the certificates (needed by OpenZiti).
+    spiffe:                         # SPIFFE IDs in the certificates (for SPIFFE consumers).
       enabled: true
       trust_domain: prod.example.com   # Default "<metadata.name>.norca". Nodes get
                                        # spiffe://prod.example.com/norca/eu-central/<server|client>/<hostname>;

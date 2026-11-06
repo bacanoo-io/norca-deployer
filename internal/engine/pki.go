@@ -95,7 +95,7 @@ func (r *Runner) initPKI() error {
 
 // checkCATrustDomain reports a CA whose SPIFFE ID does not fit the plan. A
 // CA without one is fine: the node and intermediate certificates carry the
-// trust domain, and SPIFFE consumers (OpenZiti) search the chain from the
+// trust domain, and SPIFFE consumers search the chain from the
 // leaf up.
 func (r *Runner) checkCATrustDomain() {
 	ids := pki.SPIFFEIDs(r.ca.Certificate)
@@ -308,14 +308,14 @@ var intermediateNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 // IntermediateOptions are the settings of `pki issue-intermediate`.
 type IntermediateOptions struct {
 	Vault      *crypto.Vault // decrypts the CA key; nil without a master key
-	Name       string        // file prefix and part of the subject, e.g. "ziti"
+	Name       string        // file prefix and part of the subject, e.g. "mesh"
 	Years      int
 	MaxPathLen int // CA levels allowed below the intermediate
 	Force      bool
 }
 
 // IssueIntermediate signs an intermediate CA with the cluster CA, for a PKI
-// that must chain up to it (OpenZiti controllers and routers). It carries
+// that must chain up to it. It carries
 // the plan's SPIFFE trust domain. Written to certs/<name>-ca.pem,
 // <name>-ca-key.pem (0600) and <name>-ca-chain.pem (intermediate + root).
 func IssueIntermediate(plan *config.DeploymentPlan, o IntermediateOptions) ([]string, error) {

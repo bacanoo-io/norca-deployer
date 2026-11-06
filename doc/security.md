@@ -28,7 +28,7 @@ An existing certificate on a node is kept while it is signed by the CA, carries 
 
 ## SPIFFE IDs
 
-With `security.pki.spiffe.enabled: true` every certificate the deployer issues carries a SPIFFE ID as URI SAN. SPIFFE consumers, OpenZiti in particular, identify the nodes by it and take the trust domain from the certificate chain.
+With `security.pki.spiffe.enabled: true` every certificate the deployer issues carries a SPIFFE ID as URI SAN. SPIFFE consumers identify the nodes by it and take the trust domain from the certificate chain.
 
 ```yaml
 security:
@@ -46,21 +46,21 @@ security:
 | `certs/cli.pem` | `spiffe://<trust_domain>/norca/<region>/operator` |
 | A CA generated with SPIFFE on, and intermediates | `spiffe://<trust_domain>` |
 
-- Every certificate carries at most one SPIFFE ID, as SPIFFE and OpenZiti require. The `/norca/...` paths do not collide with the IDs of Norca workloads (`/ns/<namespace>/job/...`) or of OpenZiti components (`/controller/<id>`, `/router/<id>`).
+- Every certificate carries at most one SPIFFE ID, as SPIFFE requires. The `/norca/...` paths do not collide with the IDs of Norca workloads (`/ns/<namespace>/job/...`).
 - Turning SPIFFE on, or changing the trust domain, re-issues the node certificates; the agents restart one at a time as for any certificate change.
-- An existing CA keeps its subject: a CA from before SPIFFE was enabled has no SPIFFE ID. That is fine for OpenZiti, which searches the chain from the leaf up and finds the trust domain in the leaf or intermediate certificate. A CA with a different trust domain is reported as a warning.
+- An existing CA keeps its subject: a CA from before SPIFFE was enabled has no SPIFFE ID. That is fine for a consumer that searches the chain from the leaf up and finds the trust domain in the leaf or intermediate certificate. A CA with a different trust domain is reported as a warning.
 - The trust domain must consist of lower case letters, digits, `.`, `-` and `_`; node names and the region must be valid SPIFFE path segments (letters, digits, `.`, `-`, `_`). `validate` checks both.
 - Use the same trust domain in all plans of a multi-region cluster.
 
-### Intermediate CA for OpenZiti
+### Intermediate CA for another PKI
 
-OpenZiti runs its own PKI: its controllers and routers get certificates with `spiffe://<trust domain>/controller/<id>` and similar IDs from a signing CA, and in HA mode it requires the trust domain in that chain. To make that PKI chain up to the cluster CA, issue an intermediate:
+A system that runs a PKI of its own, with a signing CA, can chain it up to the cluster CA with an intermediate:
 
 ```sh
-norca-deployer pki issue-intermediate -c cluster.yaml --name ziti
+norca-deployer pki issue-intermediate -c cluster.yaml --name mesh
 ```
 
-It writes `certs/ziti-ca.pem`, `certs/ziti-ca-key.pem` (0600) and `certs/ziti-ca-chain.pem` (intermediate and root). The intermediate carries `spiffe://<trust_domain>`, is valid for 5 years (`--years`) and allows one more CA level below it (`--max-path-len`, for OpenZiti's own signer). An existing intermediate is only replaced with `--force`.
+It writes `certs/mesh-ca.pem`, `certs/mesh-ca-key.pem` (0600) and `certs/mesh-ca-chain.pem` (intermediate and root). The intermediate carries `spiffe://<trust_domain>`, is valid for 5 years (`--years`) and allows one more CA level below it (`--max-path-len`, for a signer of the other PKI). An existing intermediate is only replaced with `--force`.
 
 ### Node CA for nodes that come up by themselves
 

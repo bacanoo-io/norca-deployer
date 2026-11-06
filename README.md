@@ -6,7 +6,7 @@ A single-binary installer and lifecycle tool for [Norca](https://github.com/baca
 
 - **Servers and clients** on Linux and Windows nodes, per-node datacenter, multi-region federation (`authoritative_region`, ACL replication).
 - **Rolling restarts:** only changed nodes restart. Servers restart one at a time and the deployer waits until each one is healthy, has a leader and sees all Raft peers. Clients restart in batches. A new cluster starts all servers at once.
-- **Security:** an internal CA with mTLS certificates (`server.<region>.norca`, `client.<region>.norca`), gossip encryption (`AUTO_GENERATE`), ACL bootstrap with the management token stored locally, encrypted with AES-256-GCM when a master key exists. Optional SPIFFE IDs in all certificates and intermediate CAs (for OpenZiti). Secrets in the plan can be inline `!enc:v1:...` values.
+- **Security:** an internal CA with mTLS certificates (`server.<region>.norca`, `client.<region>.norca`), gossip encryption (`AUTO_GENERATE`), ACL bootstrap with the management token stored locally, encrypted with AES-256-GCM when a master key exists. Optional SPIFFE IDs in all certificates, and intermediate CAs for systems with a PKI of their own. Secrets in the plan can be inline `!enc:v1:...` values.
 - **Artifacts:** the Norca binary and the CNI plugins are downloaded on the deployer machine (SHA-256 verified and cached) or taken from local files, then copied to the nodes. The nodes need no internet access.
 - **Debian packages:** APT repositories (deb822 with `Signed-By` keyring, pin priority, repository auth) and local `.deb` files copied from the deployer machine, with version pinning and `apt-mark hold`.
 - **Bash scripts** in the phases `pre_install`, `post_packages` and `post_install`. A script runs again only when the script or its environment changed.
@@ -63,7 +63,7 @@ norca-deployer apply -c cluster-deploy.yaml
 | `apply [--force-restart]` | Provision the nodes and roll the changes out; `--force-restart` restarts every agent (rolling) even when nothing changed |
 | `secret create-key` | Create a 256-bit master key (`.norca-deployer.key`); never overwrites an existing key |
 | `secret encrypt <text>` | Encrypt a value for the plan (`!enc:v1:aes-gcm:...`) |
-| `pki issue-intermediate --name <name>` | Issue an intermediate CA signed by the cluster CA, e.g. for OpenZiti |
+| `pki issue-intermediate --name <name>` | Issue an intermediate CA signed by the cluster CA, for a system with a PKI of its own |
 | `pki issue-node-ca [--region <region>]` | Issue the name-constrained intermediate CA of a region, with which an operator signs the certificates of nodes that join by themselves |
 | `version` | Print the version |
 

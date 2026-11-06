@@ -18,10 +18,10 @@ func newPkiCmd() *cobra.Command {
 	inter := engine.IntermediateOptions{}
 	interCmd := &cobra.Command{
 		Use:   "issue-intermediate",
-		Short: "Issue an intermediate CA signed by the cluster CA (e.g. for OpenZiti)",
+		Short: "Issue an intermediate CA signed by the cluster CA (for a system with a PKI of its own)",
 		Long: "Issues an intermediate CA signed by the cluster CA, with the SPIFFE trust domain of the plan\n" +
 			"as URI SAN, into certs/<name>-ca.pem, <name>-ca-key.pem and <name>-ca-chain.pem.\n" +
-			"A PKI that must chain up to the cluster CA (OpenZiti controllers and routers) signs with it.",
+			"A PKI that must chain up to the cluster CA signs with it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 			plan, err := config.LoadFromFile(configFile)
@@ -41,7 +41,7 @@ func newPkiCmd() *cobra.Command {
 			return nil
 		},
 	}
-	interCmd.Flags().StringVar(&inter.Name, "name", "", "Name of the intermediate, e.g. ziti (required)")
+	interCmd.Flags().StringVar(&inter.Name, "name", "", "Name of the intermediate, e.g. mesh (required)")
 	interCmd.Flags().IntVar(&inter.Years, "years", 5, "Validity in years")
 	interCmd.Flags().IntVar(&inter.MaxPathLen, "max-path-len", 1, "CA levels allowed below the intermediate")
 	interCmd.Flags().BoolVar(&force, "force", false, "Replace an existing intermediate of the same name")

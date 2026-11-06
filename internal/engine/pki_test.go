@@ -100,16 +100,16 @@ func TestNodeCertificatesCarrySPIFFEIDs(t *testing.T) {
 	}
 }
 
-func TestIssueIntermediateForZiti(t *testing.T) {
+func TestIssueIntermediate(t *testing.T) {
 	plan := loadPlan(t, spiffePlan)
-	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "ziti", Years: 5, MaxPathLen: 1}); err == nil ||
+	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "mesh", Years: 5, MaxPathLen: 1}); err == nil ||
 		!strings.Contains(err.Error(), "run apply first") {
 		t.Fatalf("expected a missing CA error, got %v", err)
 	}
 	if err := NewRunner(plan, nil).initPKI(); err != nil {
 		t.Fatal(err)
 	}
-	files, err := IssueIntermediate(plan, IntermediateOptions{Name: "ziti", Years: 5, MaxPathLen: 1})
+	files, err := IssueIntermediate(plan, IntermediateOptions{Name: "mesh", Years: 5, MaxPathLen: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,10 +124,10 @@ func TestIssueIntermediateForZiti(t *testing.T) {
 	if info, _ := os.Stat(files[1]); info.Mode().Perm()&0o077 != 0 && os.PathSeparator == '/' {
 		t.Fatalf("key mode %v", info.Mode())
 	}
-	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "ziti", Years: 5, MaxPathLen: 1}); err == nil {
+	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "mesh", Years: 5, MaxPathLen: 1}); err == nil {
 		t.Fatal("an existing intermediate was replaced without --force")
 	}
-	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "Ziti CA", Years: 5}); err == nil {
+	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "Mesh CA", Years: 5}); err == nil {
 		t.Fatal("invalid name accepted")
 	}
 }
@@ -364,7 +364,7 @@ func TestIssueFromAnEncryptedCAKey(t *testing.T) {
 	if _, err := IssueNodeCA(plan, NodeCAOptions{Force: true}); err == nil || !strings.Contains(err.Error(), "encrypted but no master key") {
 		t.Fatalf("without the master key: %v", err)
 	}
-	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "ziti", Years: 1, MaxPathLen: 1, Vault: vault}); err != nil {
+	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "mesh", Years: 1, MaxPathLen: 1, Vault: vault}); err != nil {
 		t.Fatalf("intermediate with the master key: %v", err)
 	}
 }
