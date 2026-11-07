@@ -145,6 +145,11 @@ backup {
   }
 }
 
+metrics_store {                        # The same metrics_store block on every server.
+  retention     = "14d"                # 1h to 30d, "336h" or "14d".
+  max_disk_size = "4GiB"
+}
+
 host_packages {
   update_cache = true
   lock_timeout = 300

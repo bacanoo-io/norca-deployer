@@ -31,6 +31,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `network` | | Addresses and ports |
 | `security` | | TLS, gossip, PKI, ACLs |
 | `backup` | | Built-in server backups |
+| `metrics_store` | | Retention and disk cap of the metrics history of the servers |
 | `federation` | | Multi-region settings |
 | `consul` | | A Consul agent on every node; without it the agents do not use Consul |
 | `host_packages` | | Debian packages |
@@ -155,6 +156,23 @@ Built-in snapshots of the server state, written to the server block of `norca.hc
 | `destination.path` | Absolute directory on the servers for `directory` |
 | `encryption.recipients` | age recipients; at least one (Norca encrypts every backup) |
 | `retention.keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly` | Snapshots to keep |
+
+## metrics_store
+
+The metrics store of the servers: the history of the task group usage, the cluster capacity, the scheduler and the custom objects that every server keeps in its data directory. The deployer writes the same `metrics_store` block into the server block of `norca.hcl` on every server, so that the servers keep the same history. Without this section, or with neither key set, no block is written and the defaults of Norca apply.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `retention` | `30d` | How long the history is kept: `1h` to `30d` (`720h`), as a duration (`168h`) or in days (`7d`) |
+| `max_disk_size` | `2GiB` | Disk cap of the store on each server (`512MiB`, `4GiB`); above it the oldest points go first, before their retention |
+
+The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies both values on a configuration reload (`SIGHUP`) without a restart.
+
+```yaml
+metrics_store:
+  retention: 14d
+  max_disk_size: 4GiB
+```
 
 ## federation
 

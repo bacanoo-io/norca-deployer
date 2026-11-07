@@ -141,6 +141,10 @@ backup:
     keep_weekly: 4
     keep_monthly: 6
 
+metrics_store:                      # The same metrics_store block on every server.
+  retention: 14d                    # 1h to 30d, "336h" or "14d".
+  max_disk_size: 4GiB               # Disk cap of the history on each server.
+
 host_packages:
   update_cache: true                # apt-get update before installing (skipped on offline nodes).
   lock_timeout: 300                 # Seconds to wait for the dpkg lock.

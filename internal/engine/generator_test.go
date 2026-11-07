@@ -41,6 +41,48 @@ func TestGenerateBackupBlock(t *testing.T) {
 	}
 }
 
+func TestGenerateMetricsStoreBlock(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Inventory: config.InventoryConfig{
+			Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "m1"}, {Host: "10.0.0.2", Hostname: "m2"}},
+			Clients: []config.NodeConfig{{Host: "10.0.0.3", Hostname: "c1"}},
+		},
+		MetricsStore: &config.MetricsStoreConfig{Retention: "7d", MaxDiskSize: "4GiB"},
+	}
+	plan.SetDefaults()
+	want := "\n  metrics_store {\n    retention     = \"7d\"\n    max_disk_size = \"4GiB\"\n  }\n"
+
+	// The same block in the server block of every server.
+	for i := range plan.Inventory.Masters {
+		node := &plan.Inventory.Masters[i]
+		hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+		server := hcl[strings.Index(hcl, "server {"):]
+		server = server[:strings.Index(server, "\n}\n")+1]
+		if !strings.Contains(server, want) {
+			t.Errorf("%s: the server block lacks the metrics_store block:\n%s", node.Hostname, hcl)
+		}
+	}
+
+	// Not on a client, and no block without settings.
+	client := &plan.Inventory.Clients[0]
+	if hcl := GenerateNorcaConfig(client, plan, storage.ResolveNodePaths(client, plan), false, GenOptions{}); strings.Contains(hcl, "metrics_store") {
+		t.Errorf("a client has a metrics_store block:\n%s", hcl)
+	}
+	for _, m := range []*config.MetricsStoreConfig{nil, {}} {
+		plan.MetricsStore = m
+		node := &plan.Inventory.Masters[0]
+		if hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{}); strings.Contains(hcl, "metrics_store") {
+			t.Errorf("%+v: unexpected metrics_store block:\n%s", m, hcl)
+		}
+	}
+	plan.MetricsStore = &config.MetricsStoreConfig{Retention: "48h"}
+	node := &plan.Inventory.Masters[0]
+	hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	if !strings.Contains(hcl, "\n  metrics_store {\n    retention     = \"48h\"\n  }\n") {
+		t.Errorf("the retention alone is not written:\n%s", hcl)
+	}
+}
+
 func TestGenerateBindAddresses(t *testing.T) {
 	gen := func(net config.NetworkConfig) string {
 		plan := &config.DeploymentPlan{

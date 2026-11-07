@@ -170,6 +170,7 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		if plan.Backup != nil && plan.Backup.Enabled {
 			writeBackup(&sb, plan.Backup)
 		}
+		writeMetricsStore(&sb, plan.MetricsStore)
 		writeExtraHCL(&sb, node.ServerSettings.ExtraHCL)
 
 		sb.WriteString("}\n\n")
@@ -278,6 +279,23 @@ func clientDrivers(cs *config.ClientSettings) []string {
 
 func containsString(list []string, s string) bool {
 	return slices.Contains(list, s)
+}
+
+// writeMetricsStore writes the metrics_store block of a server: the same
+// retention and disk cap on every server. Without settings there is no block
+// and the defaults of Norca apply.
+func writeMetricsStore(sb *strings.Builder, m *config.MetricsStoreConfig) {
+	if m == nil || (m.Retention == "" && m.MaxDiskSize == "") {
+		return
+	}
+	sb.WriteString("\n  metrics_store {\n")
+	if m.Retention != "" {
+		sb.WriteString(fmt.Sprintf("    retention     = %q\n", m.Retention))
+	}
+	if m.MaxDiskSize != "" {
+		sb.WriteString(fmt.Sprintf("    max_disk_size = %q\n", m.MaxDiskSize))
+	}
+	sb.WriteString("  }\n")
 }
 
 func writeBackup(sb *strings.Builder, b *config.BackupConfig) {
