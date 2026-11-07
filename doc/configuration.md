@@ -159,19 +159,23 @@ Built-in snapshots of the server state, written to the server block of `norca.hc
 
 ## metrics_store
 
-The metrics store of the servers: the history of the task group usage, the cluster capacity, the scheduler and the custom objects that every server keeps in its data directory. The deployer writes the same `metrics_store` block into the server block of `norca.hcl` on every server, so that the servers keep the same history. Without this section, or with neither key set, no block is written and the defaults of Norca apply.
+The metrics store of the servers: the history of the task group usage, the cluster capacity, the scheduler and the custom objects that every server keeps in its data directory, and in a second store with its own retention and disk cap the host metrics: the host statistics of the clients (`norca.node.*`), the Raft log and the RPC of the servers (`norca.server.*`) and their system bus (`norca.bus.*`). The deployer writes the same `metrics_store` block into the server block of `norca.hcl` on every server, so that the servers keep the same history. Without this section, or with no key set, no block is written and the defaults of Norca apply.
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `retention` | `30d` | How long the history is kept: `1h` to `30d` (`720h`), as a duration (`168h`) or in days (`7d`) |
-| `max_disk_size` | `5GiB` | Disk cap of the store on each server (`512MiB`, `4GiB`); above it the oldest points go first, before their retention |
+| `max_disk_size` | `4GiB` | Disk cap of the store on each server (`512MiB`, `4GiB`); above it the oldest points go first, before their retention |
+| `host_retention` | `7d` | How long the host metrics are kept, in the range and form of `retention` |
+| `host_max_disk_size` | `1GiB` | Disk cap of the store of the host metrics on each server |
 
-The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies both values on a configuration reload (`SIGHUP`) without a restart.
+The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies all four values on a configuration reload (`SIGHUP`) without a restart.
 
 ```yaml
 metrics_store:
   retention: 14d
   max_disk_size: 4GiB
+  host_retention: 7d
+  host_max_disk_size: 1GiB
 ```
 
 ## federation

@@ -282,18 +282,31 @@ func containsString(list []string, s string) bool {
 }
 
 // writeMetricsStore writes the metrics_store block of a server: the same
-// retention and disk cap on every server. Without settings there is no block
-// and the defaults of Norca apply.
+// retentions and disk caps on every server. Without settings there is no
+// block and the defaults of Norca apply.
 func writeMetricsStore(sb *strings.Builder, m *config.MetricsStoreConfig) {
-	if m == nil || (m.Retention == "" && m.MaxDiskSize == "") {
+	if m.Empty() {
 		return
 	}
-	sb.WriteString("\n  metrics_store {\n")
-	if m.Retention != "" {
-		sb.WriteString(fmt.Sprintf("    retention     = %q\n", m.Retention))
+	settings := []struct{ key, value string }{
+		{"retention", m.Retention},
+		{"max_disk_size", m.MaxDiskSize},
+		{"host_retention", m.HostRetention},
+		{"host_max_disk_size", m.HostMaxDiskSize},
 	}
-	if m.MaxDiskSize != "" {
-		sb.WriteString(fmt.Sprintf("    max_disk_size = %q\n", m.MaxDiskSize))
+	// The values line up as hclfmt aligns them; a block without the host
+	// settings is written as before they existed.
+	width := len("max_disk_size")
+	for _, s := range settings {
+		if s.value != "" {
+			width = max(width, len(s.key))
+		}
+	}
+	sb.WriteString("\n  metrics_store {\n")
+	for _, s := range settings {
+		if s.value != "" {
+			sb.WriteString(fmt.Sprintf("    %-*s = %q\n", width, s.key, s.value))
+		}
 	}
 	sb.WriteString("  }\n")
 }

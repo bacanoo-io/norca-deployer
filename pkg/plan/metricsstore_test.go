@@ -58,6 +58,9 @@ func TestValidateMetricsStore(t *testing.T) {
 		{Retention: "7d", MaxDiskSize: "4GiB"},
 		{Retention: "720h"},
 		{MaxDiskSize: "512MiB"},
+		{HostRetention: "1h"},
+		{HostRetention: "30d", HostMaxDiskSize: "2GiB"},
+		{Retention: "30d", MaxDiskSize: "4GiB", HostRetention: "7d", HostMaxDiskSize: "1GiB"},
 	} {
 		p := validPlan()
 		p.MetricsStore = m
@@ -66,10 +69,14 @@ func TestValidateMetricsStore(t *testing.T) {
 		}
 	}
 	for want, m := range map[string]*MetricsStoreConfig{
-		"between 1h and 720h (30d), not 31d": {Retention: "31d"},
-		"between 1h and 720h (30d), not 30m": {Retention: "30m"},
-		"is not a duration":                  {Retention: "a week"},
-		"max_disk_size":                      {MaxDiskSize: "big"},
+		"between 1h and 720h (30d), not 31d":                {Retention: "31d"},
+		"between 1h and 720h (30d), not 30m":                {Retention: "30m"},
+		"is not a duration":                                 {Retention: "a week"},
+		"max_disk_size":                                     {MaxDiskSize: "big"},
+		"host_retention must be between 1h and 720h (30d)":  {HostRetention: "45d"},
+		"host_retention must be between 1h and 720h (30d),": {HostRetention: "10m"},
+		"host_retention: \"a week\" is not a duration":      {HostRetention: "a week"},
+		"host_max_disk_size: \"big\" is not a size":         {HostMaxDiskSize: "big"},
 	} {
 		p := validPlan()
 		p.MetricsStore = m

@@ -146,8 +146,10 @@ backup {
 }
 
 metrics_store {                        # The same metrics_store block on every server.
-  retention     = "14d"                # 1h to 30d, "336h" or "14d".
-  max_disk_size = "4GiB"
+  retention          = "14d"           # 1h to 30d, "336h" or "14d".
+  max_disk_size      = "4GiB"
+  host_retention     = "7d"            # Host statistics, Raft and bus history.
+  host_max_disk_size = "1GiB"
 }
 
 host_packages {

@@ -81,6 +81,24 @@ func TestGenerateMetricsStoreBlock(t *testing.T) {
 	if !strings.Contains(hcl, "\n  metrics_store {\n    retention     = \"48h\"\n  }\n") {
 		t.Errorf("the retention alone is not written:\n%s", hcl)
 	}
+
+	// The settings of the hosts store, alone and with the others.
+	plan.MetricsStore = &config.MetricsStoreConfig{HostRetention: "3d"}
+	hcl = GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	if !strings.Contains(hcl, "\n  metrics_store {\n    host_retention = \"3d\"\n  }\n") {
+		t.Errorf("host_retention alone is not written:\n%s", hcl)
+	}
+	plan.MetricsStore = &config.MetricsStoreConfig{Retention: "30d", MaxDiskSize: "4GiB", HostRetention: "7d", HostMaxDiskSize: "1GiB"}
+	hcl = GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	want = "\n  metrics_store {\n" +
+		"    retention          = \"30d\"\n" +
+		"    max_disk_size      = \"4GiB\"\n" +
+		"    host_retention     = \"7d\"\n" +
+		"    host_max_disk_size = \"1GiB\"\n" +
+		"  }\n"
+	if !strings.Contains(hcl, want) {
+		t.Errorf("the four settings are not written:\n%s", hcl)
+	}
 }
 
 func TestGenerateBindAddresses(t *testing.T) {
