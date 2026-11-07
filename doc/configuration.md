@@ -31,7 +31,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `network` | | Addresses and ports |
 | `security` | | TLS, gossip, PKI, ACLs |
 | `backup` | | Built-in server backups |
-| `metrics_store` | | Retention and disk cap of the metrics history of the servers |
+| `metrics_store` | | Retentions and disk caps of the metrics history of the servers |
 | `federation` | | Multi-region settings |
 | `consul` | | A Consul agent on every node; without it the agents do not use Consul |
 | `host_packages` | | Debian packages |
@@ -168,7 +168,7 @@ The metrics store of the servers: the history of the task group usage, the clust
 | `host_retention` | `7d` | How long the host metrics are kept, in the range and form of `retention` |
 | `host_max_disk_size` | `1GiB` | Disk cap of the store of the host metrics on each server |
 
-The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies all four values on a configuration reload (`SIGHUP`) without a restart.
+The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies all four values on a configuration reload (`SIGHUP`) without a restart. See the [`metrics_store` block](https://bacanoo-io.github.io/norca-doc/docs/configuration/metrics_store) of Norca.
 
 ```yaml
 metrics_store:
