@@ -258,7 +258,8 @@ deployer writes, after `apply`, what the operator needs:
 
 - the Variable `nodescaler/bootstrap/<region>`: the cluster CA (`ca`), the node CA and its key
   (`node_ca`, `node_ca_key`, from `pki issue-node-ca`), the agent configuration template of a
-  scaled node (`agent_config`), the trust domain, the validity and the paths of the files;
+  scaled node (`agent_config`), the trust domain, the validity and the paths of the files, and
+  with `machine` where `norca-join` is (`join_binary`) and the install script (`install_script`);
 - the Variable `nodescaler/network/<region>`: `cluster_cidrs` and `api_cidrs` of
   `tuning.firewall`, against which the operator checks the network of a node group.
 
@@ -268,6 +269,31 @@ deployer writes, after `apply`, what the operator needs:
 | `namespace` | `default` | Namespace of the Variables. The bootstrap holds the key of the node CA: give read access to the operator only |
 | `validity` | `60d` | Validity of a node certificate, in days (`60d`) or hours (`720h`); the node CA ends it at the latest |
 | `client` | | Client settings of a scaled node (drivers, `enable_raw_exec`, `extra_hcl`, reserved resources, host networks), over `client_defaults` |
+| `machine` | | What a scaled machine needs on its disk, see below |
+
+`node_scaling.machine` describes the install script of a scaled machine
+(`norca-deployer node-scaling install-script`); see
+[Machines of the node scaling operator](node-scaling-machines.md). It is checked even when
+`enabled` is `false`, since an image can be built before the operator runs.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `install` | `image` | `image`: the script runs when the image of the provider is built. `boot`: `apply` writes the script into the bootstrap Variable (item `install_script`) and the bootstrap of the operator runs it at the first boot. `boot` needs a release and CNI plugins the machine can download (not `local-path`) and no APT repository with `auth` |
+| `arch` | `amd64` | Architecture of the machines: `amd64`, `arm64`, `arm` or `386`. The script of the bootstrap Variable is for this one; `install-script --arch` overrides it |
+| `join_binary` | `/usr/local/bin/norca-join` | Where `norca-join` is on the machines. Written into the bootstrap Variable (item `join_binary`) only when set |
+| `join_download.url` | | Where the script downloads `norca-join` from (http or https). Without it the script only checks that the binary is there |
+| `join_download.checksum_sha256` | | SHA-256 of that file (required with `url`) |
+
+```yaml
+node_scaling:
+  enabled: true
+  machine:
+    install: image
+    join_binary: /usr/local/bin/norca-join
+    join_download:
+      url: https://downloads.example.com/norca-join/v0.3.0/norca-join_linux_amd64
+      checksum_sha256: 9f2c...  # 64 hex characters
+```
 
 The template is the configuration of a client of the plan without what belongs to one node: the
 name, datacenter, pool, class and meta come from the node group, and the agent takes its own

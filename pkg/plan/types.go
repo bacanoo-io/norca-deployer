@@ -791,4 +791,70 @@ type NodeScalingConfig struct {
 	// extra_hcl, reserved resources, host networks), over client_defaults.
 	// The node pool, class and meta come from the node group.
 	Client *ClientSettings `yaml:"client,omitempty" json:"client,omitempty"`
+
+	// Machine is what a scaled machine needs on its disk: the install script
+	// of `node-scaling install-script` and where norca-join is.
+	Machine *NodeMachineConfig `yaml:"machine,omitempty" json:"machine,omitempty"`
+}
+
+// NodeMachineConfig is the node_scaling.machine block: how the norca binary,
+// the CNI plugins, norca-join, the directories and the unit of the agent get
+// onto a scaled machine. One install script does it, generated from the plan
+// (`norca-deployer node-scaling install-script`).
+type NodeMachineConfig struct {
+	// Install is when the script runs: "image" (default), when the image of
+	// the provider is built, or "boot", at the first boot: apply writes the
+	// script into the bootstrap Variable and the bootstrap of the operator
+	// runs it before it starts norca-join or the agent.
+	Install string `yaml:"install,omitempty" json:"install,omitempty"`
+
+	// Arch is the architecture of the machines (amd64 by default): the
+	// script of the bootstrap Variable is for this one.
+	Arch string `yaml:"arch,omitempty" json:"arch,omitempty"`
+
+	// JoinBinary is where norca-join is on the machines (default
+	// /usr/local/bin/norca-join). It is written into the bootstrap Variable
+	// only when set.
+	JoinBinary string `yaml:"join_binary,omitempty" json:"join_binary,omitempty"`
+
+	// JoinDownload is where the script downloads norca-join from; without
+	// it the script only checks that the binary is there.
+	JoinDownload *JoinDownload `yaml:"join_download,omitempty" json:"join_download,omitempty"`
+}
+
+// JoinDownload is the URL of a norca-join binary and its digest.
+type JoinDownload struct {
+	URL            string `yaml:"url" json:"url"`
+	ChecksumSHA256 string `yaml:"checksum_sha256" json:"checksum_sha256"`
+}
+
+// The install modes of node_scaling.machine.
+const (
+	MachineInstallImage = "image"
+	MachineInstallBoot  = "boot"
+)
+
+// DefaultJoinBinary is where norca-join is on a machine by default (the
+// default of the operator too).
+const DefaultJoinBinary = "/usr/local/bin/norca-join"
+
+// JoinBinaryPath is where norca-join is on the machines.
+func (m *NodeMachineConfig) JoinBinaryPath() string {
+	if m == nil || m.JoinBinary == "" {
+		return DefaultJoinBinary
+	}
+	return m.JoinBinary
+}
+
+// InstallAtBoot reports whether the install script runs at the first boot.
+func (m *NodeMachineConfig) InstallAtBoot() bool {
+	return m != nil && m.Install == MachineInstallBoot
+}
+
+// MachineArch is the architecture of the scaled machines.
+func (m *NodeMachineConfig) MachineArch() string {
+	if m == nil || m.Arch == "" {
+		return "amd64"
+	}
+	return m.Arch
 }

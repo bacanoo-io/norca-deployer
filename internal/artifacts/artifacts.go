@@ -37,10 +37,16 @@ type Resolver struct {
 	plan     *config.DeploymentPlan
 	cacheDir string
 	client   *http.Client
+	// log is where the downloads are reported (stdout by default).
+	log io.Writer
 
 	mu      sync.Mutex
 	results map[string]*result
 }
+
+// SetLog sends the reports of the downloads to w instead of stdout: a
+// command whose stdout is its output (a script) reports them on stderr.
+func (r *Resolver) SetLog(w io.Writer) { r.log = w }
 
 type result struct {
 	once sync.Once
@@ -53,6 +59,7 @@ func NewResolver(plan *config.DeploymentPlan, cacheDir string) *Resolver {
 		plan:     plan,
 		cacheDir: cacheDir,
 		client:   &http.Client{Timeout: 10 * time.Minute},
+		log:      os.Stdout,
 		results:  map[string]*result{},
 	}
 }
@@ -101,32 +108,15 @@ func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (
 			return fileWithDigest(src)
 
 		case config.ReleaseOfficial, config.ReleaseCustomURL:
-			version := strings.TrimPrefix(rel.Version, "v")
-			ext := ".tar.gz"
-			if goos == "windows" {
-				ext = ".zip"
-			}
-			archiveName := fmt.Sprintf("norca_%s_%s_%s%s", version, goos, arch, ext)
-			sumsName := fmt.Sprintf("norca_%s_SHA256SUMS", version)
-			base := strings.TrimRight(rel.DownloadBaseURL, "/") + "/" + rel.Version + "/"
-			dir := filepath.Join(r.cacheDir, "norca", version)
-
-			archive := filepath.Join(dir, archiveName)
-			want := strings.ToLower(rel.ChecksumSHA256)
-			if want == "" {
-				sums := filepath.Join(dir, sumsName)
-				if err := r.download(ctx, base+sumsName, sums, ""); err != nil {
-					return nil, err
-				}
-				var err error
-				if want, err = lookupSum(sums, archiveName); err != nil {
-					return nil, err
-				}
-			}
-			if err := r.download(ctx, base+archiveName, archive, want); err != nil {
+			rf, err := r.releaseArchive(ctx, goos, arch)
+			if err != nil {
 				return nil, err
 			}
-			dest := filepath.Join(dir, goos+"_"+arch, binName)
+			archive := filepath.Join(rf.dir, rf.name)
+			if err := r.download(ctx, rf.url, archive, rf.sha256); err != nil {
+				return nil, err
+			}
+			dest := filepath.Join(rf.dir, goos+"_"+arch, binName)
 			if err := extractBinary(archive, binName, dest); err != nil {
 				return nil, err
 			}
@@ -134,6 +124,41 @@ func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (
 		}
 		return nil, fmt.Errorf("release source %q does not provide a binary", rel.Source)
 	})
+}
+
+// remoteFile is a file of a release on the internet: its URL, its name, the
+// digest it must have, and the cache directory of its release.
+type remoteFile struct {
+	url, name, sha256, dir string
+}
+
+// releaseArchive resolves the release archive of a platform (sources
+// official and custom-url). Without release.checksum_sha256 the digest comes
+// from the SHA256SUMS file of the release, which is downloaded for it.
+func (r *Resolver) releaseArchive(ctx context.Context, goos, arch string) (*remoteFile, error) {
+	rel := r.plan.Release
+	version := strings.TrimPrefix(rel.Version, "v")
+	ext := ".tar.gz"
+	if goos == "windows" {
+		ext = ".zip"
+	}
+	archiveName := fmt.Sprintf("norca_%s_%s_%s%s", version, goos, arch, ext)
+	sumsName := fmt.Sprintf("norca_%s_SHA256SUMS", version)
+	base := strings.TrimRight(rel.DownloadBaseURL, "/") + "/" + rel.Version + "/"
+	dir := filepath.Join(r.cacheDir, "norca", version)
+
+	want := strings.ToLower(rel.ChecksumSHA256)
+	if want == "" {
+		sums := filepath.Join(dir, sumsName)
+		if err := r.download(ctx, base+sumsName, sums, ""); err != nil {
+			return nil, err
+		}
+		var err error
+		if want, err = lookupSum(sums, archiveName); err != nil {
+			return nil, err
+		}
+	}
+	return &remoteFile{url: base + archiveName, name: archiveName, sha256: want, dir: dir}, nil
 }
 
 // CNIArchive returns the CNI plugin archive (.tgz) for a Linux architecture.
@@ -148,27 +173,80 @@ func (r *Resolver) CNIArchive(ctx context.Context, arch string) (*File, error) {
 			}
 			return fileWithDigest(src)
 		default:
-			name := fmt.Sprintf("cni-plugins-linux-%s-%s.tgz", arch, c.Version)
-			url := strings.TrimRight(c.DownloadBaseURL, "/") + "/" + c.Version + "/" + name
-			dir := filepath.Join(r.cacheDir, "cni", c.Version)
-			want := strings.ToLower(c.ChecksumSHA256)
-			if want == "" {
-				sumFile := filepath.Join(dir, name+".sha256")
-				if err := r.download(ctx, url+".sha256", sumFile, ""); err != nil {
-					return nil, err
-				}
-				var err error
-				if want, err = lookupSum(sumFile, name); err != nil {
-					return nil, err
-				}
-			}
-			dest := filepath.Join(dir, name)
-			if err := r.download(ctx, url, dest, want); err != nil {
+			rf, err := r.cniArchive(ctx, arch)
+			if err != nil {
 				return nil, err
 			}
-			return &File{Path: dest, SHA256: want}, nil
+			dest := filepath.Join(rf.dir, rf.name)
+			if err := r.download(ctx, rf.url, dest, rf.sha256); err != nil {
+				return nil, err
+			}
+			return &File{Path: dest, SHA256: rf.sha256}, nil
 		}
 	})
+}
+
+// cniArchive resolves the CNI plugin archive of an architecture (sources
+// official and custom-url). Without cni.checksum_sha256 the digest comes
+// from the .sha256 file next to the archive.
+func (r *Resolver) cniArchive(ctx context.Context, arch string) (*remoteFile, error) {
+	c := r.plan.CNI
+	name := fmt.Sprintf("cni-plugins-linux-%s-%s.tgz", arch, c.Version)
+	url := strings.TrimRight(c.DownloadBaseURL, "/") + "/" + c.Version + "/" + name
+	dir := filepath.Join(r.cacheDir, "cni", c.Version)
+	want := strings.ToLower(c.ChecksumSHA256)
+	if want == "" {
+		sumFile := filepath.Join(dir, name+".sha256")
+		if err := r.download(ctx, url+".sha256", sumFile, ""); err != nil {
+			return nil, err
+		}
+		var err error
+		if want, err = lookupSum(sumFile, name); err != nil {
+			return nil, err
+		}
+	}
+	return &remoteFile{url: url, name: name, sha256: want, dir: dir}, nil
+}
+
+// Download is a file that a machine downloads itself (the install script of
+// a scaled machine): its URL and the SHA-256 it must have.
+type Download struct {
+	URL    string
+	SHA256 string
+	// Archive is true for a release archive that holds the binary (a
+	// .tar.gz); false for the file itself.
+	Archive bool
+}
+
+// ReleaseDownload returns the URL and the digest of the release archive of a
+// platform, the one ReleaseBinary downloads and extracts, without
+// downloading it. Only the sources official and custom-url have one; the
+// SHA256SUMS of the release is downloaded when the plan has no checksum.
+func (r *Resolver) ReleaseDownload(ctx context.Context, goos, arch string) (*Download, error) {
+	switch r.plan.Release.Source {
+	case config.ReleaseOfficial, config.ReleaseCustomURL:
+	default:
+		return nil, fmt.Errorf("release source %q has no download URL", r.plan.Release.Source)
+	}
+	rf, err := r.releaseArchive(ctx, goos, arch)
+	if err != nil {
+		return nil, err
+	}
+	return &Download{URL: rf.url, SHA256: rf.sha256, Archive: true}, nil
+}
+
+// CNIDownload returns the URL and the digest of the CNI plugin archive of a
+// Linux architecture, the one CNIArchive downloads, without downloading it.
+// The source local-path has none.
+func (r *Resolver) CNIDownload(ctx context.Context, arch string) (*Download, error) {
+	if r.plan.CNI.Source == config.ReleaseLocalPath {
+		return nil, fmt.Errorf("cni source %q has no download URL", r.plan.CNI.Source)
+	}
+	rf, err := r.cniArchive(ctx, arch)
+	if err != nil {
+		return nil, err
+	}
+	return &Download{URL: rf.url, SHA256: rf.sha256, Archive: true}, nil
 }
 
 func expand(p, goos, arch string) string {
@@ -190,7 +268,7 @@ func (r *Resolver) download(ctx context.Context, url, dest, want string) error {
 	if err := os.MkdirAll(filepath.Dir(dest), 0700); err != nil {
 		return err
 	}
-	fmt.Printf("    Downloading %s\n", url)
+	fmt.Fprintf(r.log, "    Downloading %s\n", url)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)

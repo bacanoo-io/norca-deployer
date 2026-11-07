@@ -14,6 +14,7 @@ Norca Deployer installs and maintains [Norca](https://github.com/bacanoo-io/norc
 | [Networking and tuning](networking-and-tuning.md) | Advertise addresses, ports, firewall, sysctl, CNI, volumes |
 | [Node labels, pools and resources](node-labels-and-pools.md) | Meta and node class, client defaults, node pools, host networks, reserved resources, drain on shutdown, dynamic ports |
 | [Adding and removing nodes](adding-and-removing-nodes.md) | New nodes, decommissioning, the list of installed nodes |
+| [Machines of the node scaling operator](node-scaling-machines.md) | What a scaled machine needs, the install script for an image or the first boot, where the keys are |
 | [Bootstrap secrets and ACL policies](secrets-and-policies.md) | Secrets and Variables after the cluster is up, generated values, job-bound ACL policies, NATS example |
 | [Packs](packs.md) | Pack registries and pack releases deployed by `apply` |
 | [GitOps](gitops.md) | Packs deployed from Git repositories: `gitops run`, `apply` and the webhook daemon |

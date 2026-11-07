@@ -156,12 +156,39 @@ func nodeScalingBootstrap(plan *config.DeploymentPlan) (map[string]string, error
 	if v := plan.NodeScaling.Validity; v != "" {
 		items["validity"] = v
 	}
+	// Written only when the plan sets it, so that a plan without the
+	// machine block keeps the Variable it had (the operator's default is
+	// the same path).
+	if m := plan.NodeScaling.Machine; m != nil && m.JoinBinary != "" {
+		items[JoinBinaryItem] = m.JoinBinary
+	}
 	td, err := plan.SPIFFETrustDomain()
 	if err != nil {
 		return nil, err
 	}
 	if td != nil {
 		items["trust_domain"] = td.Host
+	}
+	return items, nil
+}
+
+// nodeScalingBootstrapItems returns the items of the bootstrap Variable and,
+// with node_scaling.machine.install = boot, the install script, which the
+// bootstrap of the operator runs at the first boot. The script is for the
+// architecture of node_scaling.machine.arch: one Variable per region holds
+// one script, so a region scales machines of one architecture at boot (an
+// image built with install: image has no such limit).
+func (r *Runner) nodeScalingBootstrapItems() (map[string]string, error) {
+	items, err := nodeScalingBootstrap(r.plan)
+	if err != nil {
+		return nil, err
+	}
+	if r.plan.NodeScaling.Machine.InstallAtBoot() {
+		script, err := GenerateInstallScript(r.abortCtx(), r.plan, r.artifacts, MachineScriptOptions{Vault: r.vault})
+		if err != nil {
+			return nil, fmt.Errorf("the install script: %w", err)
+		}
+		items[InstallScriptItem] = script
 	}
 	return items, nil
 }
@@ -199,7 +226,7 @@ func (r *Runner) publishNodeScaling(first *target, token string) error {
 		path  string
 		items map[string]string
 	}{{nodeScalingNetworkPath(region), nodeScalingNetwork(r.plan)}}
-	if items, err := nodeScalingBootstrap(r.plan); err != nil {
+	if items, err := r.nodeScalingBootstrapItems(); err != nil {
 		fmt.Printf("    [WARN] node_scaling: the bootstrap is not written: %v\n", err)
 	} else {
 		vars = append(vars, struct {

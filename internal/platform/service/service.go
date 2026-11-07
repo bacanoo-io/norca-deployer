@@ -8,7 +8,8 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 )
 
-const unitPath = "/etc/systemd/system/norca.service"
+// UnitPath is the systemd unit of the agent on a Linux node.
+const UnitPath = "/etc/systemd/system/norca.service"
 
 // LinuxUnit renders the systemd unit. The agent runs as root: clients need
 // it for the exec driver, CNI and network policies.
@@ -49,7 +50,7 @@ func InstallService(conn connector.Connector, paths *storage.ResolvedPaths, isWi
 }
 
 func installLinuxService(conn connector.Connector, paths *storage.ResolvedPaths, fdLimit int) (bool, error) {
-	changed, err := connector.SyncFile(conn, unitPath, []byte(LinuxUnit(paths, fdLimit)), 0644)
+	changed, err := connector.SyncFile(conn, UnitPath, []byte(LinuxUnit(paths, fdLimit)), 0644)
 	if err != nil {
 		return false, err
 	}

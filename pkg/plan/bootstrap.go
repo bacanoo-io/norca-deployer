@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -234,7 +235,15 @@ var nodeScalingValidityRe = regexp.MustCompile(`^[1-9][0-9]*(d|h)$`)
 // validateNodeScaling checks the node_scaling block.
 func (p *DeploymentPlan) validateNodeScaling() error {
 	ns := p.NodeScaling
-	if ns == nil || !ns.Enabled {
+	if ns == nil {
+		return nil
+	}
+	// The machine block is checked even when node scaling is not enabled:
+	// the install script of an image is generated from it.
+	if err := p.validateNodeMachine(ns.Machine); err != nil {
+		return err
+	}
+	if !ns.Enabled {
 		return nil
 	}
 	if !p.Security.TLSEnabled {
@@ -248,6 +257,51 @@ func (p *DeploymentPlan) validateNodeScaling() error {
 	}
 	if ns.Namespace != "" && !releaseNameRe.MatchString(ns.Namespace) {
 		return fmt.Errorf("node_scaling.namespace: %q is not a namespace name", ns.Namespace)
+	}
+	return nil
+}
+
+// machinePathRe is an absolute path the bootstrap of the operator accepts in
+// a systemd unit: no spaces and no quotes.
+var machinePathRe = regexp.MustCompile(`^/[A-Za-z0-9_./+@-]+$`)
+
+// validateNodeMachine checks the node_scaling.machine block.
+func (p *DeploymentPlan) validateNodeMachine(m *NodeMachineConfig) error {
+	if m == nil {
+		return nil
+	}
+	switch m.Install {
+	case "", MachineInstallImage, MachineInstallBoot:
+	default:
+		return fmt.Errorf("node_scaling.machine.install %q must be image or boot", m.Install)
+	}
+	switch m.Arch {
+	case "", "amd64", "arm64", "arm", "386":
+	default:
+		return fmt.Errorf("node_scaling.machine.arch %q must be amd64, arm64, arm or 386", m.Arch)
+	}
+	if m.JoinBinary != "" && !machinePathRe.MatchString(m.JoinBinary) {
+		return fmt.Errorf("node_scaling.machine.join_binary %q must be an absolute path without spaces or quotes", m.JoinBinary)
+	}
+	if d := m.JoinDownload; d != nil {
+		if u, err := url.Parse(d.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("node_scaling.machine.join_download.url %q must be an http(s) URL", d.URL)
+		}
+		if !sha256Re.MatchString(strings.ToLower(d.ChecksumSHA256)) {
+			return fmt.Errorf("node_scaling.machine.join_download.checksum_sha256 must be 64 hex characters")
+		}
+	}
+	if m.Install == MachineInstallBoot {
+		// At boot the script downloads everything: a file on the deployer
+		// machine is out of its reach.
+		if p.Release.Source == ReleaseLocalPath {
+			return fmt.Errorf("node_scaling.machine.install boot needs a release the machine can download " +
+				"(release.source official, custom-url or host-package, not local-path); use install: image")
+		}
+		if c := p.CNI; c != nil && c.Install != nil && *c.Install && c.Source == ReleaseLocalPath {
+			return fmt.Errorf("node_scaling.machine.install boot needs CNI plugins the machine can download " +
+				"(cni.source official or custom-url, not local-path); use install: image")
+		}
 	}
 	return nil
 }

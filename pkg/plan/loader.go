@@ -143,6 +143,15 @@ func (p *DeploymentPlan) SetDefaults() {
 		p.CNI.DownloadBaseURL = "https://github.com/containernetworking/plugins/releases/download"
 	}
 
+	if ns := p.NodeScaling; ns != nil && ns.Machine != nil {
+		if ns.Machine.Install == "" {
+			ns.Machine.Install = MachineInstallImage
+		}
+		if ns.Machine.Arch == "" {
+			ns.Machine.Arch = "amd64"
+		}
+	}
+
 	// Rolling restart defaults
 	if p.Upgrade.MaxParallelClients <= 0 {
 		p.Upgrade.MaxParallelClients = 1

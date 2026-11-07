@@ -24,7 +24,8 @@ const (
 	// DebDir holds the .deb files copied by the deployer.
 	DebDir = "/var/lib/norca-deployer/debs"
 
-	defaultLockTimeout = 300
+	// DefaultLockTimeout is the dpkg lock wait in seconds without host_packages.lock_timeout.
+	DefaultLockTimeout = 300
 )
 
 // SourcePath is the deb822 source file of a repository.
@@ -112,10 +113,10 @@ func (s *Selection) Empty() bool {
 	return len(s.Repositories) == 0 && len(s.Packages) == 0
 }
 
-// needsIndex reports whether apt has to read repository indexes: true when
+// NeedsIndex reports whether apt has to read repository indexes: true when
 // a repository is configured or a package is not a local file. Nodes without
 // any reachable repository can install local .deb files only.
-func (s *Selection) needsIndex() bool {
+func (s *Selection) NeedsIndex() bool {
 	if len(s.Repositories) > 0 {
 		return true
 	}
@@ -151,7 +152,7 @@ func Select(hp *config.HostPackages, node *config.NodeConfig, isMaster bool) *Se
 // validated by the configuration loader and quoted here as well.
 func InstallCommand(targets []string, lockTimeout int) string {
 	if lockTimeout <= 0 {
-		lockTimeout = defaultLockTimeout
+		lockTimeout = DefaultLockTimeout
 	}
 	args := []string{
 		"DEBIAN_FRONTEND=noninteractive",
@@ -208,7 +209,7 @@ func Apply(conn connector.Connector, plan *config.DeploymentPlan, sel *Selection
 
 	lockTimeout := hp.LockTimeout
 	if lockTimeout <= 0 {
-		lockTimeout = defaultLockTimeout
+		lockTimeout = DefaultLockTimeout
 	}
 
 	// 2. Local .deb files
@@ -233,7 +234,7 @@ func Apply(conn connector.Connector, plan *config.DeploymentPlan, sel *Selection
 	}
 
 	// 3. Package index
-	if sel.needsIndex() && (hp.UpdateCache == nil || *hp.UpdateCache) {
+	if sel.NeedsIndex() && (hp.UpdateCache == nil || *hp.UpdateCache) {
 		cmd := fmt.Sprintf("apt-get update -q -o DPkg::Lock::Timeout=%d", lockTimeout)
 		if out, err := conn.ExecuteCommand(cmd); err != nil {
 			return fmt.Errorf("apt-get update failed: %w (output: %s)", err, lastLines(out, 20))

@@ -31,6 +31,6 @@ func newRootCmd() *cobra.Command {
 	rootCmd.PersistentFlags().StringVar(&secretKey, "secret-key", "", "Master encryption key string")
 	rootCmd.PersistentFlags().StringVar(&secretKeyFile, "secret-key-file", "", "Path to master encryption key file")
 
-	rootCmd.AddCommand(newInitCmd(), newValidateCmd(), newPlanCmd(), newApplyCmd(), newSecretCmd(), newPkiCmd(), newGitOpsCmd(), newVersionCmd())
+	rootCmd.AddCommand(newInitCmd(), newValidateCmd(), newPlanCmd(), newApplyCmd(), newSecretCmd(), newPkiCmd(), newNodeScalingCmd(), newGitOpsCmd(), newVersionCmd())
 	return rootCmd
 }

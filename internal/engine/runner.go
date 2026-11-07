@@ -703,13 +703,19 @@ func (r *Runner) createConnector(node *config.NodeConfig) (connector.Connector, 
 // resolveSecret decrypts an inline !enc:v1 secret. A secret that cannot be
 // decrypted is an error instead of being used verbatim as a credential.
 func (r *Runner) resolveSecret(val string) (string, error) {
+	return resolveSecretWith(r.vault, val)
+}
+
+// resolveSecretWith decrypts an inline !enc:v1 secret with the vault (nil:
+// no master key).
+func resolveSecretWith(vault *crypto.Vault, val string) (string, error) {
 	if !strings.HasPrefix(strings.TrimSpace(val), crypto.EncryptedPrefix) {
 		return val, nil
 	}
-	if r.vault == nil {
+	if vault == nil {
 		return "", fmt.Errorf("an encrypted secret is configured but no master key is available (use --secret-key, --secret-key-file or NORCA_DEPLOYER_SECRET_KEY)")
 	}
-	return r.vault.ResolveSecret(val)
+	return vault.ResolveSecret(val)
 }
 
 // postClusterTasks bootstraps ACLs and installs the packs through the first
