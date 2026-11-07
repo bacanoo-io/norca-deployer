@@ -164,7 +164,7 @@ The metrics store of the servers: the history of the task group usage, the clust
 | Key | Default | Description |
 | --- | --- | --- |
 | `retention` | `30d` | How long the history is kept: `1h` to `30d` (`720h`), as a duration (`168h`) or in days (`7d`) |
-| `max_disk_size` | `2GiB` | Disk cap of the store on each server (`512MiB`, `4GiB`); above it the oldest points go first, before their retention |
+| `max_disk_size` | `5GiB` | Disk cap of the store on each server (`512MiB`, `4GiB`); above it the oldest points go first, before their retention |
 
 The plan is checked like Norca checks the block: a retention outside the range or a size that is not one is an error. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). Norca itself also applies both values on a configuration reload (`SIGHUP`) without a restart.
 

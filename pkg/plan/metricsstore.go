@@ -18,7 +18,7 @@ type MetricsStoreConfig struct {
 	Retention string `yaml:"retention,omitempty" json:"retention,omitempty"`
 	// MaxDiskSize caps the disk use of the store on each server ("2GiB",
 	// "512MiB"); the oldest points go first. Empty keeps the default of
-	// Norca (2GiB).
+	// Norca (5GiB).
 	MaxDiskSize string `yaml:"max_disk_size,omitempty" json:"max_disk_size,omitempty"`
 }
 
