@@ -21,6 +21,7 @@ A scaled node is a Linux client of the plan. Before its bootstrap runs, the mach
 | The systemd unit of the agent, enabled but not started | `/etc/systemd/system/norca.service` | the unit `apply` writes, with `tuning.file_descriptor_limit` |
 | The host packages of a client (Docker, for example) | APT | `host_packages` with the role `client` (or no role) |
 | The sysctl tuning and the kernel modules | `/etc/sysctl.d/99-norca-production.conf`, `/etc/modules-load.d/norca-bridge.conf` | `tuning.apply_sysctl` |
+| A TPM 2.0, only for keys in the TPM (`join_key_store` of the operator `tpm` or `auto`) | `/dev/tpmrm0` | the machine: a virtual TPM on clouds (Google Shielded VM, Azure Trusted Launch, AWS NitroTPM), the firmware TPM on hardware |
 
 The configuration (`norca.hcl`), the cluster CA and the certificate are not on this list: they
 belong to one node, and the bootstrap writes them (see [What the bootstrap writes](#what-the-bootstrap-writes)).
@@ -227,7 +228,8 @@ An example `norca-join.json`:
   "cert_file": "/etc/norca.d/tls/client.pem",
   "key_file": "/etc/norca.d/tls/client-key.pem",
   "state_file": "/etc/norca.d/tls/norca-join.state",
-  "service": "norca"
+  "service": "norca",
+  "key_store": "auto"
 }
 ```
 
@@ -235,6 +237,15 @@ An example `norca-join.json`:
 endpoint may carry (`spiffe://no-spiffe.invalid/...` without SPIFFE). `token` is removed once it
 is used. `state_file` keeps the endpoints the operator last named and when the certificate was
 issued, and `service` is the unit `norca-join` starts and sends `SIGHUP` after a renewal.
+`key_store` is where the key is made: `file` (the default when it is missing), `tpm` or `auto`;
+the operator sets it from its `join_key_store` or the `join.key_store` of the group.
+
+**A key in the TPM.** With `tpm`, or `auto` on a machine with `/dev/tpmrm0`, `norca-join` makes
+the key in the TPM 2.0 of the machine, and `client-key.pem` is a TSS2 key file
+(`-----BEGIN TSS2 PRIVATE KEY-----`) that only this TPM can load; the agent signs with the TPM.
+The install script needs nothing more: no TPM tools, no package. The units of `norca-join` and of
+the agent run as root, which can open `/dev/tpmrm0`; an image that runs the agent as another
+user must give it access to the device (the group `tss` on most distributions). Linux only.
 
 ## Where the keys are
 
@@ -242,6 +253,7 @@ issued, and `service` is the unit `norca-join` starts and sends `SIGHUP` after a
 | --- | --- | --- |
 | The key of a node, basic mode | Made by the operator; it travels in the user data to the provider and stays in the user data of the machine in the cloud. On the node: `<tls_dir>/client-key.pem`, `0600`, root | The node's root; whoever can read the user data of the machine (the cloud account, and any process on the machine that can reach the metadata service, unless the cloud blocks it) |
 | The key of a node, join mode | Made on the machine by `norca-join`; it never leaves the machine | The node's root |
+| The key of a node, join mode with the TPM | Made in the TPM 2.0 of the machine; it never leaves the TPM. `<tls_dir>/client-key.pem` is a blob only this TPM can load | Nobody: the node's root can sign with it while it runs on the machine, but cannot copy it |
 | The key of the node CA of the region | The bootstrap Variable `nodescaler/bootstrap/<region>` (item `node_ca_key`), encrypted at rest in Raft like every Variable | The job of the operator: give the namespace of the Variable (`node_scaling.namespace`) to the operator only |
 | The key of the cluster root CA | With the deployer only (`certs/` next to the plan), encrypted with the master key when there is one | Whoever runs the deployer with the master key |
 
@@ -261,6 +273,10 @@ enough for a lab, but it is not the isolation of a machine:
   the container (`docker exec`, `docker cp`) in join mode.
 - The containers run `--privileged`, as the agent of a client needs. A workload that breaks out
   of its container reaches the host.
+- A container has no TPM of its own. A privileged container sees the devices of the host: on a
+  host with a TPM, `auto` and `tpm` make the keys of the container nodes in the TPM of the host
+  (shared by all of them); on a host without one, `auto` keeps them in files and `tpm` does not
+  join.
 - A container that is cloned (`docker commit` and run again, for example) carries the identity of
   its node. The operator sees a second ready node with the name of an instance, reports it as
   **foreign** and makes it ineligible for new work, but the certificate it holds stays valid until
