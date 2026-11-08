@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -39,6 +40,9 @@ type Resolver struct {
 	client   *http.Client
 	// log is where the downloads are reported (stdout by default).
 	log io.Writer
+	// retryDelay is the wait before the first retry of a download that
+	// failed for a passing reason; it doubles with each retry.
+	retryDelay time.Duration
 
 	mu      sync.Mutex
 	results map[string]*result
@@ -56,13 +60,18 @@ type result struct {
 
 func NewResolver(plan *config.DeploymentPlan, cacheDir string) *Resolver {
 	return &Resolver{
-		plan:     plan,
-		cacheDir: cacheDir,
-		client:   &http.Client{Timeout: 10 * time.Minute},
-		log:      os.Stdout,
-		results:  map[string]*result{},
+		plan:       plan,
+		cacheDir:   cacheDir,
+		client:     &http.Client{Timeout: 10 * time.Minute},
+		log:        os.Stdout,
+		retryDelay: 2 * time.Second,
+		results:    map[string]*result{},
 	}
 }
+
+// downloadAttempts is how many times a download is tried when it fails for a
+// passing reason: a network error, or an answer 5xx or 429 of the server.
+const downloadAttempts = 4
 
 func (r *Resolver) memo(key string, fn func() (*File, error)) (*File, error) {
 	r.mu.Lock()
@@ -108,12 +117,16 @@ func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (
 			return fileWithDigest(src)
 
 		case config.ReleaseOfficial, config.ReleaseCustomURL:
-			rf, err := r.releaseArchive(ctx, goos, arch)
+			var archive string
+			rf, err := r.withSums(func(fresh bool) (*remoteFile, error) {
+				rf, err := r.releaseArchive(ctx, goos, arch, fresh)
+				if err != nil {
+					return rf, err
+				}
+				archive = filepath.Join(rf.dir, rf.name)
+				return rf, r.download(ctx, rf.url, archive, rf.sha256)
+			})
 			if err != nil {
-				return nil, err
-			}
-			archive := filepath.Join(rf.dir, rf.name)
-			if err := r.download(ctx, rf.url, archive, rf.sha256); err != nil {
 				return nil, err
 			}
 			dest := filepath.Join(rf.dir, goos+"_"+arch, binName)
@@ -127,15 +140,52 @@ func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (
 }
 
 // remoteFile is a file of a release on the internet: its URL, its name, the
-// digest it must have, and the cache directory of its release.
+// digest it must have, and the cache directory of its release. cachedSums is
+// true when the digest was read from a checksum file of the cache, not one
+// downloaded now.
 type remoteFile struct {
 	url, name, sha256, dir string
+	cachedSums             bool
+}
+
+// errChecksum marks a downloaded file whose digest is not the expected one.
+var errChecksum = errors.New("checksum mismatch")
+
+// withSums runs fetch, which resolves a remote file and downloads it. When
+// the digest came from a cached checksum file and the download does not
+// match it, the checksum file may be out of date (a release republished
+// under the same version): fetch runs once more with a fresh one.
+func (r *Resolver) withSums(fetch func(fresh bool) (*remoteFile, error)) (*remoteFile, error) {
+	rf, err := fetch(false)
+	if err != nil && rf != nil && rf.cachedSums && errors.Is(err, errChecksum) {
+		fmt.Fprintf(r.log, "    The cached checksums of %s do not match, downloading them again\n", rf.name)
+		return fetch(true)
+	}
+	return rf, err
+}
+
+// sums returns the digest of name from the checksum file of a release at
+// dest, downloading the file from url unless the cache already has one that
+// lists name. The files of a released version do not change, so a cached
+// list is used as it is (fresh forces the download): once the files are
+// cached, an apply does not depend on the release server.
+func (r *Resolver) sums(ctx context.Context, url, dest, name string, fresh bool) (string, bool, error) {
+	if !fresh {
+		if sum, err := lookupSum(dest, name); err == nil {
+			return sum, true, nil
+		}
+	}
+	if err := r.download(ctx, url, dest, ""); err != nil {
+		return "", false, err
+	}
+	sum, err := lookupSum(dest, name)
+	return sum, false, err
 }
 
 // releaseArchive resolves the release archive of a platform (sources
 // official and custom-url). Without release.checksum_sha256 the digest comes
-// from the SHA256SUMS file of the release, which is downloaded for it.
-func (r *Resolver) releaseArchive(ctx context.Context, goos, arch string) (*remoteFile, error) {
+// from the SHA256SUMS file of the release, downloaded once and cached.
+func (r *Resolver) releaseArchive(ctx context.Context, goos, arch string, fresh bool) (*remoteFile, error) {
 	rel := r.plan.Release
 	version := strings.TrimPrefix(rel.Version, "v")
 	ext := ".tar.gz"
@@ -147,18 +197,14 @@ func (r *Resolver) releaseArchive(ctx context.Context, goos, arch string) (*remo
 	base := strings.TrimRight(rel.DownloadBaseURL, "/") + "/" + rel.Version + "/"
 	dir := filepath.Join(r.cacheDir, "norca", version)
 
-	want := strings.ToLower(rel.ChecksumSHA256)
-	if want == "" {
-		sums := filepath.Join(dir, sumsName)
-		if err := r.download(ctx, base+sumsName, sums, ""); err != nil {
-			return nil, err
-		}
+	rf := &remoteFile{url: base + archiveName, name: archiveName, sha256: strings.ToLower(rel.ChecksumSHA256), dir: dir}
+	if rf.sha256 == "" {
 		var err error
-		if want, err = lookupSum(sums, archiveName); err != nil {
+		if rf.sha256, rf.cachedSums, err = r.sums(ctx, base+sumsName, filepath.Join(dir, sumsName), archiveName, fresh); err != nil {
 			return nil, err
 		}
 	}
-	return &remoteFile{url: base + archiveName, name: archiveName, sha256: want, dir: dir}, nil
+	return rf, nil
 }
 
 // CNIArchive returns the CNI plugin archive (.tgz) for a Linux architecture.
@@ -173,12 +219,16 @@ func (r *Resolver) CNIArchive(ctx context.Context, arch string) (*File, error) {
 			}
 			return fileWithDigest(src)
 		default:
-			rf, err := r.cniArchive(ctx, arch)
+			var dest string
+			rf, err := r.withSums(func(fresh bool) (*remoteFile, error) {
+				rf, err := r.cniArchive(ctx, arch, fresh)
+				if err != nil {
+					return rf, err
+				}
+				dest = filepath.Join(rf.dir, rf.name)
+				return rf, r.download(ctx, rf.url, dest, rf.sha256)
+			})
 			if err != nil {
-				return nil, err
-			}
-			dest := filepath.Join(rf.dir, rf.name)
-			if err := r.download(ctx, rf.url, dest, rf.sha256); err != nil {
 				return nil, err
 			}
 			return &File{Path: dest, SHA256: rf.sha256}, nil
@@ -188,24 +238,20 @@ func (r *Resolver) CNIArchive(ctx context.Context, arch string) (*File, error) {
 
 // cniArchive resolves the CNI plugin archive of an architecture (sources
 // official and custom-url). Without cni.checksum_sha256 the digest comes
-// from the .sha256 file next to the archive.
-func (r *Resolver) cniArchive(ctx context.Context, arch string) (*remoteFile, error) {
+// from the .sha256 file next to the archive, downloaded once and cached.
+func (r *Resolver) cniArchive(ctx context.Context, arch string, fresh bool) (*remoteFile, error) {
 	c := r.plan.CNI
 	name := fmt.Sprintf("cni-plugins-linux-%s-%s.tgz", arch, c.Version)
 	url := strings.TrimRight(c.DownloadBaseURL, "/") + "/" + c.Version + "/" + name
 	dir := filepath.Join(r.cacheDir, "cni", c.Version)
-	want := strings.ToLower(c.ChecksumSHA256)
-	if want == "" {
-		sumFile := filepath.Join(dir, name+".sha256")
-		if err := r.download(ctx, url+".sha256", sumFile, ""); err != nil {
-			return nil, err
-		}
+	rf := &remoteFile{url: url, name: name, sha256: strings.ToLower(c.ChecksumSHA256), dir: dir}
+	if rf.sha256 == "" {
 		var err error
-		if want, err = lookupSum(sumFile, name); err != nil {
+		if rf.sha256, rf.cachedSums, err = r.sums(ctx, url+".sha256", filepath.Join(dir, name+".sha256"), name, fresh); err != nil {
 			return nil, err
 		}
 	}
-	return &remoteFile{url: url, name: name, sha256: want, dir: dir}, nil
+	return rf, nil
 }
 
 // Download is a file that a machine downloads itself (the install script of
@@ -228,7 +274,7 @@ func (r *Resolver) ReleaseDownload(ctx context.Context, goos, arch string) (*Dow
 	default:
 		return nil, fmt.Errorf("release source %q has no download URL", r.plan.Release.Source)
 	}
-	rf, err := r.releaseArchive(ctx, goos, arch)
+	rf, err := r.releaseArchive(ctx, goos, arch, false)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +288,7 @@ func (r *Resolver) CNIDownload(ctx context.Context, arch string) (*Download, err
 	if r.plan.CNI.Source == config.ReleaseLocalPath {
 		return nil, fmt.Errorf("cni source %q has no download URL", r.plan.CNI.Source)
 	}
-	rf, err := r.cniArchive(ctx, arch)
+	rf, err := r.cniArchive(ctx, arch, false)
 	if err != nil {
 		return nil, err
 	}
@@ -269,17 +315,52 @@ func (r *Resolver) download(ctx context.Context, url, dest, want string) error {
 		return err
 	}
 	fmt.Fprintf(r.log, "    Downloading %s\n", url)
+	delay := r.retryDelay
+	for attempt := 1; ; attempt++ {
+		err := r.fetch(ctx, url, dest, want)
+		var passing *passingError
+		if err == nil || !errors.As(err, &passing) || attempt == downloadAttempts {
+			return err
+		}
+		fmt.Fprintf(r.log, "    %v; trying again in %s (attempt %d of %d)\n", err, delay, attempt+1, downloadAttempts)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
+}
+
+// passingError is a failure of a download that may not happen again: a
+// network error, or an answer 5xx or 429 of the server (a 504 of GitHub, for
+// example). Any other answer, and a file that does not match its digest,
+// is final.
+type passingError struct{ err error }
+
+func (e *passingError) Error() string { return e.err.Error() }
+func (e *passingError) Unwrap() error { return e.err }
+
+// fetch makes one attempt of a download.
+func (r *Resolver) fetch(ctx context.Context, url, dest, want string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return fmt.Errorf("download %s: %w", url, err)
 	}
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("download %s: %w", url, err)
+		if ctx.Err() != nil {
+			return fmt.Errorf("download %s: %w", url, err)
+		}
+		return &passingError{fmt.Errorf("download %s: %w", url, err)}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download %s: HTTP %s", url, resp.Status)
+		err := fmt.Errorf("download %s: HTTP %s", url, resp.Status)
+		if resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests {
+			return &passingError{err}
+		}
+		return err
 	}
 	tmp := dest + ".part"
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
@@ -287,18 +368,20 @@ func (r *Resolver) download(ctx context.Context, url, dest, want string) error {
 		return err
 	}
 	h := sha256.New()
-	_, err = io.Copy(io.MultiWriter(f, h), resp.Body)
+	_, copyErr := io.Copy(io.MultiWriter(f, h), resp.Body)
 	// A Close error of a written file is a file that is not complete.
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
+	closeErr := f.Close()
+	if copyErr != nil || closeErr != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("download %s: %w", url, err)
+		if copyErr != nil && ctx.Err() == nil {
+			// The connection broke while the body was read.
+			return &passingError{fmt.Errorf("download %s: %w", url, copyErr)}
+		}
+		return fmt.Errorf("download %s: %w", url, errors.Join(copyErr, closeErr))
 	}
 	if got := hex.EncodeToString(h.Sum(nil)); want != "" && got != want {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("download %s: sha256 %s does not match the expected %s", url, got, want)
+		return fmt.Errorf("download %s: sha256 %s does not match the expected %s: %w", url, got, want, errChecksum)
 	}
 	return os.Rename(tmp, dest)
 }
