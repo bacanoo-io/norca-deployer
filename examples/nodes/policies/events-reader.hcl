@@ -3,7 +3,7 @@
 # JetStream consumer of the stream NORCA_EVENTS_eu-central. Give its token to
 # the service; it connects to the bus port (4649) of any server.
 bus {
-  subscribe = ["nomad.eu-central.>"]
+  subscribe = ["norca.eu-central.>"]
   publish = [
     "$JS.API.INFO",
     "$JS.API.STREAM.INFO.NORCA_EVENTS_eu-central",

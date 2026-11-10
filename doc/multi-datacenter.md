@@ -147,7 +147,7 @@ Every stream and the bucket have one replica per server, up to three. With one s
 
 The leader publishes the event stream of the region (jobs, deployments, evaluations, allocations, nodes, services, scaling, ...) on the bus:
 
-- **Subjects:** `nomad.<region>.<namespace>.<topic>`, e.g. `nomad.eu.default.Allocation` (`_` for events without a namespace, such as `nomad.eu._.Node`).
+- **Subjects:** `norca.<region>.<namespace>.<topic>`, e.g. `norca.eu.default.Allocation` (`_` for events without a namespace, such as `norca.eu._.Node`).
 - **Stream:** `NORCA_EVENTS_<region>` with one replica per server (up to three), so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication; a new leader continues after the newest event of the stream.
 - **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra_hcl`).
 - **Ports:** the routes between the servers use `network.ports.bus_cluster` (4650), consumers connect to `network.ports.bus` (4649); with `apply_firewall_rules` both are opened to `cluster_cidrs`.
@@ -155,7 +155,7 @@ The leader publishes the event stream of the region (jobs, deployments, evaluati
 
 ```sh
 nats --server tls://10.10.1.11:4649 --tlsca .norca-deployer/certs/ca.pem --user "$TOKEN" \
-  sub 'nomad.eu.>'
+  sub 'norca.eu.>'
 norca operator bus status               # streams, routes and JetStream state of a server
 ```
 
