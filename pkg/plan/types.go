@@ -709,14 +709,18 @@ type ServerSettings struct {
 }
 
 type ClientSettings struct {
-	NetworkInterface     string             `yaml:"network_interface,omitempty" json:"network_interface,omitempty"`
-	CNISubnet            string             `yaml:"cni_subnet,omitempty" json:"cni_subnet,omitempty"`
-	CNIPlugins           []string           `yaml:"cni_plugins,omitempty" json:"cni_plugins,omitempty"`
-	Drivers              []string           `yaml:"drivers,omitempty" json:"drivers,omitempty"` // docker, exec, raw_exec
-	EnableRawExec        bool               `yaml:"enable_raw_exec" json:"enable_raw_exec"`
-	GCDiskUsageThreshold int                `yaml:"gc_disk_usage_threshold,omitempty" json:"gc_disk_usage_threshold,omitempty"`
-	NativeAppVolumes     *NativeAppVolumes  `yaml:"native_app_volumes,omitempty" json:"native_app_volumes,omitempty"`
-	CustomHostVolumes    []HostVolumeConfig `yaml:"custom_host_volumes,omitempty" json:"custom_host_volumes,omitempty"`
+	NetworkInterface string   `yaml:"network_interface,omitempty" json:"network_interface,omitempty"`
+	CNISubnet        string   `yaml:"cni_subnet,omitempty" json:"cni_subnet,omitempty"`
+	CNIPlugins       []string `yaml:"cni_plugins,omitempty" json:"cni_plugins,omitempty"`
+	Drivers          []string `yaml:"drivers,omitempty" json:"drivers,omitempty"` // docker, exec, raw_exec
+	EnableRawExec    bool     `yaml:"enable_raw_exec" json:"enable_raw_exec"`
+	// RawExecAllowedDevices are the devices raw_exec tasks may use beyond
+	// the default ones where cgroups filter devices (Norca raw_exec
+	// allowed_devices): paths under /dev, e.g. /dev/fuse, or "*".
+	RawExecAllowedDevices []string           `yaml:"raw_exec_allowed_devices,omitempty" json:"raw_exec_allowed_devices,omitempty"`
+	GCDiskUsageThreshold  int                `yaml:"gc_disk_usage_threshold,omitempty" json:"gc_disk_usage_threshold,omitempty"`
+	NativeAppVolumes      *NativeAppVolumes  `yaml:"native_app_volumes,omitempty" json:"native_app_volumes,omitempty"`
+	CustomHostVolumes     []HostVolumeConfig `yaml:"custom_host_volumes,omitempty" json:"custom_host_volumes,omitempty"`
 
 	// NodeClass and Meta are the scheduling labels of the node: jobs select
 	// nodes with constraint, affinity, spread or separate on

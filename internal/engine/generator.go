@@ -230,13 +230,7 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		sb.WriteString("}\n")
 
 		// raw_exec is disabled unless enabled explicitly in its plugin block.
-		if cs.EnableRawExec {
-			sb.WriteString("\nplugin \"raw_exec\" {\n")
-			sb.WriteString("  config {\n")
-			sb.WriteString("    enabled = true\n")
-			sb.WriteString("  }\n")
-			sb.WriteString("}\n")
-		}
+		writeRawExecPlugin(&sb, cs)
 	}
 
 	return sb.String()
@@ -439,4 +433,24 @@ func writeExtraHCL(sb *strings.Builder, extra string) {
 	for line := range strings.SplitSeq(extra, "\n") {
 		sb.WriteString("  " + line + "\n")
 	}
+}
+
+// writeRawExecPlugin writes the raw_exec plugin block of a client that enables
+// it: enabled, and the devices its tasks may use beyond the default ones.
+func writeRawExecPlugin(sb *strings.Builder, cs *config.ClientSettings) {
+	if !cs.EnableRawExec {
+		return
+	}
+	sb.WriteString("\nplugin \"raw_exec\" {\n")
+	sb.WriteString("  config {\n")
+	sb.WriteString("    enabled = true\n")
+	if len(cs.RawExecAllowedDevices) > 0 {
+		quoted := make([]string, len(cs.RawExecAllowedDevices))
+		for i, d := range cs.RawExecAllowedDevices {
+			quoted[i] = fmt.Sprintf("%q", d)
+		}
+		sb.WriteString(fmt.Sprintf("    allowed_devices = [%s]\n", strings.Join(quoted, ", ")))
+	}
+	sb.WriteString("  }\n")
+	sb.WriteString("}\n")
 }

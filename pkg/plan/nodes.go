@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"net"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -76,6 +77,9 @@ func mergeClientSettings(d, n *ClientSettings) *ClientSettings {
 		r.GCDiskUsageThreshold = d.GCDiskUsageThreshold
 	}
 	r.EnableRawExec = r.EnableRawExec || d.EnableRawExec
+	if len(r.RawExecAllowedDevices) == 0 {
+		r.RawExecAllowedDevices = append([]string(nil), d.RawExecAllowedDevices...)
+	}
 	if len(r.Drivers) == 0 {
 		r.Drivers = append([]string{}, d.Drivers...)
 	}
@@ -162,6 +166,11 @@ func (p *DeploymentPlan) validateNodeSettings() error {
 		}
 		if strings.Contains(cs.ExtraHCL, "\x00") {
 			return fmt.Errorf("%s: extra_hcl contains a NUL byte", what)
+		}
+		for _, dev := range cs.RawExecAllowedDevices {
+			if dev != "*" && !strings.HasPrefix(path.Clean(dev), "/dev/") {
+				return fmt.Errorf("%s: raw_exec_allowed_devices: %q is neither \"*\" nor a device path under /dev", what, dev)
+			}
 		}
 		return nil
 	}

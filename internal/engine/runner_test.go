@@ -253,6 +253,15 @@ func TestGenerateGossipAndJoin(t *testing.T) {
 	if !strings.Contains(client, "plugin \"raw_exec\" {\n  config {\n    enabled = true") {
 		t.Errorf("raw_exec plugin block missing:\n%s", client)
 	}
+	if strings.Contains(client, "allowed_devices") {
+		t.Errorf("allowed_devices without raw_exec_allowed_devices:\n%s", client)
+	}
+
+	c.ClientSettings.RawExecAllowedDevices = []string{"/dev/fuse"}
+	client = GenerateNorcaConfig(c, plan, storage.ResolveNodePaths(c, plan), false, GenOptions{})
+	if !strings.Contains(client, "    enabled = true\n    allowed_devices = [\"/dev/fuse\"]\n  }\n}") {
+		t.Errorf("raw_exec allowed_devices missing:\n%s", client)
+	}
 }
 
 // An interrupt while a server restarts: that server is finished (restarted and

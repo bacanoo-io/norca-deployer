@@ -379,6 +379,7 @@ Nodes to take out of the cluster and uninstall; see [Adding and removing nodes](
 | --- | --- | --- |
 | `drivers` | `[docker, exec]` | `driver.allowlist` |
 | `enable_raw_exec` | `false` | Enable the `raw_exec` plugin |
+| `raw_exec_allowed_devices` | | Devices `raw_exec` tasks may use beyond the default ones (cgroups v2 filters them): paths under `/dev`, e.g. `[/dev/fuse]` for FUSE mounts, or `["*"]`; written as `allowed_devices` of the `raw_exec` plugin |
 | `network_interface` | | Interface for allocation addresses |
 | `gc_disk_usage_threshold` | | Allocation GC threshold in percent |
 | `native_app_volumes.enable_defaults` | `false` | Native application host volumes under `apps_dir` |

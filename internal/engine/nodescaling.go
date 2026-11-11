@@ -119,9 +119,7 @@ func GenerateNodeTemplate(plan *config.DeploymentPlan) string {
 	writeExtraHCL(&sb, cs.ExtraHCL)
 	sb.WriteString("}\n")
 
-	if cs.EnableRawExec {
-		sb.WriteString("\nplugin \"raw_exec\" {\n  config {\n    enabled = true\n  }\n}\n")
-	}
+	writeRawExecPlugin(&sb, cs)
 	return sb.String()
 }
 
