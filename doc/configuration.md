@@ -366,7 +366,8 @@ Nodes to take out of the cluster and uninstall; see [Adding and removing nodes](
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `bootstrap_expect` | number of masters | Must equal the number of masters |
+| `role` | `voter` | Role of the server in the Raft cluster: `voter`, `standby` (gets a vote only when a voter fails, with autopilot `target_voters`) or `observer` (never votes) |
+| `bootstrap_expect` | number of masters with the role `voter` | Must equal the number of masters with the role `voter` |
 | `raft_multiplier` | `1` | Raft timing multiplier |
 | `log_level` | `INFO` | Agent log level |
 | `extra_hcl` | | Lines appended inside the server block |

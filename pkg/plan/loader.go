@@ -234,7 +234,7 @@ func (p *DeploymentPlan) SetDefaults() {
 	// Inventory defaults; client_defaults first, so that the driver default
 	// below only applies when neither sets drivers.
 	p.applyClientDefaults()
-	masterCount := len(p.Inventory.Masters)
+	voterCount := p.voterMasters()
 	for i := range p.Inventory.Masters {
 		m := &p.Inventory.Masters[i]
 		if m.Platform == "" {
@@ -256,7 +256,7 @@ func (p *DeploymentPlan) SetDefaults() {
 			m.ServerSettings = &ServerSettings{}
 		}
 		if m.ServerSettings.BootstrapExpect == 0 {
-			m.ServerSettings.BootstrapExpect = masterCount
+			m.ServerSettings.BootstrapExpect = voterCount
 		}
 		if m.ServerSettings.RaftMultiplier == 0 {
 			m.ServerSettings.RaftMultiplier = 1
@@ -374,14 +374,26 @@ func (p *DeploymentPlan) Validate() error {
 		return fmt.Errorf("at least one master (server) node must be specified in the inventory")
 	}
 
-	masterCount := len(p.Inventory.Masters)
+	voterCount := p.voterMasters()
+	if voterCount == 0 {
+		return fmt.Errorf("at least one master must have the role %q", ServerRoleVoter)
+	}
 	for idx, m := range p.Inventory.Masters {
 		if m.Host == "" {
 			return fmt.Errorf("master[%d]: 'host' field is required", idx)
 		}
-		if m.ServerSettings != nil && m.ServerSettings.BootstrapExpect != masterCount {
-			return fmt.Errorf("master[%s]: bootstrap_expect (%d) does not match total masters count (%d)",
-				m.Host, m.ServerSettings.BootstrapExpect, masterCount)
+		if m.ServerSettings == nil {
+			continue
+		}
+		switch m.ServerSettings.Role {
+		case "", ServerRoleVoter, ServerRoleStandby, ServerRoleObserver:
+		default:
+			return fmt.Errorf("master[%s]: role %q must be %s, %s or %s", m.Host, m.ServerSettings.Role,
+				ServerRoleVoter, ServerRoleStandby, ServerRoleObserver)
+		}
+		if m.ServerSettings.BootstrapExpect != voterCount {
+			return fmt.Errorf("master[%s]: bootstrap_expect (%d) does not match the number of masters with the role voter (%d)",
+				m.Host, m.ServerSettings.BootstrapExpect, voterCount)
 		}
 	}
 
@@ -448,4 +460,23 @@ func (p *DeploymentPlan) validateBackup() error {
 		return fmt.Errorf("backup.encryption.recipients: at least one age recipient is required (Norca encrypts every backup)")
 	}
 	return nil
+}
+
+// Server roles of server_settings.role (norca server.role).
+const (
+	ServerRoleVoter    = "voter"
+	ServerRoleStandby  = "standby"
+	ServerRoleObserver = "observer"
+)
+
+// voterMasters returns the number of masters with the voter role (no role
+// is the voter role): the servers that bootstrap the cluster.
+func (p *DeploymentPlan) voterMasters() int {
+	n := 0
+	for _, m := range p.Inventory.Masters {
+		if m.ServerSettings == nil || m.ServerSettings.Role == "" || m.ServerSettings.Role == ServerRoleVoter {
+			n++
+		}
+	}
+	return n
 }

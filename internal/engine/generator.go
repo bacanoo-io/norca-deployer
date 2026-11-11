@@ -152,6 +152,9 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		sb.WriteString("server {\n")
 		sb.WriteString("  enabled          = true\n")
 		sb.WriteString(fmt.Sprintf("  bootstrap_expect = %d\n", node.ServerSettings.BootstrapExpect))
+		if role := node.ServerSettings.Role; role != "" && role != config.ServerRoleVoter {
+			sb.WriteString(fmt.Sprintf("  role             = %q\n", role))
+		}
 		if node.ServerSettings.RaftMultiplier > 1 {
 			sb.WriteString(fmt.Sprintf("  raft_multiplier  = %d\n", node.ServerSettings.RaftMultiplier))
 		}

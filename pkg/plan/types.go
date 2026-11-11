@@ -693,6 +693,10 @@ type ConnectionConfig struct {
 }
 
 type ServerSettings struct {
+	// Role is the role of the server in the Raft cluster: voter (the
+	// default), standby or observer (norca server.role). Only voter-role
+	// servers count for bootstrap_expect.
+	Role            string `yaml:"role,omitempty" json:"role,omitempty"`
 	BootstrapExpect int    `yaml:"bootstrap_expect" json:"bootstrap_expect"`
 	RaftMultiplier  int    `yaml:"raft_multiplier,omitempty" json:"raft_multiplier,omitempty"`
 	LogLevel        string `yaml:"log_level,omitempty" json:"log_level,omitempty"`

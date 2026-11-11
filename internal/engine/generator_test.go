@@ -265,3 +265,27 @@ func TestGenerateBusPorts(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateServerRole(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Inventory: config.InventoryConfig{Masters: []config.NodeConfig{
+			{Host: "10.0.0.1", Hostname: "m1"},
+			{Host: "10.0.0.2", Hostname: "m2", ServerSettings: &config.ServerSettings{Role: "voter"}},
+			{Host: "10.0.0.3", Hostname: "m3", ServerSettings: &config.ServerSettings{Role: "standby"}},
+		}},
+	}
+	plan.SetDefaults()
+	for i, want := range []string{"", "", `role             = "standby"`} {
+		node := &plan.Inventory.Masters[i]
+		hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+		if !strings.Contains(hcl, "bootstrap_expect = 2") {
+			t.Errorf("%s: bootstrap_expect is not the 2 voter-role masters:\n%s", node.Hostname, hcl)
+		}
+		if want == "" && strings.Contains(hcl, "role ") {
+			t.Errorf("%s: a voter has a role line:\n%s", node.Hostname, hcl)
+		}
+		if want != "" && !strings.Contains(hcl, want) {
+			t.Errorf("%s: generated config lacks %q:\n%s", node.Hostname, want, hcl)
+		}
+	}
+}
