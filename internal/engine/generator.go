@@ -317,7 +317,11 @@ func writeMetricsStore(sb *strings.Builder, m *config.MetricsStoreConfig) {
 func writeBackup(sb *strings.Builder, b *config.BackupConfig) {
 	sb.WriteString("\n  backup {\n")
 	sb.WriteString("    enabled  = true\n")
-	sb.WriteString(fmt.Sprintf("    schedule = %q\n\n", b.Schedule))
+	sb.WriteString(fmt.Sprintf("    schedule = %q\n", b.Schedule))
+	if b.PreferObserver {
+		sb.WriteString("    prefer_observer = true\n")
+	}
+	sb.WriteString("\n")
 	sb.WriteString(fmt.Sprintf("    destination %q {\n", b.Destination.Name))
 	sb.WriteString(fmt.Sprintf("      type             = %q\n", b.Destination.Type))
 	if b.Destination.Path != "" {

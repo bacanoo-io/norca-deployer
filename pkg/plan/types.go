@@ -432,6 +432,10 @@ type BackupConfig struct {
 	Destination BackupDestinationConfig `yaml:"destination" json:"destination"`
 	Encryption  BackupEncryptionConfig  `yaml:"encryption" json:"encryption"`
 	Retention   *BackupRetentionConfig  `yaml:"retention,omitempty" json:"retention,omitempty"`
+
+	// PreferObserver makes the leader ask an observer server (server_settings
+	// role observer) to take the scheduled and manual backups.
+	PreferObserver bool `yaml:"prefer_observer,omitempty" json:"prefer_observer,omitempty"`
 }
 
 type BackupDestinationConfig struct {

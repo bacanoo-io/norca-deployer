@@ -289,3 +289,27 @@ func TestGenerateServerRole(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateBackupPreferObserver(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Inventory: config.InventoryConfig{Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "m1"}}},
+		Backup: &config.BackupConfig{
+			Enabled:     true,
+			Schedule:    "0 * * * *",
+			Destination: config.BackupDestinationConfig{Name: "local", Type: "directory", Path: "/srv/backups"},
+			Encryption:  config.BackupEncryptionConfig{Recipients: []string{"age1abc"}},
+		},
+	}
+	plan.SetDefaults()
+	node := &plan.Inventory.Masters[0]
+	gen := func() string {
+		return GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	}
+	if strings.Contains(gen(), "prefer_observer") {
+		t.Errorf("prefer_observer written without the plan setting it")
+	}
+	plan.Backup.PreferObserver = true
+	if hcl := gen(); !strings.Contains(hcl, "prefer_observer = true") {
+		t.Errorf("generated config lacks prefer_observer:\n%s", hcl)
+	}
+}

@@ -150,6 +150,7 @@ Built-in snapshots of the server state, written to the server block of `norca.hc
 | --- | --- |
 | `enabled` | Turn backups on |
 | `schedule` | Cron expression |
+| `prefer_observer` | The leader asks an observer server (`server_settings.role: observer`) to take the backups; the leader takes them when no observer can. A `directory` destination must then be shared storage on every server |
 | `destination.name` | Destination name (required) |
 | `destination.type` | `s3` (default) or `directory` |
 | `destination.endpoint`, `bucket`, `prefix`, `force_path_style` | S3 settings; `bucket` is required for `s3` |
