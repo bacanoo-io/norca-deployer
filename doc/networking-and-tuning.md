@@ -44,7 +44,7 @@ tuning:
 | TCP/UDP 4648 (Serf) | Servers | `cluster_cidrs` (servers of other regions must be in it) |
 | TCP 4649 (system bus clients) | Servers | `cluster_cidrs` |
 | TCP 4650 (system bus routes between the servers) | Servers | `cluster_cidrs` |
-| TCP/UDP 20000-32000 (allocations) | Nodes running a client, with `open_ephemeral_ports` | `ephemeral_cidrs`, default `cluster_cidrs` |
+| TCP/UDP 20000-32000 (allocations) | Nodes running a client, with `open_ephemeral_ports` | `ephemeral_cidrs`, default `cluster_cidrs`; **host network mode only**, see below |
 | SSH | All, with `default_deny` | Any source |
 | `extra_ports` | Nodes of their `roles` (default: nodes running a client) | Their `cidrs`, default `cluster_cidrs` |
 
@@ -60,7 +60,10 @@ tuning:
         roles: [client]         # default [client]
 ```
 
-An empty list means **any source**; `plan` prints `ANY source` for such ports. Allocation ports are allowed both for host network mode (`INPUT`) and for bridge mode. In bridge mode the CNI port mapping forwards the traffic to the allocation on the bridge of the client (`nomad`, the default of `bridge_network_name`), so it never reaches `INPUT`, and the forwarding rule sees the allocation's own port. The forwarding rule therefore limits the source (`ephemeral_cidrs`), not the port.
+An empty list means **any source**; `plan` prints `ANY source` for such ports. Allocation ports of host network mode are allowed from `ephemeral_cidrs` (`INPUT`).
+
+> [!IMPORTANT]
+> **`ephemeral_cidrs` does not limit allocations in bridge mode.** There the CNI port mapping forwards the traffic to the allocation on the bridge of the client (`nomad`, the default of `bridge_network_name`), so it never reaches `INPUT`, and the forwarding chain of the client accepts it from every source before the rule of the deployer is looked at. **A mapped port of an allocation in bridge mode answers every network the node has an address in**, also with `default_deny`. Keep nodes that run such allocations off public networks, or filter in front of them. The deployer still writes its forwarding rule (`ufw status` shows it), and it lets the allocations reach the network.
 
 **`default_deny: true`** turns ufw on with incoming traffic denied unless a rule allows it (`ufw default deny incoming`, `allow outgoing`). Before that, the deployer allows the SSH port it connected on and every port `sshd` listens on, so it cannot lock itself out. A running firewalld already denies by default. Without ufw or a running firewalld, `default_deny` fails the node; install ufw with [host packages](host-packages-and-scripts.md).
 
@@ -75,7 +78,7 @@ An empty list means **any source**; `plan` prints `ANY source` for such ports. A
 **Notes**
 
 - Earlier deployer versions set `DEFAULT_FORWARD_POLICY="ACCEPT"` in `/etc/default/ufw`. Forwarded traffic is then not filtered; the deployer warns, and you should set it back to `DROP`.
-- Ports published by the Docker daemon itself (not by Norca's bridge mode) bypass ufw through Docker's own iptables chains. Use `network { mode = "bridge" }` in jobs, or keep such services off public interfaces.
+- Ports published by the Docker daemon itself (not by Norca's bridge mode) bypass ufw through Docker's own iptables chains, and so do the mapped ports of Norca's bridge mode (see above). Keep such services off public interfaces.
 - Firewall problems other than a failed `default_deny` are warnings and do not stop the node.
 
 ## Kernel tuning (Linux)
