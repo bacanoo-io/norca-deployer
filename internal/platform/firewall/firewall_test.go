@@ -124,13 +124,119 @@ func TestDefaultDenyEnablesUFWWithSSH(t *testing.T) {
 		t.Fatalf("SSH must be allowed before deny and enable:\n%s", cmds)
 	}
 	for _, want := range []string{
-		"ufw route allow out on cni0 from 10.8.0.0/24 comment 'norca:fwd:10.8.0.0/24'",
-		"ufw route allow in on cni0",
+		"ufw route allow out on nomad from 10.8.0.0/24 comment 'norca:fwd:10.8.0.0/24'",
+		"ufw route allow in on nomad comment 'norca:cni-egress'",
 	} {
 		if !strings.Contains(cmds, want) {
 			t.Fatalf("missing %q:\n%s", want, cmds)
 		}
 	}
+	if strings.Contains(cmds, "cni0") {
+		t.Fatalf("a rule names cni0, which is not the bridge of the client:\n%s", cmds)
+	}
+}
+
+// The rules of bridge mode name the bridge of the client: "nomad" unless the
+// spec names another. The rules an earlier version made for cni0 are
+// removed, after the new ones are there.
+func TestBridgeRules(t *testing.T) {
+	spec := Spec{Ports: ports, Client: true, OpenEphemeral: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
+
+	t.Run("ufw replaces the cni0 rules", func(t *testing.T) {
+		c := ufwFake(true, `Added user rules (see 'ufw status' for running firewall):
+ufw route allow out on cni0 from 10.8.0.0/24 comment 'norca:fwd:10.8.0.0/24'
+ufw route allow in on cni0 comment 'norca:cni-egress'`)
+		if _, err := Configure(c, spec); err != nil {
+			t.Fatal(err)
+		}
+		cmds := strings.Join(c.Commands, "\n")
+		add := strings.Index(cmds, "ufw route allow out on nomad from 10.8.0.0/24 comment 'norca:fwd:10.8.0.0/24'")
+		del := strings.Index(cmds, "ufw route delete allow out on cni0 from 10.8.0.0/24")
+		if add < 0 || del < add {
+			t.Fatalf("expected the rule of nomad before the rule of cni0 is deleted:\n%s", cmds)
+		}
+		for _, want := range []string{"ufw route allow in on nomad comment 'norca:cni-egress'", "ufw route delete allow in on cni0"} {
+			if !strings.Contains(cmds, want) {
+				t.Fatalf("missing %q:\n%s", want, cmds)
+			}
+		}
+	})
+
+	t.Run("ufw with a bridge of another name", func(t *testing.T) {
+		c := ufwFake(true, "")
+		named := spec
+		named.Bridge = "br-alloc"
+		if _, err := Configure(c, named); err != nil {
+			t.Fatal(err)
+		}
+		cmds := strings.Join(c.Commands, "\n")
+		for _, want := range []string{"ufw route allow out on br-alloc from 10.8.0.0/24", "ufw route allow in on br-alloc"} {
+			if !strings.Contains(cmds, want) {
+				t.Fatalf("missing %q:\n%s", want, cmds)
+			}
+		}
+	})
+
+	t.Run("iptables replaces the cni0 rules", func(t *testing.T) {
+		c := connector.NewFakeConnector()
+		c.Handler = func(cmd string) (string, error, bool) {
+			switch {
+			case strings.HasPrefix(cmd, "command -v ufw"), strings.HasPrefix(cmd, "command -v firewall-cmd"):
+				return "", errors.New("not found"), true
+			case cmd == "iptables -S FORWARD":
+				return "-P FORWARD DROP\n" +
+					"-A FORWARD -i cni0 -m comment --comment norca:cni-egress -j ACCEPT\n" +
+					"-A FORWARD -s 10.8.0.0/24 -o cni0 -m comment --comment norca:fwd:10.8.0.0/24 -j ACCEPT\n" +
+					"-A FORWARD -s 10.8.0.0/24 -o nomad -m comment --comment norca:fwd:10.8.0.0/24 -j ACCEPT", nil, true
+			}
+			return "", nil, true
+		}
+		if _, err := Configure(c, spec); err != nil {
+			t.Fatal(err)
+		}
+		cmds := strings.Join(c.Commands, "\n")
+		for _, want := range []string{
+			"iptables -I FORWARD -o nomad -s 10.8.0.0/24 -m comment --comment norca:fwd:10.8.0.0/24 -j ACCEPT",
+			"iptables -I FORWARD -i nomad -m comment --comment norca:cni-egress -j ACCEPT",
+			"iptables -D FORWARD -i cni0 -m comment --comment norca:cni-egress -j ACCEPT",
+			"iptables -D FORWARD -s 10.8.0.0/24 -o cni0 -m comment --comment norca:fwd:10.8.0.0/24 -j ACCEPT",
+		} {
+			if !strings.Contains(cmds, want) {
+				t.Fatalf("missing %q:\n%s", want, cmds)
+			}
+		}
+		if strings.Contains(cmds, "iptables -D FORWARD -s 10.8.0.0/24 -o nomad") {
+			t.Fatalf("removed the rule of the bridge of the client:\n%s", cmds)
+		}
+	})
+
+	t.Run("firewalld trusts the bridge of the client", func(t *testing.T) {
+		c := connector.NewFakeConnector()
+		c.Handler = func(cmd string) (string, error, bool) {
+			switch {
+			case strings.HasPrefix(cmd, "command -v ufw"):
+				return "", errors.New("not found"), true
+			case strings.HasPrefix(cmd, "command -v firewall-cmd"):
+				return "running", nil, true
+			}
+			return "", nil, true
+		}
+		if _, err := Configure(c, spec); err != nil {
+			t.Fatal(err)
+		}
+		cmds := strings.Join(c.Commands, "\n")
+		for _, want := range []string{
+			"firewall-cmd --permanent --zone=trusted --add-interface=nomad",
+			"firewall-cmd --permanent --zone=trusted --remove-interface=cni0",
+		} {
+			if !strings.Contains(cmds, want) {
+				t.Fatalf("missing %q:\n%s", want, cmds)
+			}
+		}
+		if strings.Contains(cmds, "--add-interface=cni0") {
+			t.Fatalf("cni0 put into the trusted zone:\n%s", cmds)
+		}
+	})
 }
 
 func TestDefaultDenyNeedsUFWOrFirewalld(t *testing.T) {

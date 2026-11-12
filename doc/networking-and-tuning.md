@@ -60,14 +60,14 @@ tuning:
         roles: [client]         # default [client]
 ```
 
-An empty list means **any source**; `plan` prints `ANY source` for such ports. Allocation ports are allowed both for host network mode (`INPUT`) and for bridge mode. In bridge mode the CNI port mapping forwards the traffic to the allocation on `cni0`, so it never reaches `INPUT`, and the forwarding rule sees the allocation's own port. The forwarding rule therefore limits the source (`ephemeral_cidrs`), not the port.
+An empty list means **any source**; `plan` prints `ANY source` for such ports. Allocation ports are allowed both for host network mode (`INPUT`) and for bridge mode. In bridge mode the CNI port mapping forwards the traffic to the allocation on the bridge of the client (`nomad`, the default of `bridge_network_name`), so it never reaches `INPUT`, and the forwarding rule sees the allocation's own port. The forwarding rule therefore limits the source (`ephemeral_cidrs`), not the port.
 
 **`default_deny: true`** turns ufw on with incoming traffic denied unless a rule allows it (`ufw default deny incoming`, `allow outgoing`). Before that, the deployer allows the SSH port it connected on and every port `sshd` listens on, so it cannot lock itself out. A running firewalld already denies by default. Without ufw or a running firewalld, `default_deny` fails the node; install ufw with [host packages](host-packages-and-scripts.md).
 
 **Backends**, in this order:
 
-- **ufw**, when active (or installed, with `default_deny`): `ufw allow` rules with the source, `ufw route allow out on cni0` rules for bridge-mode allocations and `ufw route allow in on cni0` for their egress.
-- **firewalld**, when running: ports open to any source, rich rules for restricted sources, `cni0` in the trusted zone with masquerading in that zone.
+- **ufw**, when active (or installed, with `default_deny`): `ufw allow` rules with the source, `ufw route allow out on nomad` rules for bridge-mode allocations and `ufw route allow in on nomad` for their egress.
+- **firewalld**, when running: ports open to any source, rich rules for restricted sources, the bridge `nomad` in the trusted zone with masquerading in that zone.
 - **iptables** (fallback): `INPUT` and `FORWARD` rules with the source. They are not persistent across reboots, and if the `INPUT` policy is `ACCEPT` (the default on a plain Debian) they restrict nothing; the deployer warns about that. Use ufw with `default_deny` instead.
 
 **Rule management.** Every rule carries an identifier (`norca:<port>/<proto>:<source>`, as a ufw or iptables comment). A later `apply` adds the rules the plan asks for first, then removes its own rules the plan no longer asks for (for example after a CIDR change), including the open rules of earlier deployer versions. Rules it did not create are not touched; with firewalld it only manages the Norca ports.

@@ -31,6 +31,15 @@ const (
 	dynamicLow  = 20000
 	dynamicHigh = 32000
 
+	// DefaultBridge is the bridge of the bridge network mode of a client
+	// whose configuration does not name one (bridge_network_name): the
+	// interface the allocations of that mode are attached to.
+	DefaultBridge = "nomad"
+	// staleBridge is the interface the rules of earlier deployer versions
+	// named: the default bridge of the CNI bridge plugin, which is not the
+	// one the client makes. Those rules matched nothing.
+	staleBridge = "cni0"
+
 	// idPrefix starts the identifier of every rule the deployer manages.
 	idPrefix = "norca:"
 	// legacyPrefix starts the ufw comments of earlier deployer versions.
@@ -42,6 +51,10 @@ type Spec struct {
 	Ports  Ports
 	Server bool // the node runs a server: HTTP, RPC and Serf
 	Client bool // the node runs a client: allocation ports and CNI forwarding
+
+	// Bridge is the bridge of the client's bridge network mode; empty is
+	// DefaultBridge.
+	Bridge string
 
 	OpenEphemeral bool
 	// DynamicMin/Max is the allocation port range; 0 uses 20000-32000.
@@ -78,6 +91,8 @@ type Rule struct {
 	// the traffic never reaches INPUT, and FORWARD sees the allocation's own
 	// port. Forward rules therefore match the source only, not the port.
 	Forward bool
+	// Bridge is the bridge a forward rule is for.
+	Bridge string
 }
 
 // ID identifies a rule: norca:<port>/<proto>:<source|any>, or
@@ -100,12 +115,24 @@ func sources(list []string) []string {
 	return list
 }
 
+// bridge returns the bridge of the client's bridge network mode.
+func (s Spec) bridge() string {
+	if s.Bridge == "" {
+		return DefaultBridge
+	}
+	return s.Bridge
+}
+
 // Rules returns the rules the node needs.
 func (s Spec) Rules() []Rule {
 	var rules []Rule
 	add := func(port, proto string, srcs []string, forward bool) {
 		for _, src := range sources(srcs) {
-			rules = append(rules, Rule{Port: port, Proto: proto, Source: src, Forward: forward})
+			r := Rule{Port: port, Proto: proto, Source: src, Forward: forward}
+			if forward {
+				r.Bridge = s.bridge()
+			}
+			rules = append(rules, r)
 		}
 	}
 	if s.DefaultDeny {
@@ -137,7 +164,7 @@ func (s Spec) Rules() []Rule {
 		for _, proto := range []string{"tcp", "udp"} {
 			add(rng, proto, eph, false) // host network mode
 		}
-		add("", "", eph, true) // bridge mode (DNAT to cni0)
+		add("", "", eph, true) // bridge mode (DNAT to the bridge of the client)
 	}
 	for _, e := range s.Extra {
 		add(e.Port, e.Proto, e.Sources, false)
@@ -237,9 +264,9 @@ func (res *Result) run(conn connector.Connector, cmd string) {
 func ufwSpec(r Rule) string {
 	if r.Forward {
 		if r.Source == "" {
-			return "route allow out on cni0"
+			return "route allow out on " + r.Bridge
 		}
-		return "route allow out on cni0 from " + r.Source
+		return "route allow out on " + r.Bridge + " from " + r.Source
 	}
 	if r.Source == "" {
 		return "allow " + r.Port + "/" + r.Proto
@@ -247,8 +274,8 @@ func ufwSpec(r Rule) string {
 	return "allow from " + r.Source + " to any port " + r.Port + " proto " + r.Proto
 }
 
-// cniEgress lets allocations in bridge mode reach the network.
-const ufwCNIEgress = "route allow in on cni0"
+// ufwEgress lets allocations in bridge mode reach the network.
+func ufwEgress(bridge string) string { return "route allow in on " + bridge }
 
 func configureUFW(conn connector.Connector, s Spec, enable bool) (*Result, error) {
 	res := &Result{Backend: "ufw"}
@@ -259,8 +286,9 @@ func configureUFW(conn connector.Connector, s Spec, enable bool) (*Result, error
 		res.run(conn, "ufw "+spec+" comment "+connector.ShellQuote(r.ID()))
 	}
 	if s.Client {
-		want[ufwCNIEgress] = true
-		res.run(conn, "ufw "+ufwCNIEgress+" comment "+connector.ShellQuote(idPrefix+"cni-egress"))
+		egress := ufwEgress(s.bridge())
+		want[egress] = true
+		res.run(conn, "ufw "+egress+" comment "+connector.ShellQuote(idPrefix+"cni-egress"))
 	}
 
 	// Remove the deployer's rules the plan no longer asks for.
@@ -341,7 +369,8 @@ func configureFirewalld(conn connector.Connector, s Spec) (*Result, error) {
 
 	for _, r := range s.Rules() {
 		if r.Forward {
-			// firewalld filters forwarding to the trusted cni0 zone itself.
+			// firewalld filters forwarding to the trusted zone of the
+			// bridge itself.
 			continue
 		}
 		if r.Source == "" {
@@ -355,8 +384,14 @@ func configureFirewalld(conn connector.Connector, s Spec) (*Result, error) {
 		}
 	}
 	if s.Client {
-		res.run(conn, "firewall-cmd --permanent --zone=trusted --add-interface=cni0")
+		res.run(conn, "firewall-cmd --permanent --zone=trusted --add-interface="+s.bridge())
 		res.run(conn, "firewall-cmd --permanent --zone=trusted --add-masquerade")
+		// The interface earlier deployer versions put there.
+		if s.bridge() != staleBridge {
+			if _, err := conn.ExecuteCommand("firewall-cmd --permanent --zone=trusted --query-interface=" + staleBridge); err == nil {
+				res.run(conn, "firewall-cmd --permanent --zone=trusted --remove-interface="+staleBridge)
+			}
+		}
 	}
 
 	// Remove Norca ports and rich rules the plan no longer asks for.
@@ -394,7 +429,7 @@ func iptablesRule(r Rule) string {
 		src = " -s " + r.Source
 	}
 	if r.Forward {
-		return fmt.Sprintf("FORWARD -o cni0%s -m comment --comment %s -j ACCEPT", src, r.ID())
+		return fmt.Sprintf("FORWARD -o %s%s -m comment --comment %s -j ACCEPT", r.Bridge, src, r.ID())
 	}
 	return fmt.Sprintf("INPUT%s -p %s --dport %s -m comment --comment %s -j ACCEPT", src, r.Proto, r.Port, r.ID())
 }
@@ -423,7 +458,7 @@ func configureIPTables(conn connector.Connector, s Spec) (*Result, error) {
 	if s.Client {
 		id := idPrefix + "cni-egress"
 		want[id] = true
-		rule := "FORWARD -i cni0 -m comment --comment " + id + " -j ACCEPT"
+		rule := "FORWARD -i " + s.bridge() + " -m comment --comment " + id + " -j ACCEPT"
 		res.run(conn, "iptables -C "+rule+" 2>/dev/null || iptables -I "+rule)
 	}
 
@@ -437,7 +472,11 @@ func configureIPTables(conn connector.Connector, s Spec) (*Result, error) {
 				continue
 			}
 			id := strings.Trim(strings.Fields(line[i+len("--comment "):])[0], `"`)
-			if strings.HasPrefix(id, idPrefix) && !want[id] {
+			// A rule of an earlier deployer version for the wrong bridge
+			// has the identifier of the rule that replaces it.
+			isStale := s.bridge() != staleBridge &&
+				(strings.Contains(line, " -o "+staleBridge+" ") || strings.Contains(line, " -i "+staleBridge+" "))
+			if strings.HasPrefix(id, idPrefix) && (!want[id] || isStale) {
 				res.run(conn, "iptables -D "+strings.TrimPrefix(line, "-A "))
 			}
 		}
