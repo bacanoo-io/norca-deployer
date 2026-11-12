@@ -69,3 +69,4 @@ This directory contains the system design, architecture specifications and user 
 - [Draft issue: `norca service register` panics with "flag redefined: address" (not filed)](issue-norca-service-register-panic.md)
 - [Draft issue (deployer bug): `client_settings.cni_subnet` is read from the plan and applied nowhere (not filed)](issue-deployer-cni-subnet-unused.md)
 - [Draft issue (deployer bug): the plan cannot name the bridge of the client, and the firewall rules do not follow one set in `extra_hcl` (not filed)](issue-deployer-bridge-network-name.md)
+- [Draft issue (deployer bug, security): `firewall.ephemeral_cidrs` does not limit the source of traffic to allocations in bridge mode; confirmed on the lab with ufw and firewalld (not filed)](issue-deployer-ephemeral-cidrs-bridge.md)
