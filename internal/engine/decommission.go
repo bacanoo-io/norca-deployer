@@ -72,14 +72,14 @@ func (r *Runner) decommissionClient(cli *remoteCLI, d *config.DecommissionNode) 
 		// bridge mode) until the client garbage-collects them; collect them
 		// now, before the agent is stopped.
 		if status, out, err := cli.api("GET", "/v1/client/gc?node_id="+id, nil); err != nil || status != 200 {
-			fmt.Printf("    [WARN] %s: client GC: HTTP %d: %v %s\n", d.Hostname, status, err, strings.TrimSpace(out))
+			fmt.Printf("    [WARN] %v\n", apiError(d.Hostname+": client GC", status, out, err))
 		}
 	}
 	// The agent is stopped before the purge, or it would register again.
 	r.uninstall(d)
 	if id != "" {
 		if status, out, err := cli.api("POST", "/v1/node/"+id+"/purge", nil); err != nil || status != 200 {
-			return fmt.Errorf("purge node %s: HTTP %d: %w %s", id, status, err, out)
+			return apiError(fmt.Sprintf("purge node %s", id), status, out, err)
 		}
 		fmt.Printf("    [OK] %s purged from the cluster\n", d.Hostname)
 	} else {
@@ -92,7 +92,7 @@ func (r *Runner) decommissionClient(cli *remoteCLI, d *config.DecommissionNode) 
 func nodeID(cli *remoteCLI, name string) (string, error) {
 	status, out, err := cli.api("GET", "/v1/nodes", nil)
 	if err != nil || status != 200 {
-		return "", fmt.Errorf("list nodes: HTTP %d: %w %s", status, err, out)
+		return "", apiError("list nodes", status, out, err)
 	}
 	var nodes []struct{ ID, Name string }
 	if err := json.Unmarshal([]byte(out), &nodes); err != nil {
@@ -115,7 +115,7 @@ func (r *Runner) drain(cli *remoteCLI, id string, d *config.DecommissionNode) er
 		"MarkEligible": false,
 	})
 	if status, out, err := cli.api("POST", "/v1/node/"+id+"/drain", body); err != nil || status != 200 {
-		return fmt.Errorf("drain: HTTP %d: %w %s", status, err, out)
+		return apiError("drain", status, out, err)
 	}
 	fmt.Printf("    Draining %s (deadline %s)...\n", d.Hostname, deadline)
 
@@ -151,7 +151,7 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 	member := d.Hostname + "." + r.plan.Metadata.Region
 	status, out, err := cli.api("GET", "/v1/operator/raft/configuration", nil)
 	if err != nil || status != 200 {
-		return fmt.Errorf("raft configuration: HTTP %d: %w %s", status, err, out)
+		return apiError("raft configuration", status, out, err)
 	}
 	var cfg struct {
 		Servers []struct{ ID, Node, Address string }
@@ -165,13 +165,13 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 			continue
 		}
 		if status, out, err := cli.api("DELETE", "/v1/operator/raft/peer?id="+url.QueryEscape(s.ID), nil); err != nil || status != 200 {
-			return fmt.Errorf("remove raft peer %s: HTTP %d: %w %s", s.ID, status, err, out)
+			return apiError(fmt.Sprintf("remove raft peer %s", s.ID), status, out, err)
 		}
 		removed = true
 	}
 	// Serf would otherwise list the server as failed for a long time.
 	if status, out, err := cli.api("POST", "/v1/agent/force-leave?node="+url.QueryEscape(member), nil); err != nil || status != 200 {
-		fmt.Printf("    [WARN] force-leave %s: HTTP %d: %v %s\n", member, status, err, strings.TrimSpace(out))
+		fmt.Printf("    [WARN] %v\n", apiError("force-leave "+member, status, out, err))
 	}
 	if removed {
 		fmt.Printf("    [OK] %s removed from Raft and Serf\n", d.Hostname)

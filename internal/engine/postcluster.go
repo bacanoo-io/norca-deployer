@@ -119,7 +119,7 @@ func (r *Runner) applyACLPolicies(first *target, token string) error {
 		}
 		data, _ := json.Marshal(body)
 		if status, out, err := cli.api("POST", "/v1/acl/policy/"+url.PathEscape(pol.Name), data); err != nil || status != 200 {
-			return fmt.Errorf("ACL policy %s: HTTP %d: %w %s", pol.Name, status, err, out)
+			return apiError(fmt.Sprintf("ACL policy %s", pol.Name), status, out, err)
 		}
 		save(d)
 		fmt.Printf("    [OK] ACL policy %s applied\n", pol.Name)
@@ -231,10 +231,10 @@ func (r *Runner) deployPacks(first *target, token string) error {
 			},
 		})
 		if status, out, err := cli.api("POST", "/v1/pack-registry", body); err != nil || status != 200 {
-			return fmt.Errorf("pack registry %q: HTTP %d: %w %s", reg.Name, status, err, out)
+			return apiError(fmt.Sprintf("pack registry %q", reg.Name), status, out, err)
 		}
 		if status, out, err := cli.api("POST", "/v1/pack-registry/"+reg.Name+"/sync", nil); err != nil || status != 200 {
-			return fmt.Errorf("pack registry %q sync: HTTP %d: %w %s", reg.Name, status, err, out)
+			return apiError(fmt.Sprintf("pack registry %q sync", reg.Name), status, out, err)
 		}
 		fmt.Printf("    Pack registry %q synced\n", reg.Name)
 	}
@@ -272,7 +272,7 @@ func (r *Runner) deployPacks(first *target, token string) error {
 		fmt.Printf("    Deploying pack %s (%s/%s)...\n", d.Name, registry, d.Pack)
 		status, out, err := cli.api("POST", "/v1/release/"+d.Name+"/deploy-pack", body)
 		if err != nil || status != 200 {
-			return fmt.Errorf("pack %q: HTTP %d: %w %s", d.Name, status, err, out)
+			return apiError(fmt.Sprintf("pack %q", d.Name), status, out, err)
 		}
 		if err := os.MkdirAll(filepath.Dir(marker), 0700); err == nil {
 			_ = os.WriteFile(marker, []byte(hex.EncodeToString(sum[:])+"\n"), 0600)
@@ -310,7 +310,7 @@ func (r *Runner) applyNodePools(first *target, token string) error {
 		}
 		data, _ := json.Marshal(body)
 		if status, out, err := cli.api("PUT", "/v1/node/pools", data); err != nil || status != 200 {
-			return fmt.Errorf("node pool %s: HTTP %d: %w %s", np.Name, status, err, out)
+			return apiError(fmt.Sprintf("node pool %s", np.Name), status, out, err)
 		}
 		save(d)
 		fmt.Printf("    [OK] Node pool %s applied\n", np.Name)

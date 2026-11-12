@@ -159,6 +159,20 @@ func (c *remoteCLI) api(method, path string, body []byte) (int, string, error) {
 	return status, strings.TrimSpace(strings.Join(bodyLines, "\n")), nil
 }
 
+// apiError is the error of a call of api that failed (err), or that was
+// answered with a status the caller does not accept: then there is no error
+// to wrap, and the message names the status and the body of the answer.
+func apiError(what string, status int, out string, err error) error {
+	out = strings.TrimSpace(out)
+	if err == nil {
+		return fmt.Errorf("%s: HTTP %d: %s", what, status, out)
+	}
+	if out == "" || strings.Contains(err.Error(), out) {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	return fmt.Errorf("%s: %w: %s", what, err, out)
+}
+
 // healthy reports whether the local agent answers /v1/agent/health for its
 // role. Servers must also see a leader and the expected number of peers.
 func (c *remoteCLI) healthy(expectPeers int) (bool, string) {
