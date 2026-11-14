@@ -409,6 +409,9 @@ func (p *DeploymentPlan) Validate() error {
 	if err := p.validateMetricsStore(); err != nil {
 		return err
 	}
+	if err := p.validateBus(); err != nil {
+		return err
+	}
 	if err := p.validateHostPackages(); err != nil {
 		return err
 	}

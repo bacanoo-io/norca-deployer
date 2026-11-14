@@ -174,6 +174,7 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 			writeBackup(&sb, plan.Backup)
 		}
 		writeMetricsStore(&sb, plan.MetricsStore)
+		writeBus(&sb, plan.Bus)
 		writeExtraHCL(&sb, node.ServerSettings.ExtraHCL)
 
 		sb.WriteString("}\n\n")
@@ -276,6 +277,18 @@ func clientDrivers(cs *config.ClientSettings) []string {
 
 func containsString(list []string, s string) bool {
 	return slices.Contains(list, s)
+}
+
+// writeBus writes the bus block of a server: the same settings of the
+// system bus on every server. Without settings there is no block and the
+// defaults of Norca apply.
+func writeBus(sb *strings.Builder, b *config.BusConfig) {
+	if b.Empty() {
+		return
+	}
+	sb.WriteString("\n  bus {\n")
+	sb.WriteString(fmt.Sprintf("    consul_kv_max_bytes = %q\n", b.ConsulKVMaxBytes))
+	sb.WriteString("  }\n")
 }
 
 // writeMetricsStore writes the metrics_store block of a server: the same

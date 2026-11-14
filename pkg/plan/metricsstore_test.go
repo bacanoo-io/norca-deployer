@@ -50,6 +50,26 @@ func TestParseByteSize(t *testing.T) {
 	}
 }
 
+func TestValidateBus(t *testing.T) {
+	for _, b := range []*BusConfig{nil, {}, {ConsulKVMaxBytes: "256MiB"}, {ConsulKVMaxBytes: "1GiB"}} {
+		p := validPlan()
+		p.Bus = b
+		if err := p.Validate(); err != nil {
+			t.Errorf("%+v: %v", b, err)
+		}
+	}
+	for want, b := range map[string]*BusConfig{
+		"is not a size":    {ConsulKVMaxBytes: "lots"},
+		"must be positive": {ConsulKVMaxBytes: "0"},
+	} {
+		p := validPlan()
+		p.Bus = b
+		if err := p.Validate(); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%+v: got %v, want an error with %q", b, err, want)
+		}
+	}
+}
+
 func TestValidateMetricsStore(t *testing.T) {
 	for _, m := range []*MetricsStoreConfig{
 		nil,

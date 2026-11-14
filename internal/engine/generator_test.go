@@ -41,6 +41,39 @@ func TestGenerateBackupBlock(t *testing.T) {
 	}
 }
 
+func TestGenerateBusBlock(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Inventory: config.InventoryConfig{
+			Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "m1"}, {Host: "10.0.0.2", Hostname: "m2"}},
+			Clients: []config.NodeConfig{{Host: "10.0.0.3", Hostname: "c1"}},
+		},
+		Bus: &config.BusConfig{ConsulKVMaxBytes: "512MiB"},
+	}
+	plan.SetDefaults()
+	want := "\n  bus {\n    consul_kv_max_bytes = \"512MiB\"\n  }\n"
+
+	// The same block in the server block of every server, and none on a
+	// client or without the setting.
+	for i := range plan.Inventory.Masters {
+		node := &plan.Inventory.Masters[i]
+		hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+		server := hcl[strings.Index(hcl, "server {"):]
+		server = server[:strings.Index(server, "\n}\n")+1]
+		if !strings.Contains(server, want) {
+			t.Errorf("%s: the server block lacks the bus block:\n%s", node.Hostname, hcl)
+		}
+	}
+	client := &plan.Inventory.Clients[0]
+	if hcl := GenerateNorcaConfig(client, plan, storage.ResolveNodePaths(client, plan), false, GenOptions{}); strings.Contains(hcl, "consul_kv_max_bytes") {
+		t.Errorf("the client has a bus block:\n%s", hcl)
+	}
+	plan.Bus = &config.BusConfig{}
+	node := &plan.Inventory.Masters[0]
+	if hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{}); strings.Contains(hcl, "\n  bus {") {
+		t.Errorf("an empty bus section wrote a block:\n%s", hcl)
+	}
+}
+
 func TestGenerateMetricsStoreBlock(t *testing.T) {
 	plan := &config.DeploymentPlan{
 		Inventory: config.InventoryConfig{

@@ -16,15 +16,17 @@ type DeploymentPlan struct {
 	Backup          *BackupConfig  `yaml:"backup,omitempty" json:"backup,omitempty"`
 	// MetricsStore is the metrics_store block of every server.
 	MetricsStore *MetricsStoreConfig `yaml:"metrics_store,omitempty" json:"metrics_store,omitempty"`
-	Packs        *PacksConfig        `yaml:"packs,omitempty" json:"packs,omitempty"`
-	GitOps       *GitOpsConfig       `yaml:"gitops,omitempty" json:"gitops,omitempty"`
-	CNI          *CNIConfig          `yaml:"cni,omitempty" json:"cni,omitempty"`
-	Upgrade      UpgradeConfig       `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`
-	Federation   *Federation         `yaml:"federation,omitempty" json:"federation,omitempty"`
-	Consul       *ConsulConfig       `yaml:"consul,omitempty" json:"consul,omitempty"`
-	HostPackages *HostPackages       `yaml:"host_packages,omitempty" json:"host_packages,omitempty"`
-	Scripts      []ScriptConfig      `yaml:"scripts,omitempty" json:"scripts,omitempty"`
-	Secrets      *SecretsConfig      `yaml:"secrets,omitempty" json:"secrets,omitempty"`
+	// Bus is the bus block of every server: settings of the system bus.
+	Bus          *BusConfig     `yaml:"bus,omitempty" json:"bus,omitempty"`
+	Packs        *PacksConfig   `yaml:"packs,omitempty" json:"packs,omitempty"`
+	GitOps       *GitOpsConfig  `yaml:"gitops,omitempty" json:"gitops,omitempty"`
+	CNI          *CNIConfig     `yaml:"cni,omitempty" json:"cni,omitempty"`
+	Upgrade      UpgradeConfig  `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`
+	Federation   *Federation    `yaml:"federation,omitempty" json:"federation,omitempty"`
+	Consul       *ConsulConfig  `yaml:"consul,omitempty" json:"consul,omitempty"`
+	HostPackages *HostPackages  `yaml:"host_packages,omitempty" json:"host_packages,omitempty"`
+	Scripts      []ScriptConfig `yaml:"scripts,omitempty" json:"scripts,omitempty"`
+	Secrets      *SecretsConfig `yaml:"secrets,omitempty" json:"secrets,omitempty"`
 	// ClientDefaults are merged into the client_settings of every node
 	// that runs a client; the node's own settings win.
 	ClientDefaults *ClientSettings `yaml:"client_defaults,omitempty" json:"client_defaults,omitempty"`
