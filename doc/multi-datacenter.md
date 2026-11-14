@@ -151,7 +151,7 @@ The leader publishes the event stream of the region (jobs, deployments, evaluati
 - **Stream:** `NORCA_EVENTS_<region>` with one replica per server (up to three), so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication; a new leader continues after the newest event of the stream.
 - **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra_hcl`).
 - **Ports:** the routes between the servers use `network.ports.bus_cluster` (4650), consumers connect to `network.ports.bus` (4649); with `apply_firewall_rules` both are opened to `cluster_cidrs`.
-- **Access:** a consumer needs an ACL token whose policy has a `bus` rule, for example [events-reader.hcl](../examples/nodes/policies/events-reader.hcl).
+- **Access:** a consumer needs an ACL token whose policy has a `cdc` rule, for example [events-reader.hcl](../examples/nodes/policies/events-reader.hcl).
 
 ```sh
 nats --server tls://10.10.1.11:4649 --tlsca .norca-deployer/certs/ca.pem --user "$TOKEN" \
