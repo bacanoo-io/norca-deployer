@@ -43,7 +43,8 @@ tuning {
 
   firewall {
     api_cidrs       = ["192.168.1.0/24"] # Only the local network may use the API and UI.
-    ephemeral_cidrs = ["192.168.1.0/24"] # ...and the allocation ports.
+    ephemeral_cidrs = ["192.168.1.0/24"] # ...and the allocation ports (host mode; ports
+                                         # of allocations in bridge mode are not limited).
   }
 }
 

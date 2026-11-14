@@ -65,6 +65,8 @@ tuning {
   firewall {                           # Who may reach the Norca ports (Linux nodes only).
     cluster_cidrs = ["10.8.0.0/24"]                  # RPC and Serf (and allocation ports by default).
     api_cidrs     = ["10.8.0.0/24", "192.0.2.0/24"]  # HTTP API and UI on the servers.
+    # ephemeral_cidrs = ["0.0.0.0/0"]  # Allocation ports; default cluster_cidrs. Host mode
+                                       # only: allocations in bridge mode are not limited.
     extra_ports {                      # Static workload ports (NATS clients).
       port  = "4222"
       cidrs = ["10.8.0.0/24"]
@@ -123,6 +125,7 @@ security {
 backup {
   enabled  = false                     # Enable after filling in a real destination and age recipient.
   schedule = "0 */2 * * *"
+  # prefer_observer = true             # An observer server takes the backups; the leader when none can.
 
   destination {
     name             = "s3-primary"
@@ -151,6 +154,10 @@ metrics_store {                        # The same metrics_store block on every s
   host_retention     = "7d"            # Host statistics, Raft and bus history.
   host_max_disk_size = "1GiB"
 }
+
+bus {                                  # The same bus block on every server (the system bus).
+  consul_kv_max_bytes = "256MiB"       # Size limit of the Consul KV; its values are encrypted
+}                                      # with the keyring.
 
 host_packages {
   update_cache = true
@@ -302,6 +309,7 @@ client_defaults {
   drain_on_shutdown {
     deadline = "30m"
   }
+  # raw_exec_allowed_devices = ["/dev/fuse"]   # Devices raw_exec tasks may use beyond the default ones.
 }
 
 node_pools {
@@ -331,6 +339,7 @@ inventory {
       bootstrap_expect = 3
       raft_multiplier  = 1
       log_level        = "INFO"
+      # role           = "voter"         # voter (default), standby or observer.
     }
   }
 
