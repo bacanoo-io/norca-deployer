@@ -350,3 +350,34 @@ func TestRulesBusPorts(t *testing.T) {
 		}
 	}
 }
+
+func TestRulesBusLeafNodePort(t *testing.T) {
+	p := ports
+	p.Bus, p.BusCluster, p.BusLeafNode = 4649, 4650, 4652
+	ids := func(s Spec) string {
+		var out []string
+		for _, r := range s.Rules() {
+			out = append(out, r.ID())
+		}
+		return strings.Join(out, " ")
+	}
+	// The leaf nodes come from outside: the API sources by default, or
+	// their own.
+	s := Spec{Ports: p, Server: true, ClusterCIDRs: []string{"10.8.0.0/24"}, APICIDRs: []string{"192.0.2.0/24"}}
+	if got := ids(s); !strings.Contains(got, "norca:4652/tcp:192.0.2.0/24") || strings.Contains(got, "norca:4652/tcp:10.8.0.0/24") {
+		t.Fatalf("rules %s", got)
+	}
+	s.LeafNodeCIDRs = []string{"198.51.100.7/32"}
+	if got := ids(s); !strings.Contains(got, "norca:4652/tcp:198.51.100.7/32") || strings.Contains(got, "norca:4652/tcp:192.0.2.0/24") {
+		t.Fatalf("rules %s", got)
+	}
+	// Off (port 0) or on a client: no rule.
+	s.Ports.BusLeafNode = 0
+	if got := ids(s); strings.Contains(got, "4652") {
+		t.Fatalf("rules %s", got)
+	}
+	s = Spec{Ports: p, Client: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
+	if got := ids(s); strings.Contains(got, "4652") {
+		t.Fatalf("client rules %s", got)
+	}
+}

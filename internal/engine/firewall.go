@@ -17,16 +17,21 @@ func (r *Runner) configureFirewall(t *target) error {
 		fw = &config.FirewallConfig{}
 	}
 	busPort, busClusterPort := r.plan.Network.Ports.BusPorts()
+	leafPort := 0
+	if r.plan.Bus != nil && r.plan.Bus.LeafNodes {
+		leafPort = r.plan.Network.Ports.BusLeafNodePort()
+	}
 	spec := firewall.Spec{
 		Ports: firewall.Ports{
 			HTTP: r.plan.Network.Ports.HTTP, RPC: r.plan.Network.Ports.RPC, Serf: r.plan.Network.Ports.Serf,
-			Bus: busPort, BusCluster: busClusterPort,
+			Bus: busPort, BusCluster: busClusterPort, BusLeafNode: leafPort,
 		},
 		Server:         t.isMaster,
 		Client:         t.needsClient(),
 		OpenEphemeral:  r.plan.Tuning.OpenEphemeralPorts,
 		ClusterCIDRs:   fw.ClusterCIDRs,
 		APICIDRs:       fw.APICIDRs,
+		LeafNodeCIDRs:  fw.LeafNodeCIDRs,
 		EphemeralCIDRs: fw.EphemeralCIDRs,
 		DefaultDeny:    fw.DefaultDeny,
 	}

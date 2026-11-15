@@ -33,6 +33,7 @@ tuning:
   firewall:
     cluster_cidrs: [10.8.0.0/24]               # the node network
     api_cidrs: [10.8.0.0/24, 192.0.2.0/24]     # operators, load balancers
+    leafnode_cidrs: [198.51.100.7/32]          # leaf nodes of the bus; default: api_cidrs
     ephemeral_cidrs: [10.8.0.0/24]             # default: cluster_cidrs
     default_deny: true
 ```
@@ -44,6 +45,7 @@ tuning:
 | TCP/UDP 4648 (Serf) | Servers | `cluster_cidrs` (servers of other regions must be in it) |
 | TCP 4649 (system bus clients) | Servers | `cluster_cidrs` |
 | TCP 4650 (system bus routes between the servers) | Servers | `cluster_cidrs` |
+| TCP 4652 (system bus leaf nodes, with `bus.leafnodes`) | Servers | `leafnode_cidrs`, default `api_cidrs` |
 | TCP/UDP 20000-32000 (allocations) | Nodes running a client, with `open_ephemeral_ports` | `ephemeral_cidrs`, default `cluster_cidrs`; **host network mode only**, see below |
 | SSH | All, with `default_deny` | Any source |
 | `extra_ports` | Nodes of their `roles` (default: nodes running a client) | Their `cidrs`, default `cluster_cidrs` |

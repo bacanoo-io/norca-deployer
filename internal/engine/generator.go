@@ -86,6 +86,9 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 	busPort, busClusterPort := plan.Network.Ports.BusPorts()
 	sb.WriteString(fmt.Sprintf("  bus  = %d\n", busPort))
 	sb.WriteString(fmt.Sprintf("  bus_cluster = %d\n", busClusterPort))
+	if plan.Bus != nil && plan.Bus.LeafNodes {
+		sb.WriteString(fmt.Sprintf("  bus_leafnode = %d\n", plan.Network.Ports.BusLeafNodePort()))
+	}
 	sb.WriteString("}\n\n")
 
 	// Without bind_address the agent listens on its cluster address only;
@@ -287,7 +290,15 @@ func writeBus(sb *strings.Builder, b *config.BusConfig) {
 		return
 	}
 	sb.WriteString("\n  bus {\n")
-	sb.WriteString(fmt.Sprintf("    consul_kv_max_bytes = %q\n", b.ConsulKVMaxBytes))
+	if b.ConsulKVMaxBytes != "" {
+		sb.WriteString(fmt.Sprintf("    consul_kv_max_bytes = %q\n", b.ConsulKVMaxBytes))
+	}
+	if b.LeafNodes {
+		if b.ConsulKVMaxBytes != "" {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("    leafnodes {\n      enabled = true\n    }\n")
+	}
 	sb.WriteString("  }\n")
 }
 

@@ -74,6 +74,41 @@ func TestGenerateBusBlock(t *testing.T) {
 	}
 }
 
+func TestGenerateBusLeafNodes(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Inventory: config.InventoryConfig{
+			Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "m1"}},
+			Clients: []config.NodeConfig{{Host: "10.0.0.3", Hostname: "c1"}},
+		},
+		Bus: &config.BusConfig{LeafNodes: true},
+	}
+	plan.SetDefaults()
+	node := &plan.Inventory.Masters[0]
+	hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	for _, want := range []string{"  bus_leafnode = 4652\n", "\n  bus {\n    leafnodes {\n      enabled = true\n    }\n  }\n"} {
+		if !strings.Contains(hcl, want) {
+			t.Errorf("the server configuration lacks %q:\n%s", want, hcl)
+		}
+	}
+	// With the KV limit too, and another port.
+	plan.Bus.ConsulKVMaxBytes = "512MiB"
+	plan.Network.Ports.BusLeafNode = 7422
+	hcl = GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{})
+	want := "\n  bus {\n    consul_kv_max_bytes = \"512MiB\"\n\n    leafnodes {\n      enabled = true\n    }\n  }\n"
+	if !strings.Contains(hcl, want) || !strings.Contains(hcl, "  bus_leafnode = 7422\n") {
+		t.Errorf("the server configuration:\n%s", hcl)
+	}
+	// A client and a plan without leaf nodes write neither.
+	client := &plan.Inventory.Clients[0]
+	if hcl := GenerateNorcaConfig(client, plan, storage.ResolveNodePaths(client, plan), false, GenOptions{}); strings.Contains(hcl, "leafnodes") {
+		t.Errorf("the client has a leafnodes block:\n%s", hcl)
+	}
+	plan.Bus = nil
+	if hcl := GenerateNorcaConfig(node, plan, storage.ResolveNodePaths(node, plan), true, GenOptions{}); strings.Contains(hcl, "leafnode") {
+		t.Errorf("leaf nodes without the setting:\n%s", hcl)
+	}
+}
+
 func TestGenerateMetricsStoreBlock(t *testing.T) {
 	plan := &config.DeploymentPlan{
 		Inventory: config.InventoryConfig{

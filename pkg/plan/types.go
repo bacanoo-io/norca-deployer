@@ -243,6 +243,9 @@ type FirewallConfig struct {
 	// APICIDRs may reach the HTTP API and UI of the servers (operators,
 	// load balancers).
 	APICIDRs []string `yaml:"api_cidrs,omitempty" json:"api_cidrs,omitempty"`
+	// LeafNodeCIDRs may attach leaf nodes to the system bus of the servers
+	// (bus.leafnodes); default api_cidrs.
+	LeafNodeCIDRs []string `yaml:"leafnode_cidrs,omitempty" json:"leafnode_cidrs,omitempty"`
 	// EphemeralCIDRs may reach the allocation ports 20000-32000 on the
 	// clients; default cluster_cidrs. Use 0.0.0.0/0 for public services.
 	EphemeralCIDRs []string `yaml:"ephemeral_cidrs,omitempty" json:"ephemeral_cidrs,omitempty"`
@@ -302,13 +305,25 @@ type PortsConfig struct {
 	// servers; 4649 and 4650 when 0.
 	Bus        int `yaml:"bus,omitempty" json:"bus,omitempty"`
 	BusCluster int `yaml:"bus_cluster,omitempty" json:"bus_cluster,omitempty"`
+	// BusLeafNode is the port of the leaf nodes of the system bus, used
+	// when bus.leafnodes is set; 4652 when 0.
+	BusLeafNode int `yaml:"bus_leafnode,omitempty" json:"bus_leafnode,omitempty"`
 }
 
 // Default ports of the system bus of the servers.
 const (
-	DefaultBusPort        = 4649
-	DefaultBusClusterPort = 4650
+	DefaultBusPort         = 4649
+	DefaultBusClusterPort  = 4650
+	DefaultBusLeafNodePort = 4652
 )
+
+// BusLeafNodePort returns the effective port of the leaf nodes of the bus.
+func (p PortsConfig) BusLeafNodePort() int {
+	if p.BusLeafNode == 0 {
+		return DefaultBusLeafNodePort
+	}
+	return p.BusLeafNode
+}
 
 // BusPorts returns the effective ports of the system bus.
 func (p PortsConfig) BusPorts() (bus, cluster int) {

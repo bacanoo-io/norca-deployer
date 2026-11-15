@@ -24,6 +24,10 @@ type Ports struct {
 	// Bus and BusCluster are the ports of the system bus of the servers;
 	// 0 opens nothing.
 	Bus, BusCluster int
+
+	// BusLeafNode is the port of the leaf nodes of the bus; 0 (the
+	// listener is off) opens nothing.
+	BusLeafNode int
 }
 
 const (
@@ -63,6 +67,7 @@ type Spec struct {
 	// Sources; an empty list means any source.
 	ClusterCIDRs   []string // RPC and Serf
 	APICIDRs       []string // HTTP API
+	LeafNodeCIDRs  []string // leaf nodes of the bus; default APICIDRs
 	EphemeralCIDRs []string // allocation ports; default ClusterCIDRs
 
 	// DefaultDeny turns on ufw with incoming traffic denied by default
@@ -152,6 +157,14 @@ func (s Spec) Rules() []Rule {
 		}
 		if s.Ports.BusCluster != 0 {
 			add(strconv.Itoa(s.Ports.BusCluster), "tcp", s.ClusterCIDRs, false)
+		}
+		// Leaf nodes come from outside the cluster, as API clients do.
+		if s.Ports.BusLeafNode != 0 {
+			leaf := s.LeafNodeCIDRs
+			if len(leaf) == 0 {
+				leaf = s.APICIDRs
+			}
+			add(strconv.Itoa(s.Ports.BusLeafNode), "tcp", leaf, false)
 		}
 	}
 	if s.Client && s.OpenEphemeral {
@@ -353,7 +366,7 @@ func configureFirewalld(conn connector.Connector, s Spec) (*Result, error) {
 	wantPorts := map[string]bool{}
 	wantRich := map[string]bool{}
 	managed := map[string]bool{} // ports the deployer owns
-	for _, p := range []int{s.Ports.HTTP, s.Ports.RPC, s.Ports.Serf, s.Ports.Bus, s.Ports.BusCluster} {
+	for _, p := range []int{s.Ports.HTTP, s.Ports.RPC, s.Ports.Serf, s.Ports.Bus, s.Ports.BusCluster, s.Ports.BusLeafNode} {
 		if p != 0 {
 			managed[strconv.Itoa(p)] = true
 		}

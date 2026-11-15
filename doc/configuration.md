@@ -95,6 +95,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `open_ephemeral_ports` | `false` | Also open 20000-32000 on nodes running a client |
 | `firewall.cluster_cidrs` | any | Sources for RPC and Serf (the node network) |
 | `firewall.api_cidrs` | any | Sources for the HTTP API and UI |
+| `firewall.leafnode_cidrs` | `api_cidrs` | Sources of the leaf nodes of the system bus (with `bus.leafnodes`) |
 | `firewall.ephemeral_cidrs` | `cluster_cidrs` | Sources for the allocation ports |
 | `firewall.default_deny` | `false` | Turn ufw on and deny other incoming traffic; SSH stays open |
 | `firewall.extra_ports[]` | | Static workload ports: `port`, `proto`, `cidrs`, `roles` |
@@ -113,6 +114,7 @@ See [Networking and tuning](networking-and-tuning.md#firewall) for the firewall 
 | `dynamic_ports.min` / `dynamic_ports.max` | 20000 / 32000 | Allocation port range; the firewall opens the same range |
 | `ports.http` / `ports.rpc` / `ports.serf` | `4646` / `4647` / `4648` | Agent ports |
 | `ports.bus` / `ports.bus_cluster` | `4649` / `4650` | Ports of the system bus of the servers (NATS embedded in Norca): consumers, and the routes between the servers |
+| `ports.bus_leafnode` | `4652` | Port of the leaf nodes of the system bus, written and opened with `bus.leafnodes` |
 | `interface_prefix` | | Advertise the address of the first interface whose name starts with this |
 | `interface_suffix` | | Same, matching the end of the name |
 | `vpn.enabled` | `false` | Use the VPN interface settings below for the advertise address |
@@ -187,12 +189,14 @@ Settings of the system bus of the servers (the embedded NATS). The deployer writ
 | Key | Default | Description |
 | --- | --- | --- |
 | `consul_kv_max_bytes` | `256MiB` | Size limit of the bucket of the Consul KV of the Consul-compatible API on the bus (`512MiB`, `1GiB`). A write beyond it fails; no key is dropped |
+| `leafnodes` | `false` | Turn on the leaf node listener of the servers (`ports.bus_leafnode`, 4652): NATS servers outside the cluster attach with an ACL token whose `cdc` rule has `leaf = true` and read the changes of the region, one way ([change data capture](https://bacanoo-io.github.io/norca-doc/docs/features/change-data-capture)). With `apply_firewall_rules` the servers open the port to `firewall.leafnode_cidrs` (default `api_cidrs`) |
 
 The plan checks that the value is a size. Whether it fits into the storage of the bus (4 GiB by default) together with the events, the pack push notices and the usage reports is checked by Norca at start, which names what each takes. **Do not set a `bus` block in `server_settings.extra_hcl` as well**: the server block would have two. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). See the [`bus` block](https://bacanoo-io.github.io/norca-doc/docs/configuration/bus) of Norca.
 
 ```yaml
 bus:
   consul_kv_max_bytes: 512MiB
+  leafnodes: true
 ```
 
 ## federation
