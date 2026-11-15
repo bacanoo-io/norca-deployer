@@ -8,7 +8,7 @@ With one registry, `packs.registry` is enough; with several, list them under `pa
 packs:
   registries:
     - {name: builtin, type: dir, url: builtin}
-    - {name: norca, type: git, url: https://github.com/bacanoo-io/norca-registry, ref: v0.2.0}
+    - {name: norca, type: git, url: https://github.com/bacanoo-io/norca-registry, ref: v0.3.0}
   deploy:
     - {name: cache, registry: builtin, pack: redis, enabled: true}
     - {name: nats, registry: norca, pack: nats, enabled: true}
