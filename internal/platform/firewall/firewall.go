@@ -25,8 +25,9 @@ type Ports struct {
 	// 0 opens nothing.
 	Bus, BusCluster int
 
-	// BusLeafNode is the port of the leaf nodes of the bus; 0 (the
-	// listener is off) opens nothing.
+	// BusLeafNode is the port of the leaf nodes of the bus. It is opened
+	// only with Spec.LeafNodes; without it a rule the deployer made for the
+	// port earlier is removed.
 	BusLeafNode int
 }
 
@@ -65,9 +66,13 @@ type Spec struct {
 	DynamicMin, DynamicMax int
 
 	// Sources; an empty list means any source.
-	ClusterCIDRs   []string // RPC and Serf
-	APICIDRs       []string // HTTP API
-	LeafNodeCIDRs  []string // leaf nodes of the bus; default APICIDRs
+	ClusterCIDRs  []string // RPC and Serf
+	APICIDRs      []string // HTTP API
+	LeafNodeCIDRs []string // leaf nodes of the bus; default APICIDRs
+
+	// LeafNodes opens Ports.BusLeafNode on the servers: the leaf node
+	// listener of the bus is on.
+	LeafNodes      bool
 	EphemeralCIDRs []string // allocation ports; default ClusterCIDRs
 
 	// DefaultDeny turns on ufw with incoming traffic denied by default
@@ -159,7 +164,7 @@ func (s Spec) Rules() []Rule {
 			add(strconv.Itoa(s.Ports.BusCluster), "tcp", s.ClusterCIDRs, false)
 		}
 		// Leaf nodes come from outside the cluster, as API clients do.
-		if s.Ports.BusLeafNode != 0 {
+		if s.LeafNodes && s.Ports.BusLeafNode != 0 {
 			leaf := s.LeafNodeCIDRs
 			if len(leaf) == 0 {
 				leaf = s.APICIDRs

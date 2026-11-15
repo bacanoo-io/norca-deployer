@@ -17,10 +17,9 @@ func (r *Runner) configureFirewall(t *target) error {
 		fw = &config.FirewallConfig{}
 	}
 	busPort, busClusterPort := r.plan.Network.Ports.BusPorts()
-	leafPort := 0
-	if r.plan.Bus != nil && r.plan.Bus.LeafNodes {
-		leafPort = r.plan.Network.Ports.BusLeafNodePort()
-	}
+	// The port is named also while the listener is off, so that firewalld
+	// removes the rule of an earlier plan that had it on.
+	leafPort := r.plan.Network.Ports.BusLeafNodePort()
 	spec := firewall.Spec{
 		Ports: firewall.Ports{
 			HTTP: r.plan.Network.Ports.HTTP, RPC: r.plan.Network.Ports.RPC, Serf: r.plan.Network.Ports.Serf,
@@ -32,6 +31,7 @@ func (r *Runner) configureFirewall(t *target) error {
 		ClusterCIDRs:   fw.ClusterCIDRs,
 		APICIDRs:       fw.APICIDRs,
 		LeafNodeCIDRs:  fw.LeafNodeCIDRs,
+		LeafNodes:      r.plan.Bus != nil && r.plan.Bus.LeafNodes,
 		EphemeralCIDRs: fw.EphemeralCIDRs,
 		DefaultDeny:    fw.DefaultDeny,
 	}

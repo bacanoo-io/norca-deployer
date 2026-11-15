@@ -363,7 +363,7 @@ func TestRulesBusLeafNodePort(t *testing.T) {
 	}
 	// The leaf nodes come from outside: the API sources by default, or
 	// their own.
-	s := Spec{Ports: p, Server: true, ClusterCIDRs: []string{"10.8.0.0/24"}, APICIDRs: []string{"192.0.2.0/24"}}
+	s := Spec{Ports: p, Server: true, LeafNodes: true, ClusterCIDRs: []string{"10.8.0.0/24"}, APICIDRs: []string{"192.0.2.0/24"}}
 	if got := ids(s); !strings.Contains(got, "norca:4652/tcp:192.0.2.0/24") || strings.Contains(got, "norca:4652/tcp:10.8.0.0/24") {
 		t.Fatalf("rules %s", got)
 	}
@@ -371,13 +371,50 @@ func TestRulesBusLeafNodePort(t *testing.T) {
 	if got := ids(s); !strings.Contains(got, "norca:4652/tcp:198.51.100.7/32") || strings.Contains(got, "norca:4652/tcp:192.0.2.0/24") {
 		t.Fatalf("rules %s", got)
 	}
-	// Off (port 0) or on a client: no rule.
-	s.Ports.BusLeafNode = 0
+	// Off, or on a client: no rule.
+	s.LeafNodes = false
 	if got := ids(s); strings.Contains(got, "4652") {
 		t.Fatalf("rules %s", got)
 	}
-	s = Spec{Ports: p, Client: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
+	s = Spec{Ports: p, Client: true, LeafNodes: true, ClusterCIDRs: []string{"10.8.0.0/24"}}
 	if got := ids(s); strings.Contains(got, "4652") {
 		t.Fatalf("client rules %s", got)
+	}
+}
+
+// With firewalld, turning the leaf node listener off removes the rule an
+// earlier plan made for its port.
+func TestFirewalldRemovesLeafNodePort(t *testing.T) {
+	rule := `rule family="ipv4" source address="192.0.2.0/24" port port="4652" protocol="tcp" accept`
+	c := connector.NewFakeConnector()
+	c.Handler = func(cmd string) (string, error, bool) {
+		switch {
+		case strings.HasPrefix(cmd, "command -v ufw"):
+			return "", errors.New("not found"), true
+		case strings.HasPrefix(cmd, "command -v firewall-cmd"):
+			return "running", nil, true
+		case cmd == "firewall-cmd --permanent --list-rich-rules":
+			return rule, nil, true
+		}
+		return "", nil, true
+	}
+	p := ports
+	p.BusLeafNode = 4652
+	spec := Spec{Ports: p, Server: true, APICIDRs: []string{"192.0.2.0/24"}}
+	if _, err := Configure(c, spec); err != nil {
+		t.Fatal(err)
+	}
+	if cmds := strings.Join(c.Commands, "\n"); !strings.Contains(cmds, "--remove-rich-rule='"+rule+"'") {
+		t.Fatalf("the rule of the leaf node port stays:\n%s", cmds)
+	}
+
+	// On: the rule is kept.
+	c.Commands = nil
+	spec.LeafNodes = true
+	if _, err := Configure(c, spec); err != nil {
+		t.Fatal(err)
+	}
+	if cmds := strings.Join(c.Commands, "\n"); strings.Contains(cmds, "--remove-rich-rule") {
+		t.Fatalf("the rule of the leaf node port was removed:\n%s", cmds)
 	}
 }
