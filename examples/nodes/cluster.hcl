@@ -259,7 +259,7 @@ packs {
     name = "norca"                     # The Norca pack registry (nats, postgres, ...).
     type = "git"
     url  = "https://github.com/bacanoo-io/norca-registry"
-    ref  = "v0.1.0"
+    ref  = "v0.2.0"
   }
 
   deploy {
