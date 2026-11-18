@@ -17,8 +17,10 @@ type DeploymentPlan struct {
 	// MetricsStore is the metrics_store block of every server.
 	MetricsStore *MetricsStoreConfig `yaml:"metrics_store,omitempty" json:"metrics_store,omitempty"`
 	// Bus is the bus block of every server: settings of the system bus.
-	Bus          *BusConfig     `yaml:"bus,omitempty" json:"bus,omitempty"`
-	Packs        *PacksConfig   `yaml:"packs,omitempty" json:"packs,omitempty"`
+	Bus   *BusConfig   `yaml:"bus,omitempty" json:"bus,omitempty"`
+	Packs *PacksConfig `yaml:"packs,omitempty" json:"packs,omitempty"`
+	// Rigger is a stack of Rigger, the package manager that replaces packs.
+	Rigger       *RiggerConfig  `yaml:"rigger,omitempty" json:"rigger,omitempty"`
 	GitOps       *GitOpsConfig  `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 	CNI          *CNIConfig     `yaml:"cni,omitempty" json:"cni,omitempty"`
 	Upgrade      UpgradeConfig  `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`

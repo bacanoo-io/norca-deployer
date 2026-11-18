@@ -795,6 +795,9 @@ func (r *Runner) postClusterTasks(first *target) error {
 	if err := r.deployPacks(first, token); err != nil {
 		return err
 	}
+	if err := r.deployRigger(first, token); err != nil {
+		return err
+	}
 	return r.deployGitOps(first, token)
 }
 

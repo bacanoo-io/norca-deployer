@@ -43,6 +43,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `node_scaling` | | The bootstrap and the network ranges for the node scaling operator |
 | `secrets` | | Secrets and Variables written after the cluster is up |
 | `packs` | | Pack registries and releases; `packs.gitops` holds GitOps bindings |
+| `rigger` | | A Rigger stack applied after the packs |
 | `gitops` | | GitOps bindings, the same as `packs.gitops` |
 | `inventory` | | Servers and clients |
 
@@ -284,6 +285,19 @@ See [Namespaces](secrets-and-policies.md#namespaces).
 | `deploy[].values` | | Pack variables |
 
 See [Packs](packs.md).
+
+## rigger
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `stack` | | Directory of the stack (`stack.hcl`, `rigger.lock.hcl`), relative to the plan |
+| `stack_hcl` | | The stack written in the plan; excludes `stack` |
+| `values` | | Values files (`-f`), relative to the plan; only with `stack` |
+| `vars` | | Variables (`-var name=value`) |
+| `prune` | `false` | Destroy the releases removed from the stack |
+| `binary` | `rigger` | The rigger program |
+
+See [Rigger stacks](rigger.md).
 
 ## node_scaling
 
