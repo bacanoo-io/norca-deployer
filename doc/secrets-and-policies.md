@@ -24,6 +24,7 @@ namespaces:
 - **Existing:** it is left as it is when its description and meta are the plan's. Otherwise `apply` sets them to the plan's and keeps the other settings of the namespace (quota, task driver capabilities, node pool settings), which you manage with `norca namespace apply`.
 - **`norca-system` not in the plan:** it is only created, never changed: a description or meta set in the cluster stays. List it under `namespaces` to manage its description and meta from the plan.
 - **Removed from the plan:** nothing happens. The deployer never deletes a namespace.
+- **Changed meanwhile:** the write is a check-and-set against the namespace as `apply` read it, so a namespace that somebody else creates or changes between the read and the write is not overwritten: `apply` reads it again and decides again (keeping what the other writer set), and fails the step after three conflicting attempts in a row.
 
 The deployer keeps a digest of each entry in `.norca-deployer/namespaces/` and looks a namespace up only when its entry in the plan changed since the last `apply`. With ACLs the calls use the management token; without a token the namespaces are skipped with a warning. In a replica region the namespaces are not written: they replicate from the authoritative region, so apply the authoritative region first.
 

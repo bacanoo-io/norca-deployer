@@ -22,6 +22,8 @@ type apiRecorder struct {
 	bodies   map[string]string
 	conflict map[string]bool   // paths answering 409
 	answers  map[string]string // "METHOD path": the verbose output of the answer
+	// queued holds answers given once each, in order, before answers.
+	queued map[string][]string
 }
 
 var apiCallRe = regexp.MustCompile(`'-X' '([A-Z]+)' '([^']+)'`)
@@ -41,6 +43,10 @@ func (a *apiRecorder) conn() *connector.FakeConnector {
 		path, _, _ := strings.Cut(m[2], "?")
 		if a.conflict[path] {
 			return "< HTTP/1.1 409 Conflict\ncas conflict", nil, true
+		}
+		if q := a.queued[m[1]+" "+path]; len(q) > 0 {
+			a.queued[m[1]+" "+path] = q[1:]
+			return q[0], nil, true
 		}
 		if out, ok := a.answers[m[1]+" "+path]; ok {
 			return out, nil, true
@@ -108,7 +114,7 @@ func bootstrapRunner(t *testing.T, yaml string) (*Runner, *target, *apiRecorder)
 		t.Fatal(err)
 	}
 	r.store = store
-	api := &apiRecorder{bodies: map[string]string{}, conflict: map[string]bool{}, answers: map[string]string{}}
+	api := &apiRecorder{bodies: map[string]string{}, conflict: map[string]bool{}, answers: map[string]string{}, queued: map[string][]string{}}
 	m := &plan.Inventory.Masters[0]
 	return r, &target{node: m, isMaster: true, paths: storage.ResolveNodePaths(m, plan), conn: api.conn()}, api
 }
@@ -258,16 +264,16 @@ func TestNamespacesCreatedOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"GET /v1/namespace/norca-system", "PUT /v1/namespace/norca-system",
-		"GET /v1/namespace/apps", "PUT /v1/namespace/apps",
+		"GET /v1/namespace/norca-system", "PUT /v1/namespace/norca-system?cas=0",
+		"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=0",
 	}
 	if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
 		t.Fatalf("calls:\n%s", got)
 	}
-	if body := namespaceBody(t, api, "PUT /v1/namespace/norca-system"); body["Name"] != "norca-system" || body["Description"] != "Norca operators" {
+	if body := namespaceBody(t, api, "PUT /v1/namespace/norca-system?cas=0"); body["Name"] != "norca-system" || body["Description"] != "Norca operators" {
 		t.Fatalf("norca-system body: %v", body)
 	}
-	body := namespaceBody(t, api, "PUT /v1/namespace/apps")
+	body := namespaceBody(t, api, "PUT /v1/namespace/apps?cas=0")
 	if meta, _ := body["Meta"].(map[string]any); body["Name"] != "apps" || body["Description"] != "Applications" || meta["owner"] != "platform" {
 		t.Fatalf("apps body: %v", body)
 	}
@@ -300,12 +306,12 @@ func TestNamespacesExisting(t *testing.T) {
 	want := []string{
 		"GET /v1/namespace/norca-system",
 		"GET /v1/namespace/apps",
-		"GET /v1/namespace/billing", "PUT /v1/namespace/billing",
+		"GET /v1/namespace/billing", "PUT /v1/namespace/billing?cas=11",
 	}
 	if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
 		t.Fatalf("calls:\n%s", got)
 	}
-	body := namespaceBody(t, api, "PUT /v1/namespace/billing")
+	body := namespaceBody(t, api, "PUT /v1/namespace/billing?cas=11")
 	caps, _ := body["Capabilities"].(map[string]any)
 	pools, _ := body["NodePoolConfiguration"].(map[string]any)
 	if body["Description"] != "Billing" || body["Meta"] != nil || body["Quota"] != "small" || caps == nil || pools["Default"] != "apps" {
@@ -320,6 +326,122 @@ func TestNamespacesExisting(t *testing.T) {
 	api.calls = nil
 	if err := r.applyNamespaces(first, "token"); err != nil || len(api.calls) != 0 {
 		t.Fatalf("namespaces looked up again: %v %v", api.calls, err)
+	}
+}
+
+const casConflict = "< HTTP/1.1 409 Conflict\ncheck-and-set conflict: the namespace changed"
+
+// TestNamespacesConflictRetried: a namespace created or changed by somebody
+// else between the read and the check-and-set write is read again, and the
+// write that follows keeps what the other writer set.
+func TestNamespacesConflictRetried(t *testing.T) {
+	plan := strings.Replace(bootstrapPlan, "inventory:", "namespaces:\n  - {name: apps, description: Applications}\ninventory:", 1)
+	const other = `"Quota":"small","Capabilities":{"EnabledTaskDrivers":["docker"]},"NodePoolConfiguration":{"Default":"gpu"}`
+	for name, tc := range map[string]struct {
+		firstGET, secondGET string
+		want                []string
+		quota, pool         string // in the body of the last write; "" when there is none
+	}{
+		"created meanwhile": {
+			firstGET:  notFound,
+			secondGET: `{"Name":"apps","Description":"by hand",` + other + `,"CreateIndex":21,"ModifyIndex":21}`,
+			want: []string{
+				"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=0",
+				"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=21",
+			},
+			quota: "small", pool: "gpu",
+		},
+		"changed meanwhile": {
+			firstGET:  `{"Name":"apps","Description":"old","Quota":"","CreateIndex":3,"ModifyIndex":11}`,
+			secondGET: `{"Name":"apps","Description":"old",` + other + `,"CreateIndex":3,"ModifyIndex":12}`,
+			want: []string{
+				"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=11",
+				"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=12",
+			},
+			quota: "small", pool: "gpu",
+		},
+		"created meanwhile as the plan describes it": {
+			firstGET:  notFound,
+			secondGET: `{"Name":"apps","Description":"Applications",` + other + `,"CreateIndex":21,"ModifyIndex":21}`,
+			want: []string{
+				"GET /v1/namespace/apps", "PUT /v1/namespace/apps?cas=0",
+				"GET /v1/namespace/apps",
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, first, api := bootstrapRunner(t, plan)
+			api.answers["GET /v1/namespace/norca-system"] = "< HTTP/1.1 200 OK\n" +
+				`{"Name":"norca-system","Description":"Norca operators","CreateIndex":2,"ModifyIndex":2}`
+			firstAnswer := tc.firstGET
+			if firstAnswer != notFound {
+				firstAnswer = "< HTTP/1.1 200 OK\n" + firstAnswer
+			}
+			api.queued["GET /v1/namespace/apps"] = []string{firstAnswer}
+			api.answers["GET /v1/namespace/apps"] = "< HTTP/1.1 200 OK\n" + tc.secondGET
+			api.queued["PUT /v1/namespace/apps"] = []string{casConflict}
+			if err := r.applyNamespaces(first, "token"); err != nil {
+				t.Fatal(err)
+			}
+			want := append([]string{"GET /v1/namespace/norca-system"}, tc.want...)
+			if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
+				t.Fatalf("calls:\n%s", got)
+			}
+			if tc.quota != "" {
+				body := namespaceBody(t, api, want[len(want)-1])
+				pools, _ := body["NodePoolConfiguration"].(map[string]any)
+				caps, _ := body["Capabilities"].(map[string]any)
+				if body["Description"] != "Applications" || body["Quota"] != tc.quota || pools["Default"] != tc.pool || caps == nil {
+					t.Fatalf("apps body: %v", body)
+				}
+				if _, ok := body["ModifyIndex"]; ok {
+					t.Fatalf("apps body keeps ModifyIndex: %v", body)
+				}
+			}
+
+			// The namespace was settled: the next apply skips it.
+			api.calls = nil
+			if err := r.applyNamespaces(first, "token"); err != nil || len(api.calls) != 0 {
+				t.Fatalf("namespaces looked up again: %v %v", api.calls, err)
+			}
+		})
+	}
+}
+
+// TestNamespacesConflictPersistent: a namespace whose check-and-set write
+// keeps conflicting fails the step after a bounded number of rounds, and
+// the next apply tries it again.
+func TestNamespacesConflictPersistent(t *testing.T) {
+	plan := strings.Replace(bootstrapPlan, "inventory:", "namespaces:\n  - {name: apps, description: Applications}\ninventory:", 1)
+	r, first, api := bootstrapRunner(t, plan)
+	api.answers["GET /v1/namespace/norca-system"] = "< HTTP/1.1 200 OK\n" +
+		`{"Name":"norca-system","Description":"Norca operators","CreateIndex":2,"ModifyIndex":2}`
+	api.answers["GET /v1/namespace/apps"] = "< HTTP/1.1 200 OK\n" +
+		`{"Name":"apps","Description":"old","CreateIndex":3,"ModifyIndex":5}`
+	api.answers["PUT /v1/namespace/apps"] = casConflict
+	err := r.applyNamespaces(first, "token")
+	if err == nil || !strings.Contains(err.Error(), "namespace apps: still changed by another writer after 3 check-and-set attempts") ||
+		!strings.Contains(err.Error(), "check-and-set conflict: the namespace changed") {
+		t.Fatalf("err %v", err)
+	}
+	puts := 0
+	for _, c := range api.calls {
+		if c == "PUT /v1/namespace/apps?cas=5" {
+			puts++
+		}
+	}
+	if puts != namespaceAttempts || len(api.calls) != 1+2*namespaceAttempts {
+		t.Fatalf("calls %v", api.calls)
+	}
+
+	// Nothing was recorded for apps: the next apply looks again.
+	delete(api.answers, "PUT /v1/namespace/apps")
+	api.calls = nil
+	if err := r.applyNamespaces(first, "token"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(api.calls, "\n"); got != "GET /v1/namespace/apps\nPUT /v1/namespace/apps?cas=5" {
+		t.Fatalf("calls:\n%s", got)
 	}
 }
 

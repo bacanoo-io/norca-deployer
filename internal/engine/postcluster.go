@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -337,6 +338,9 @@ func (r *Runner) applyNamespaces(first *target, token string) error {
 		fmt.Printf("    [WARN] No management token: %d namespace(s) not applied\n", len(namespaces))
 		return nil
 	}
+	// The reads and the writes go to the local agent of the first server,
+	// in the region of the plan: the authoritative one here, which holds
+	// the indexes the check-and-set compares.
 	cli := first.cli(r, token)
 	for _, ns := range namespaces {
 		d := digest(map[string]any{"Name": ns.Name, "Description": ns.Description, "Meta": ns.Meta, "Implicit": ns.Implicit})
@@ -345,22 +349,55 @@ func (r *Runner) applyNamespaces(first *target, token string) error {
 			fmt.Printf("    Namespace %s unchanged (skipped)\n", ns.Name)
 			continue
 		}
-		path := "/v1/namespace/" + url.PathEscape(ns.Name)
+		result, err := applyNamespace(cli, &ns)
+		if err != nil {
+			return err
+		}
+		save(d)
+		if result == "kept" {
+			fmt.Printf("    Namespace %s exists (kept)\n", ns.Name)
+		} else {
+			fmt.Printf("    [OK] Namespace %s %s\n", ns.Name, result)
+		}
+	}
+	return nil
+}
+
+// namespaceAttempts bounds the read-decide-write rounds of one namespace
+// whose check-and-set write keeps conflicting with other writers.
+const namespaceAttempts = 3
+
+// applyNamespace reads the namespace and writes it when it is missing or
+// differs from the plan, and returns "kept", "created" or "updated". The
+// write is a check-and-set (?cas=0 for a create, ?cas=<ModifyIndex read>
+// for an update): a namespace created or changed by somebody else between
+// the read and the write answers 409, and the namespace is read and decided
+// again instead of being overwritten.
+func applyNamespace(cli *remoteCLI, ns *config.EnsuredNamespace) (string, error) {
+	what := "namespace " + ns.Name
+	path := "/v1/namespace/" + url.PathEscape(ns.Name)
+	for attempt := 1; ; attempt++ {
 		status, out, err := cli.api("GET", path, nil)
 		if err != nil || (status != 200 && status != 404) {
-			return apiError(fmt.Sprintf("namespace %s", ns.Name), status, out, err)
+			return "", apiError(what, status, out, err)
 		}
 		body := map[string]any{"Name": ns.Name, "Description": ns.Description, "Meta": ns.Meta}
+		var index uint64
 		verb := "created"
 		if status == 200 {
 			var live map[string]any
 			if err := json.Unmarshal([]byte(out), &live); err != nil {
-				return fmt.Errorf("namespace %s: %w", ns.Name, err)
+				return "", fmt.Errorf("%s: %w", what, err)
 			}
 			if ns.Implicit || namespaceMatches(live, &ns.NamespaceConfig) {
-				save(d)
-				fmt.Printf("    Namespace %s exists (kept)\n", ns.Name)
-				continue
+				return "kept", nil
+			}
+			var idx struct{ ModifyIndex uint64 }
+			if err := json.Unmarshal([]byte(out), &idx); err != nil {
+				return "", fmt.Errorf("%s: %w", what, err)
+			}
+			if idx.ModifyIndex == 0 {
+				return "", fmt.Errorf("%s: the answer has no ModifyIndex for the check-and-set write: %s", what, strings.TrimSpace(out))
 			}
 			// The write replaces the whole namespace: keep what the plan
 			// does not describe.
@@ -368,19 +405,25 @@ func (r *Runner) applyNamespaces(first *target, token string) error {
 			delete(live, "CreateIndex")
 			delete(live, "ModifyIndex")
 			live["Description"], live["Meta"] = ns.Description, ns.Meta
-			body, verb = live, "updated"
+			body, verb, index = live, "updated", idx.ModifyIndex
 		}
 		data, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("namespace %s: %w", ns.Name, err)
+			return "", fmt.Errorf("%s: %w", what, err)
 		}
-		if status, out, err := cli.api("PUT", path, data); err != nil || status != 200 {
-			return apiError(fmt.Sprintf("namespace %s", ns.Name), status, out, err)
+		status, out, err = cli.api("PUT", path+"?cas="+strconv.FormatUint(index, 10), data)
+		switch {
+		case err != nil || (status != 200 && status != 409):
+			return "", apiError(what, status, out, err)
+		case status == 409 && attempt >= namespaceAttempts:
+			return "", fmt.Errorf("%s: still changed by another writer after %d check-and-set attempts, run apply again: %s",
+				what, namespaceAttempts, strings.TrimSpace(out))
+		case status == 409:
+			fmt.Printf("    Namespace %s changed since it was read (check-and-set conflict), reading it again\n", ns.Name)
+			continue
 		}
-		save(d)
-		fmt.Printf("    [OK] Namespace %s %s\n", ns.Name, verb)
+		return verb, nil
 	}
-	return nil
 }
 
 // namespaceMatches reports whether a namespace as the API returned it has
