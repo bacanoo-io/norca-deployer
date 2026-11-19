@@ -246,6 +246,12 @@ secrets {                              # Written after the cluster is up, before
   #   path  = "nomad/jobs/billing"
   #   items = { api_url = "https://billing.example.com" }
   # }
+  # bootstrap {                          # A token the operator packs read: in their namespace.
+  #   type      = "variable"
+  #   path      = "providers/dns-eu"
+  #   namespace = "norca-system"
+  #   items     = { token = "!enc:v1:aes-gcm:..." }
+  # }
 }
 
 packs {
@@ -320,6 +326,15 @@ node_pools {
 node_pools {
   name        = "windows"
   description = "Windows nodes for native .exe workloads"
+}
+
+# Namespaces created after the cluster is up, before the secrets and the packs.
+# norca-system, the namespace of the operator packs, is always created; this
+# adds more. A namespace is never deleted.
+namespaces {
+  name        = "apps"
+  description = "Applications of the teams"
+  meta        = { owner = "platform" }
 }
 
 inventory {

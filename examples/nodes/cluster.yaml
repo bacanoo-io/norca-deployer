@@ -244,6 +244,11 @@ secrets:                            # Written after the cluster is up, before th
     #   path: nomad/jobs/billing
     #   items:
     #     api_url: https://billing.example.com
+    # - type: variable                  # A token the operator packs read (here the token of a
+    #   path: providers/dns-eu          # DNS zone of norca-provider for norca-acme and norca-dns):
+    #   namespace: norca-system         # it belongs to their namespace, norca-system.
+    #   items:
+    #     token: "!enc:v1:aes-gcm:..."
 
 packs:
   registries:
@@ -309,6 +314,12 @@ node_pools:                         # Descriptions of the pools (created after t
       owner: platform
   - name: windows
     description: Windows nodes for native .exe workloads
+
+namespaces:                         # Created after the cluster is up, before the secrets and the
+  - name: apps                      # packs. norca-system, the namespace of the operator packs, is
+    description: Applications of the teams   # always created; this adds more. Never deleted.
+    meta:
+      owner: platform
 
 inventory:
   masters:                          # Servers; bootstrap_expect defaults to their count (3).
