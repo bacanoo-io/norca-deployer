@@ -39,6 +39,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `scripts` | | Bash scripts |
 | `client_defaults` | | Client settings merged into every node that runs a client |
 | `node_pools` | | Node pool descriptions |
+| `namespaces` | | Namespaces created after the cluster is up; `norca-system` is always created |
 | `node_scaling` | | The bootstrap and the network ranges for the node scaling operator |
 | `secrets` | | Secrets and Variables written after the cluster is up |
 | `packs` | | Pack registries and releases; `packs.gitops` holds GitOps bindings |
@@ -250,6 +251,20 @@ See [Host packages and scripts](host-packages-and-scripts.md).
 | `store` | `builtin` | `builtin` or `external` (secrets of the built-in store are then skipped) |
 | `bootstrap[]` | | `type` (`secret`, `variable`), `path`, `namespace`, `items`, `overwrite`; see [Bootstrap secrets](secrets-and-policies.md) |
 
+## namespaces[]
+
+Namespaces `apply` creates after the cluster is up, before the secrets and the packs. The namespace
+`norca-system` of the operator packs is always created (description `Norca operators`); this list
+adds more, or lists `norca-system` to manage its description and meta. An existing namespace gets
+the description and meta of the plan and keeps its other settings; a namespace is never deleted.
+See [Namespaces](secrets-and-policies.md#namespaces).
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `name` | | Letters, digits and `-`, up to 128 characters; each name once |
+| `description` | | Up to 256 characters |
+| `meta` | | Key/value pairs |
+
 ## packs
 
 `registry` (one) or `registries` (several) take the keys below.
@@ -287,7 +302,7 @@ deployer writes, after `apply`, what the operator needs:
 | Key | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Write the Variables |
-| `namespace` | `default` | Namespace of the Variables. The bootstrap holds the key of the node CA: give read access to the operator only |
+| `namespace` | `norca-system` | Namespace of the Variables, the one the `nodescaler-operator` pack reads them from (its `variables_namespace`, by default the namespace of its job). The bootstrap holds the key of the node CA: give read access to the operator only |
 | `validity` | `60d` | Validity of a node certificate, in days (`60d`) or hours (`720h`); the node CA ends it at the latest |
 | `client` | | Client settings of a scaled node (drivers, `enable_raw_exec`, `extra_hcl`, reserved resources, host networks), over `client_defaults` |
 | `machine` | | What a scaled machine needs on its disk, see below |

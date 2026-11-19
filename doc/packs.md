@@ -16,6 +16,8 @@ packs:
 
 String values may be generated values (`!generate:<name>`, `!nkey-public:<name>`, see [Bootstrap secrets](secrets-and-policies.md#item-values)) or `!enc:` secrets; they are resolved before the deploy. Secrets a pack reads from the secret store or from Variables are written before the packs (`secrets.bootstrap`).
 
+The operator packs of the Norca pack registry (`loadbalancer-operator`, `nodescaler-operator`, `norca-acme`, `norca-dns`, `norca-provider`) run in the namespace `norca-system` by default and expect it to exist. `apply` creates it before the secrets and the packs (see [Namespaces](secrets-and-policies.md#namespaces)), so their tokens go into `secrets.bootstrap` with `namespace: norca-system`, and `node_scaling.namespace` is `norca-system` by default.
+
 A single registry:
 
 ```yaml

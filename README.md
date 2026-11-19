@@ -14,7 +14,7 @@ A single-binary installer and lifecycle tool for [Norca](https://github.com/baca
 - **Tuning:** sysctl, kernel modules and log rotation.
 - **Node labels and resources:** meta labels and node class (with cluster-wide `client_defaults`), node pools, host networks, reserved resources, drain on shutdown, the dynamic port range (kept in step with the firewall), and `extra_hcl` for other agent settings.
 - **Node lifecycle:** new nodes are installed by adding them to the plan; `inventory.decommission` drains or removes nodes from Raft and uninstalls them. A list of installed nodes stops an apply when a node was only deleted from the plan.
-- **Bootstrap secrets and policies:** after the cluster is up, secrets of the built-in secret store and Variables (plain, encrypted, from files, or generated once: passwords, NATS NKeys) and ACL policies bound to jobs.
+- **Bootstrap secrets and policies:** after the cluster is up, the namespaces (always `norca-system`, where the operator packs run and keep their tokens, and those of the plan), secrets of the built-in secret store and Variables (plain, encrypted, from files, or generated once: passwords, NATS NKeys) and ACL policies bound to jobs.
 - **Packs:** creates pack registries and installs packs with the server-side `deploy-pack`. A pack is deployed again only when its settings changed.
 - **GitOps:** deploys packs straight from Forgejo, Gitea, GitHub and GitLab repositories, read into memory: once with `gitops run`, on every `apply`, and on every push with the `gitops daemon` webhook listener (HMAC-verified, debounced). Bindings can require a signed commit or tag.
 - **SSH host keys:** trust on first use (`tofu`), `strict` or `off`.
@@ -83,7 +83,7 @@ Complete plans with a comment on every setting are in [examples/](examples):
 | [add-node.yaml](examples/nodes/add-node.yaml) | Adding a client to a running cluster (only the new node is installed) |
 | [decommission-node.yaml](examples/nodes/decommission-node.yaml) | Removing clients and servers: drain, Raft removal, uninstall |
 | [local-dev.yaml](examples/nodes/local-dev.yaml) | Development node on the machine running the deployer (`connection.mode: local`, run with `sudo`): loopback only, no TLS or ACLs, docker/exec/raw_exec, optional local Norca build |
-| [cluster.yaml](examples/nodes/cluster.yaml) / [cluster.hcl](examples/nodes/cluster.hcl) | 3 servers, 2 Linux clients with Docker from the Docker APT repository, 1 Windows client; custom paths, firewall and sysctl tuning, PKI and SPIFFE, backups, scripts, host volumes; NATS for the applications (generated secrets, an ACL policy for event readers, two pack registries); Norca from a .deb and federation as comments |
+| [cluster.yaml](examples/nodes/cluster.yaml) / [cluster.hcl](examples/nodes/cluster.hcl) | 3 servers, 2 Linux clients with Docker from the Docker APT repository, 1 Windows client; custom paths, firewall and sysctl tuning, PKI and SPIFFE, backups, scripts, host volumes; NATS for the applications (generated secrets, an ACL policy for event readers, two pack registries), a namespace; Norca from a .deb and federation as comments |
 
 Plans can be written in YAML or HCL; both formats use the same keys, and the YAML and HCL examples load to the same plan. Paths in a plan (keys, `.deb` files, scripts) are relative to the plan file.
 

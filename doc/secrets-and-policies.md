@@ -1,6 +1,31 @@
 # Bootstrap Secrets and ACL Policies
 
-After the cluster is up, `apply` can create the ACL policies, the secrets and the Variables that the jobs of the cluster need, before it deploys the packs that read them. The order in the post-cluster stage is: ACL bootstrap, decommission, ACL policies, secrets, packs.
+After the cluster is up, `apply` can create the ACL policies, the namespaces, the secrets and the Variables that the jobs of the cluster need, before it deploys the packs that read them. The order in the post-cluster stage is: ACL bootstrap, decommission, ACL policies, node pools, namespaces, secrets, node scaling Variables, packs, GitOps bindings.
+
+## Namespaces
+
+```yaml
+namespaces:
+  - name: apps
+    description: Applications of the teams
+    meta:
+      owner: platform
+```
+
+`apply` always creates the namespace **`norca-system`** (description `Norca operators`). The operator packs of the Norca pack registry (`loadbalancer-operator`, `nodescaler-operator`, `norca-acme`, `norca-dns`, `norca-provider`) run their jobs there by default and keep their token Variables and secrets there. They expect the namespace to exist and do not create it, so `apply` makes sure it is there before the secrets and the packs. Give rights in it to the operators of the cluster only: the jobs run with ACL policies bound to them, and the Variables hold provider tokens and the key of the node CA. The `namespaces` block adds more namespaces.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `namespaces[].name` | | Letters, digits and `-`, up to 128 characters; each name once |
+| `namespaces[].description` | | Up to 256 characters |
+| `namespaces[].meta` | | Key/value pairs |
+
+- **Missing:** the namespace is created.
+- **Existing:** it is left as it is when its description and meta are the plan's. Otherwise `apply` sets them to the plan's and keeps the other settings of the namespace (quota, task driver capabilities, node pool settings), which you manage with `norca namespace apply`.
+- **`norca-system` not in the plan:** it is only created, never changed: a description or meta set in the cluster stays. List it under `namespaces` to manage its description and meta from the plan.
+- **Removed from the plan:** nothing happens. The deployer never deletes a namespace.
+
+The deployer keeps a digest of each entry in `.norca-deployer/namespaces/` and looks a namespace up only when its entry in the plan changed since the last `apply`. With ACLs the calls use the management token; without a token the namespaces are skipped with a warning. In a replica region the namespaces are not written: they replicate from the authoritative region, so apply the authoritative region first.
 
 ## Secrets and Variables
 
@@ -26,7 +51,7 @@ secrets:
 | `store` | `builtin` | `builtin`: the secrets go into Norca's built-in secret store. `external`: the jobs read their secrets from an external store (e.g. Vault), which must be set up before; the entries of type `secret` are skipped, Variables are still written |
 | `bootstrap[].type` | `secret` | `secret` (built-in secret store, `/v1/secret/<path>`) or `variable` (`/v1/var/<path>`) |
 | `bootstrap[].path` | | Path of the secret or Variable |
-| `bootstrap[].namespace` | `default` | Namespace |
+| `bootstrap[].namespace` | `default` | Namespace; the tokens and secrets the operator packs read belong to `norca-system` |
 | `bootstrap[].items` | | Item names and values (see below) |
 | `bootstrap[].overwrite` | `false` | See below |
 
@@ -68,7 +93,7 @@ security:
           # task: archive
 ```
 
-A policy with `job` is bound to the workload identity of that job (as `norca acl policy apply -job`), so the job needs no static token. The deployer writes a policy again only when its name, description, rules or binding changed. In a replica region the policies are not written: they replicate from the authoritative region.
+A policy with `job` is bound to the workload identity of that job (as `norca acl policy apply -job`), so the job needs no static token. The operator packs bind their policies to their jobs themselves; a policy for another job in `norca-system` names `namespace: norca-system`. The deployer writes a policy again only when its name, description, rules or binding changed. In a replica region the policies are not written: they replicate from the authoritative region.
 
 ## Example: NATS for the applications
 

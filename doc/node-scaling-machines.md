@@ -28,7 +28,9 @@ belong to one node, and the bootstrap writes them (see [What the bootstrap write
 The firewall is not on it either. A scaled machine gets its network rules from the security
 group of the cloud or from its image. The ranges of the region are in the Variable
 `nodescaler/network/<region>` (`cluster_cidrs`, `api_cidrs` of `tuning.firewall`), and the
-operator checks the network of a node group against them.
+operator checks the network of a node group against them. `apply` writes its Variables into the
+namespace `node_scaling.namespace`, by default `norca-system`, where the `nodescaler-operator`
+pack runs and reads them.
 
 ## One script, two modes
 
@@ -254,7 +256,7 @@ user must give it access to the device (the group `tss` on most distributions). 
 | The key of a node, basic mode | Made by the operator; it travels in the user data to the provider and stays in the user data of the machine in the cloud. On the node: `<tls_dir>/client-key.pem`, `0600`, root | The node's root; whoever can read the user data of the machine (the cloud account, and any process on the machine that can reach the metadata service, unless the cloud blocks it) |
 | The key of a node, join mode | Made on the machine by `norca-join`; it never leaves the machine | The node's root |
 | The key of a node, join mode with the TPM | Made in the TPM 2.0 of the machine; it never leaves the TPM. `<tls_dir>/client-key.pem` is a blob only this TPM can load | Nobody: the node's root can sign with it while it runs on the machine, but cannot copy it |
-| The key of the node CA of the region | The bootstrap Variable `nodescaler/bootstrap/<region>` (item `node_ca_key`), encrypted at rest in Raft like every Variable | The job of the operator: give the namespace of the Variable (`node_scaling.namespace`) to the operator only |
+| The key of the node CA of the region | The bootstrap Variable `nodescaler/bootstrap/<region>` (item `node_ca_key`), encrypted at rest in Raft like every Variable | The job of the operator: give the namespace of the Variable (`node_scaling.namespace`, by default `norca-system`, the namespace of the operator packs that `apply` creates) to the operator only |
 | The key of the cluster root CA | With the deployer only (`certs/` next to the plan), encrypted with the master key when there is one | Whoever runs the deployer with the master key |
 
 The node CA can only sign client certificates of its region, so a stolen key of the node CA
