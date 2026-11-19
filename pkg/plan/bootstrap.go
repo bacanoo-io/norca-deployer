@@ -221,6 +221,69 @@ func (p *DeploymentPlan) validateACLPolicies() error {
 	return nil
 }
 
+// The namespace of the Norca operator packs: their jobs, their token
+// Variables and their secrets are there by default, and they expect it to
+// exist. apply always creates it.
+const (
+	SystemNamespace            = "norca-system"
+	SystemNamespaceDescription = "Norca operators"
+)
+
+// maxNamespaceDescription is the longest description the servers accept.
+const maxNamespaceDescription = 256
+
+// EnsuredNamespace is a namespace apply creates.
+type EnsuredNamespace struct {
+	NamespaceConfig
+	// Implicit marks norca-system when the plan does not list it: it is
+	// created when missing and otherwise left as it is.
+	Implicit bool
+}
+
+// EnsuredNamespaces returns the namespaces apply creates: norca-system
+// first, unless the plan lists it, then those of the plan in their order.
+func (p *DeploymentPlan) EnsuredNamespaces() []EnsuredNamespace {
+	res := make([]EnsuredNamespace, 0, len(p.Namespaces)+1)
+	listed := false
+	for _, ns := range p.Namespaces {
+		listed = listed || ns.Name == SystemNamespace
+	}
+	if !listed {
+		res = append(res, EnsuredNamespace{
+			NamespaceConfig: NamespaceConfig{Name: SystemNamespace, Description: SystemNamespaceDescription},
+			Implicit:        true,
+		})
+	}
+	for _, ns := range p.Namespaces {
+		res = append(res, EnsuredNamespace{NamespaceConfig: ns})
+	}
+	return res
+}
+
+// validateNamespaces checks the namespaces block.
+func (p *DeploymentPlan) validateNamespaces() error {
+	seen := map[string]bool{}
+	for i, ns := range p.Namespaces {
+		what := fmt.Sprintf("namespaces[%d] (%s)", i, ns.Name)
+		if !namespaceRe.MatchString(ns.Name) {
+			return fmt.Errorf("%s: name must be 1 to 128 letters, digits or '-'", what)
+		}
+		if seen[ns.Name] {
+			return fmt.Errorf("%s: listed twice", what)
+		}
+		seen[ns.Name] = true
+		if len(ns.Description) > maxNamespaceDescription {
+			return fmt.Errorf("%s: description longer than %d characters", what, maxNamespaceDescription)
+		}
+		for k := range ns.Meta {
+			if k == "" {
+				return fmt.Errorf("%s: empty meta key", what)
+			}
+		}
+	}
+	return nil
+}
+
 // PolicyRules returns the rules of a policy.
 func (p *DeploymentPlan) PolicyRules(pol *ACLPolicyConfig) (string, error) {
 	if pol.Rules != "" {

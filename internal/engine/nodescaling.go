@@ -217,7 +217,7 @@ func (r *Runner) publishNodeScaling(first *target, token string) error {
 	}
 	namespace := ns.Namespace
 	if namespace == "" {
-		namespace = "default"
+		namespace = config.SystemNamespace
 	}
 	region := r.plan.Metadata.Region
 	vars := []struct {

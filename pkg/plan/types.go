@@ -33,6 +33,10 @@ type DeploymentPlan struct {
 	// NodePools describes node pools (created after the cluster is up; a
 	// pool named by a node is also created when the node registers).
 	NodePools []NodePoolConfig `yaml:"node_pools,omitempty" json:"node_pools,omitempty"`
+	// Namespaces are created after the cluster is up, before the secrets
+	// and the packs. The namespace of the Norca operators (norca-system) is
+	// always created; these are added to it.
+	Namespaces []NamespaceConfig `yaml:"namespaces,omitempty" json:"namespaces,omitempty"`
 	// NodeScaling publishes what the node scaling operator needs to create
 	// nodes by itself: the bootstrap template of the region and the
 	// firewall ranges.
@@ -787,6 +791,13 @@ type NodePoolConfig struct {
 	Meta        map[string]string `yaml:"meta,omitempty" json:"meta,omitempty"`
 }
 
+// NamespaceConfig describes a namespace.
+type NamespaceConfig struct {
+	Name        string            `yaml:"name" json:"name"`
+	Description string            `yaml:"description,omitempty" json:"description,omitempty"`
+	Meta        map[string]string `yaml:"meta,omitempty" json:"meta,omitempty"`
+}
+
 type NativeAppVolumes struct {
 	EnableDefaults bool `yaml:"enable_defaults" json:"enable_defaults"` // bin, work, config, data
 }
@@ -808,8 +819,9 @@ type HostVolumeConfig struct {
 type NodeScalingConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
-	// Namespace of the Variables (default "default"). The bootstrap Variable
-	// holds the key of the node CA: only the operator may read it.
+	// Namespace of the Variables (default "norca-system", the namespace of
+	// the operator packs). The bootstrap Variable holds the key of the node
+	// CA: only the operator may read it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
 	// Validity of a node certificate, in days ("60d", the default) or

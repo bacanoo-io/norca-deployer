@@ -68,6 +68,15 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(out, "  - %s: %s\n", np.Name, np.Description)
 				}
 			}
+			namespaces := plan.EnsuredNamespaces()
+			fmt.Fprintf(out, "Namespaces (%d):\n", len(namespaces))
+			for _, ns := range namespaces {
+				mode := ""
+				if ns.Implicit {
+					mode = " (always; created when missing)"
+				}
+				fmt.Fprintf(out, "  - %s: %s%s\n", ns.Name, ns.Description, mode)
+			}
 			if plan.Network.DynamicPorts != nil {
 				lo, hi := plan.DynamicPortRange()
 				fmt.Fprintf(out, "Dynamic Ports:   %d-%d\n", lo, hi)

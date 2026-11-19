@@ -318,6 +318,89 @@ func (r *Runner) applyNodePools(first *target, token string) error {
 	return nil
 }
 
+// applyNamespaces creates the namespaces the secrets and the packs need:
+// norca-system, the namespace of the operator packs, and those of the plan.
+// A namespace is looked up only when its entry changed since the last apply.
+// A missing one is created. An existing one is left as it is when its
+// description and meta are the plan's, and for norca-system when the plan
+// does not list it; otherwise its description and meta are set to the
+// plan's, and its other settings (quota, capabilities, node pools) are kept.
+// The deployer never deletes a namespace. Namespaces replicate from the
+// authoritative region.
+func (r *Runner) applyNamespaces(first *target, token string) error {
+	namespaces := r.plan.EnsuredNamespaces()
+	if r.plan.IsReplicaRegion() {
+		fmt.Printf("    Namespaces replicate from %s (not applied here)\n", r.plan.Federation.AuthoritativeRegion)
+		return nil
+	}
+	if acl := r.plan.Security.ACL; acl != nil && acl.Enabled && token == "" {
+		fmt.Printf("    [WARN] No management token: %d namespace(s) not applied\n", len(namespaces))
+		return nil
+	}
+	cli := first.cli(r, token)
+	for _, ns := range namespaces {
+		d := digest(map[string]any{"Name": ns.Name, "Description": ns.Description, "Meta": ns.Meta, "Implicit": ns.Implicit})
+		prev, save := r.marker("namespaces", ns.Name)
+		if prev == d {
+			fmt.Printf("    Namespace %s unchanged (skipped)\n", ns.Name)
+			continue
+		}
+		path := "/v1/namespace/" + url.PathEscape(ns.Name)
+		status, out, err := cli.api("GET", path, nil)
+		if err != nil || (status != 200 && status != 404) {
+			return apiError(fmt.Sprintf("namespace %s", ns.Name), status, out, err)
+		}
+		body := map[string]any{"Name": ns.Name, "Description": ns.Description, "Meta": ns.Meta}
+		verb := "created"
+		if status == 200 {
+			var live map[string]any
+			if err := json.Unmarshal([]byte(out), &live); err != nil {
+				return fmt.Errorf("namespace %s: %w", ns.Name, err)
+			}
+			if ns.Implicit || namespaceMatches(live, &ns.NamespaceConfig) {
+				save(d)
+				fmt.Printf("    Namespace %s exists (kept)\n", ns.Name)
+				continue
+			}
+			// The write replaces the whole namespace: keep what the plan
+			// does not describe.
+			delete(live, "Hash")
+			delete(live, "CreateIndex")
+			delete(live, "ModifyIndex")
+			live["Description"], live["Meta"] = ns.Description, ns.Meta
+			body, verb = live, "updated"
+		}
+		data, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("namespace %s: %w", ns.Name, err)
+		}
+		if status, out, err := cli.api("PUT", path, data); err != nil || status != 200 {
+			return apiError(fmt.Sprintf("namespace %s", ns.Name), status, out, err)
+		}
+		save(d)
+		fmt.Printf("    [OK] Namespace %s %s\n", ns.Name, verb)
+	}
+	return nil
+}
+
+// namespaceMatches reports whether a namespace as the API returned it has
+// the description and the meta of the plan.
+func namespaceMatches(live map[string]any, want *config.NamespaceConfig) bool {
+	if desc, _ := live["Description"].(string); desc != want.Description {
+		return false
+	}
+	meta, _ := live["Meta"].(map[string]any)
+	if len(meta) != len(want.Meta) {
+		return false
+	}
+	for k, v := range want.Meta {
+		if s, ok := meta[k].(string); !ok || s != v {
+			return false
+		}
+	}
+	return true
+}
+
 // deployGitOps deploys the GitOps bindings: every apply fetches them, and a
 // marker skips the deployment of a pack and values that were deployed before.
 func (r *Runner) deployGitOps(first *target, token string) error {

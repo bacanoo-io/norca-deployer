@@ -169,3 +169,21 @@ func TestNodeScalingPlanChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestPublishNodeScalingNamespace(t *testing.T) {
+	for name, tc := range map[string]struct{ plan, want string }{
+		"default": {nodeScalingPlan, "PUT /v1/var/nodescaler/network/eu?namespace=norca-system"},
+		"set":     {strings.Replace(nodeScalingPlan, "validity: 30d", "validity: 30d\n  namespace: ops", 1), "PUT /v1/var/nodescaler/network/eu?namespace=ops"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, first, api := bootstrapRunner(t, tc.plan)
+			// Without a node CA only the network Variable is written.
+			if err := r.publishNodeScaling(first, "token"); err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(api.calls, " | "); got != tc.want {
+				t.Fatalf("calls: %s", got)
+			}
+		})
+	}
+}

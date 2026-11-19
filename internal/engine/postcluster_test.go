@@ -20,7 +20,8 @@ type apiRecorder struct {
 	mu       sync.Mutex
 	calls    []string
 	bodies   map[string]string
-	conflict map[string]bool // paths answering 409
+	conflict map[string]bool   // paths answering 409
+	answers  map[string]string // "METHOD path": the verbose output of the answer
 }
 
 var apiCallRe = regexp.MustCompile(`'-X' '([A-Z]+)' '([^']+)'`)
@@ -40,6 +41,9 @@ func (a *apiRecorder) conn() *connector.FakeConnector {
 		path, _, _ := strings.Cut(m[2], "?")
 		if a.conflict[path] {
 			return "< HTTP/1.1 409 Conflict\ncas conflict", nil, true
+		}
+		if out, ok := a.answers[m[1]+" "+path]; ok {
+			return out, nil, true
 		}
 		return "< HTTP/1.1 200 OK\n{}", nil, true
 	}
@@ -104,7 +108,7 @@ func bootstrapRunner(t *testing.T, yaml string) (*Runner, *target, *apiRecorder)
 		t.Fatal(err)
 	}
 	r.store = store
-	api := &apiRecorder{bodies: map[string]string{}, conflict: map[string]bool{}}
+	api := &apiRecorder{bodies: map[string]string{}, conflict: map[string]bool{}, answers: map[string]string{}}
 	m := &plan.Inventory.Masters[0]
 	return r, &target{node: m, isMaster: true, paths: storage.ResolveNodePaths(m, plan), conn: api.conn()}, api
 }
@@ -230,5 +234,122 @@ func TestNodePools(t *testing.T) {
 	api.calls = nil
 	if err := r.applyNodePools(first, "token"); err != nil || len(api.calls) != 0 {
 		t.Fatalf("unchanged pool applied again: %v %v", api.calls, err)
+	}
+}
+
+const notFound = "< HTTP/1.1 404 Not Found\nNamespace not found"
+
+// namespaceBody decodes the body of a namespace write.
+func namespaceBody(t *testing.T, api *apiRecorder, call string) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := json.Unmarshal([]byte(api.bodies[call]), &body); err != nil {
+		t.Fatalf("%s: body %q: %v", call, api.bodies[call], err)
+	}
+	return body
+}
+
+func TestNamespacesCreatedOnce(t *testing.T) {
+	plan := strings.Replace(bootstrapPlan, "inventory:", "namespaces:\n  - {name: apps, description: Applications, meta: {owner: platform}}\ninventory:", 1)
+	r, first, api := bootstrapRunner(t, plan)
+	api.answers["GET /v1/namespace/norca-system"] = notFound
+	api.answers["GET /v1/namespace/apps"] = notFound
+	if err := r.applyNamespaces(first, "token"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GET /v1/namespace/norca-system", "PUT /v1/namespace/norca-system",
+		"GET /v1/namespace/apps", "PUT /v1/namespace/apps",
+	}
+	if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("calls:\n%s", got)
+	}
+	if body := namespaceBody(t, api, "PUT /v1/namespace/norca-system"); body["Name"] != "norca-system" || body["Description"] != "Norca operators" {
+		t.Fatalf("norca-system body: %v", body)
+	}
+	body := namespaceBody(t, api, "PUT /v1/namespace/apps")
+	if meta, _ := body["Meta"].(map[string]any); body["Name"] != "apps" || body["Description"] != "Applications" || meta["owner"] != "platform" {
+		t.Fatalf("apps body: %v", body)
+	}
+
+	// Second apply: nothing changed in the plan, nothing is called.
+	api.calls = nil
+	if err := r.applyNamespaces(first, "token"); err != nil || len(api.calls) != 0 {
+		t.Fatalf("unchanged namespaces applied again: %v %v", api.calls, err)
+	}
+}
+
+func TestNamespacesExisting(t *testing.T) {
+	plan := strings.Replace(bootstrapPlan, "inventory:", "namespaces:\n  - {name: apps, description: Applications, meta: {owner: platform}}\n  - {name: billing, description: Billing}\ninventory:", 1)
+	r, first, api := bootstrapRunner(t, plan)
+	// norca-system is not in the plan: its description is not the plan's.
+	api.answers["GET /v1/namespace/norca-system"] = "< HTTP/1.1 200 OK\n" +
+		`{"Name":"norca-system","Description":"set by hand","Meta":null,"CreateIndex":5,"ModifyIndex":5}`
+	// apps is as the plan describes it.
+	api.answers["GET /v1/namespace/apps"] = "< HTTP/1.1 200 OK\n" +
+		`{"Name":"apps","Description":"Applications","Meta":{"owner":"platform"},"Quota":"","CreateIndex":7,"ModifyIndex":7}`
+	// billing differs and has settings the plan does not describe.
+	api.answers["GET /v1/namespace/billing"] = "< HTTP/1.1 200 OK\n" +
+		`{"Name":"billing","Description":"old","Meta":{"team":"finance"},"Quota":"small",` +
+		`"Capabilities":{"EnabledTaskDrivers":["docker"],"DisabledTaskDrivers":null},` +
+		`"NodePoolConfiguration":{"Default":"apps","Allowed":null,"Denied":null},` +
+		`"Hash":"AAEC","CreateIndex":9,"ModifyIndex":11}`
+	if err := r.applyNamespaces(first, "token"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"GET /v1/namespace/norca-system",
+		"GET /v1/namespace/apps",
+		"GET /v1/namespace/billing", "PUT /v1/namespace/billing",
+	}
+	if got := strings.Join(api.calls, "\n"); got != strings.Join(want, "\n") {
+		t.Fatalf("calls:\n%s", got)
+	}
+	body := namespaceBody(t, api, "PUT /v1/namespace/billing")
+	caps, _ := body["Capabilities"].(map[string]any)
+	pools, _ := body["NodePoolConfiguration"].(map[string]any)
+	if body["Description"] != "Billing" || body["Meta"] != nil || body["Quota"] != "small" || caps == nil || pools["Default"] != "apps" {
+		t.Fatalf("billing body: %v", body)
+	}
+	for _, k := range []string{"Hash", "CreateIndex", "ModifyIndex"} {
+		if _, ok := body[k]; ok {
+			t.Fatalf("billing body keeps %s: %v", k, body)
+		}
+	}
+
+	api.calls = nil
+	if err := r.applyNamespaces(first, "token"); err != nil || len(api.calls) != 0 {
+		t.Fatalf("namespaces looked up again: %v %v", api.calls, err)
+	}
+}
+
+func TestNamespacesSkipped(t *testing.T) {
+	for name, tc := range map[string]struct {
+		plan, token string
+	}{
+		"replica region": {strings.Replace(bootstrapPlan, "release:", "federation: {authoritative_region: us, replication_token_file: repl.token}\nrelease:", 1), "token"},
+		"no token":       {bootstrapPlan, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r, first, api := bootstrapRunner(t, tc.plan)
+			if err := r.applyNamespaces(first, tc.token); err != nil || len(api.calls) != 0 {
+				t.Fatalf("calls %v, err %v", api.calls, err)
+			}
+		})
+	}
+}
+
+func TestNamespaceAPIError(t *testing.T) {
+	r, first, api := bootstrapRunner(t, bootstrapPlan)
+	api.answers["GET /v1/namespace/norca-system"] = "< HTTP/1.1 403 Forbidden\nPermission denied"
+	err := r.applyNamespaces(first, "token")
+	if err == nil || !strings.Contains(err.Error(), "namespace norca-system: HTTP 403") {
+		t.Fatalf("err %v", err)
+	}
+	// Nothing was recorded: the next apply looks again.
+	delete(api.answers, "GET /v1/namespace/norca-system")
+	api.calls = nil
+	if err := r.applyNamespaces(first, "token"); err != nil || len(api.calls) != 1 {
+		t.Fatalf("calls %v, err %v", api.calls, err)
 	}
 }

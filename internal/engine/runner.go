@@ -734,6 +734,9 @@ func (r *Runner) postClusterTasks(first *target) error {
 	if err := r.applyNodePools(first, token); err != nil {
 		return err
 	}
+	if err := r.applyNamespaces(first, token); err != nil {
+		return err
+	}
 	if err := r.bootstrapSecrets(first, token); err != nil {
 		return err
 	}

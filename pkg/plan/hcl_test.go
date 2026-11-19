@@ -158,6 +158,18 @@ func TestBootstrapValidation(t *testing.T) {
 			p.Packs = &PacksConfig{Registries: []PackRegistryConfig{{Name: "a", URL: "a", Type: "dir"}},
 				Deploy: []PackDeployItem{{Name: "x", Registry: "b", Pack: "redis", Enabled: true}}}
 		}, "unknown registry"},
+		"namespace name": {func(p *DeploymentPlan) {
+			p.Namespaces = []NamespaceConfig{{Name: "team_a"}}
+		}, "namespaces[0]"},
+		"namespace without name": {func(p *DeploymentPlan) {
+			p.Namespaces = []NamespaceConfig{{Description: "x"}}
+		}, "namespaces[0]"},
+		"namespace twice": {func(p *DeploymentPlan) {
+			p.Namespaces = []NamespaceConfig{{Name: "apps"}, {Name: "billing"}, {Name: "apps"}}
+		}, "namespaces[2] (apps): listed twice"},
+		"namespace description": {func(p *DeploymentPlan) {
+			p.Namespaces = []NamespaceConfig{{Name: "apps", Description: strings.Repeat("x", 257)}}
+		}, "description longer"},
 	} {
 		p := base()
 		tc.mod(p)
@@ -165,5 +177,37 @@ func TestBootstrapValidation(t *testing.T) {
 		if err := p.Validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: got %v, want %q", name, err, tc.want)
 		}
+	}
+}
+
+func TestEnsuredNamespaces(t *testing.T) {
+	const hclPlan = `
+inventory {
+  masters { host = "10.0.0.1" }
+}
+namespaces {
+  name        = "apps"
+  description = "Applications"
+  meta        = { owner = "platform" }
+}
+`
+	p, err := Parse([]byte(hclPlan), FormatHCL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := p.EnsuredNamespaces()
+	if len(got) != 2 || got[0].Name != SystemNamespace || got[0].Description != SystemNamespaceDescription || !got[0].Implicit ||
+		got[1].Name != "apps" || got[1].Description != "Applications" || got[1].Meta["owner"] != "platform" || got[1].Implicit {
+		t.Fatalf("ensured namespaces: %+v", got)
+	}
+
+	// Listed in the plan, norca-system is the plan's, in its place.
+	p.Namespaces = append(p.Namespaces, NamespaceConfig{Name: SystemNamespace, Description: "Operators of the cluster"})
+	if err := p.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	got = p.EnsuredNamespaces()
+	if len(got) != 2 || got[0].Name != "apps" || got[1].Name != SystemNamespace || got[1].Implicit || got[1].Description != "Operators of the cluster" {
+		t.Fatalf("ensured namespaces with norca-system listed: %+v", got)
 	}
 }
