@@ -175,6 +175,10 @@ func (p *DeploymentPlan) validateCluster() error {
 				return fmt.Errorf("federation.join[%d] %q is invalid", i, j)
 			}
 		}
+		if !p.IsReplicaRegion() && f.ReplicationTokenFile != "" {
+			return fmt.Errorf("federation.replication_token_file is for replica regions: region %q is the authoritative region, its servers get its own management token",
+				p.Metadata.Region)
+		}
 		if p.IsReplicaRegion() && p.Security.ACL != nil && p.Security.ACL.Enabled && p.Federation.ReplicationTokenFile == "" {
 			return fmt.Errorf("federation.replication_token_file is required for region %q with ACLs (the authoritative region is %q)",
 				p.Metadata.Region, f.AuthoritativeRegion)

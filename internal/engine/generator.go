@@ -15,7 +15,8 @@ import (
 type GenOptions struct {
 	// GossipKey is the resolved gossip encryption key; empty disables it.
 	GossipKey string
-	// ReplicationToken is the ACL replication token of a replica region.
+	// ReplicationToken is the acl.replication_token of the servers of a
+	// federation: the management token of the authoritative region.
 	ReplicationToken string
 	// ConsulToken is the Consul ACL token of the agents (plan.consul).
 	ConsulToken string

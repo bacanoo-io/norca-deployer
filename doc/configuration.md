@@ -206,7 +206,7 @@ bus:
 | --- | --- |
 | `authoritative_region` | Region that owns the ACLs (required) |
 | `join` | Servers of other regions: `host` or `host:serf_port` |
-| `replication_token_file` | Management token of the authoritative region; required in a replica region with ACLs |
+| `replication_token_file` | Management token of the authoritative region; required in a replica region with ACLs, refused in the authoritative region (its servers get its own management token as `acl.replication_token`) |
 
 See [Multi-region](multi-region.md).
 

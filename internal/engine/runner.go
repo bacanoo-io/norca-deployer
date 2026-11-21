@@ -40,9 +40,14 @@ type Runner struct {
 	gossipKey string
 	// consulToken is the Consul ACL token of the agents (plan.consul).
 	consulToken string
-	// replicationToken is the ACL token of the authoritative region (replica
-	// regions only).
+	// replicationToken is the acl.replication_token of the servers: the
+	// management token of the authoritative region, in every region of a
+	// federation (see resolveReplicationToken).
 	replicationToken string
+	// bootstrapSecret is the secret the ACL bootstrap is to use: the
+	// replication token chosen before the first bootstrap of an
+	// authoritative region. Empty: the bootstrap chooses the token.
+	bootstrapSecret string
 	// trustDomain is the SPIFFE trust domain (nil without SPIFFE).
 	trustDomain *url.URL
 
@@ -141,17 +146,8 @@ func (r *Runner) Apply(ctx context.Context) error {
 	if r.gossipKey, err = store.GossipKey(r.plan.Security.GossipEncryptionKey); err != nil {
 		return fmt.Errorf("gossip key: %w", err)
 	}
-	if r.plan.IsReplicaRegion() && r.plan.Federation.ReplicationTokenFile != "" {
-		path := r.plan.ResolveLocalPath(r.plan.Federation.ReplicationTokenFile)
-		token, ok, err := store.ReadSecret(path)
-		if err != nil {
-			return fmt.Errorf("replication token: %w", err)
-		}
-		if !ok {
-			return fmt.Errorf("replication token %s not found: apply the authoritative region %q first",
-				path, r.plan.Federation.AuthoritativeRegion)
-		}
-		r.replicationToken = token
+	if err := r.resolveReplicationToken(); err != nil {
+		return err
 	}
 	if c := r.plan.Consul; c != nil && c.TokenFile != "" {
 		path := r.plan.ResolveLocalPath(c.TokenFile)
@@ -718,6 +714,59 @@ func resolveSecretWith(vault *crypto.Vault, val string) (string, error) {
 	return vault.ResolveSecret(val)
 }
 
+// resolveReplicationToken finds the acl.replication_token of the servers of
+// a federation with ACLs. A replica region reads the management token of the
+// authoritative region from federation.replication_token_file. The
+// authoritative region uses its own management token: its leader asks the
+// other regions with it whether a namespace still has jobs there, when it
+// deletes a tenant (Norca does not send its leader ACL to another region).
+// Before the first bootstrap that token does not exist yet: a secret is
+// chosen, written to the servers' configuration and given to the bootstrap
+// later, so the servers start with it and need no second restart.
+func (r *Runner) resolveReplicationToken() error {
+	acl := r.plan.Security.ACL
+	if r.plan.Federation == nil || acl == nil || !acl.Enabled {
+		return nil
+	}
+	if r.plan.IsReplicaRegion() {
+		if r.plan.Federation.ReplicationTokenFile == "" {
+			return nil
+		}
+		path := r.plan.ResolveLocalPath(r.plan.Federation.ReplicationTokenFile)
+		token, ok, err := r.store.ReadSecret(path)
+		if err != nil {
+			return fmt.Errorf("replication token: %w", err)
+		}
+		if !ok {
+			return fmt.Errorf("replication token %s not found: apply the authoritative region %q first",
+				path, r.plan.Federation.AuthoritativeRegion)
+		}
+		r.replicationToken = token
+		return nil
+	}
+
+	tokenPath := r.plan.ResolveLocalPath(acl.ManagementTokenOutput)
+	token, ok, err := r.store.ReadSecret(tokenPath)
+	if err != nil {
+		return fmt.Errorf("management token: %w", err)
+	}
+	if ok {
+		r.replicationToken = token
+		return nil
+	}
+	if !acl.AutoBootstrap {
+		fmt.Printf("    [WARN] No management token in %s: the servers get no acl.replication_token, so deleting a tenant fails while its namespace is checked in the other regions\n", tokenPath)
+		return nil
+	}
+	secret, err := r.store.PendingBootstrapSecret(tokenPath)
+	if err != nil {
+		return err
+	}
+	r.replicationToken = secret
+	r.bootstrapSecret = secret
+	return nil
+}
+
 // postClusterTasks bootstraps ACLs and installs the packs through the first
 // server.
 func (r *Runner) postClusterTasks(first *target) error {
@@ -775,9 +824,27 @@ func (r *Runner) aclBootstrap(first *target) (string, error) {
 		return "", nil
 	}
 
-	out, err := first.cli(r, "").run([]string{"acl", "bootstrap", "-json"}, nil)
+	args := []string{"acl", "bootstrap", "-json"}
+	var out string
+	var err error
+	if r.bootstrapSecret != "" {
+		// The servers carry this secret as acl.replication_token already
+		// (resolveReplicationToken): it becomes the management token. It is
+		// passed as a file, not on stdin, so it arrives without a CR.
+		out, err = first.cli(r, "").runFileArg(args, []byte(r.bootstrapSecret))
+	} else {
+		out, err = first.cli(r, "").run(args, nil)
+	}
 	if err != nil {
 		if strings.Contains(out, "bootstrap already done") || strings.Contains(out, "ACL bootstrap already done") {
+			// An earlier apply may have bootstrapped with the chosen
+			// secret and stopped before it stored the token.
+			if r.bootstrapSecret != "" && r.tokenAccepted(first, r.bootstrapSecret) {
+				return r.storeManagementToken(tokenPath, r.bootstrapSecret)
+			}
+			if r.bootstrapSecret != "" {
+				fmt.Printf("    [WARN] ACLs were bootstrapped before with another token: the servers' acl.replication_token is not valid; put the management token into %s and apply again\n", tokenPath)
+			}
 			fmt.Printf("    [WARN] ACLs were bootstrapped before, but %s has no token; packs are skipped\n", tokenPath)
 			return "", nil
 		}
@@ -790,7 +857,28 @@ func (r *Runner) aclBootstrap(first *target) (string, error) {
 	if start < 0 || json.Unmarshal([]byte(out[start:]), &resp) != nil || resp.SecretID == "" {
 		return "", fmt.Errorf("unexpected acl bootstrap output: %s", out)
 	}
-	plain, err := r.store.WriteSecret(tokenPath, resp.SecretID)
+	if r.bootstrapSecret != "" && resp.SecretID != r.bootstrapSecret {
+		return "", fmt.Errorf("acl bootstrap returned another token than the secret it was given")
+	}
+	return r.storeManagementToken(tokenPath, resp.SecretID)
+}
+
+// tokenAccepted reports whether the cluster accepts token.
+func (r *Runner) tokenAccepted(first *target, token string) bool {
+	_, err := first.cli(r, token).run([]string{"acl", "token", "self", "-json"}, nil)
+	return err == nil
+}
+
+// storeManagementToken stores the management token of a bootstrap (and
+// removes a pending bootstrap secret).
+func (r *Runner) storeManagementToken(tokenPath, token string) (string, error) {
+	var plain bool
+	var err error
+	if r.bootstrapSecret != "" {
+		plain, err = r.store.ConfirmBootstrapSecret(tokenPath, token)
+	} else {
+		plain, err = r.store.WriteSecret(tokenPath, token)
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to save the management token: %w", err)
 	}
@@ -799,5 +887,5 @@ func (r *Runner) aclBootstrap(first *target) (string, error) {
 	} else {
 		fmt.Printf("    ACL bootstrapped; management token stored encrypted in %s\n", tokenPath)
 	}
-	return resp.SecretID, nil
+	return token, nil
 }

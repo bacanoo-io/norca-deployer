@@ -56,9 +56,22 @@ func joinPath(paths *storage.ResolvedPaths, dir, name string) string {
 
 // run executes `norca <args>` with an optional stdin body.
 func (c *remoteCLI) run(args []string, body []byte) (string, error) {
+	return c.exec(args, body, false)
+}
+
+// runFileArg executes `norca <args> <file>`, the file holding content (a
+// private file, removed afterwards). It is for a value that must arrive
+// exactly as given: on Windows a pipe to stdin appends CRLF.
+func (c *remoteCLI) runFileArg(args []string, content []byte) (string, error) {
+	return c.exec(args, content, true)
+}
+
+// exec runs the CLI; body goes to stdin, or with bodyAsArg its file path is
+// the last argument.
+func (c *remoteCLI) exec(args []string, body []byte, bodyAsArg bool) (string, error) {
 	env := c.env()
 	if c.isWindows() {
-		return c.runWindows(args, body, env)
+		return c.runWindows(args, body, bodyAsArg, env)
 	}
 
 	envFile := cliStateDir + "/cli.env"
@@ -87,13 +100,17 @@ func (c *remoteCLI) run(args []string, body []byte) (string, error) {
 		if err := c.conn.CopyFile(bytes.NewReader(body), bodyFile, 0600); err != nil {
 			return "", err
 		}
-		cmd.WriteString(" < " + connector.ShellQuote(bodyFile))
+		if bodyAsArg {
+			cmd.WriteString(" " + connector.ShellQuote(bodyFile))
+		} else {
+			cmd.WriteString(" < " + connector.ShellQuote(bodyFile))
+		}
 		cleanup += " " + connector.ShellQuote(bodyFile)
 	}
 	return c.conn.ExecuteCommand(cmd.String() + "; rc=$?; " + cleanup + "; exit $rc")
 }
 
-func (c *remoteCLI) runWindows(args []string, body []byte, env map[string]string) (string, error) {
+func (c *remoteCLI) runWindows(args []string, body []byte, bodyAsArg bool, env map[string]string) (string, error) {
 	stateDir := c.paths.DataDir + `\deployer`
 	tokenFile := stateDir + `\cli.token`
 	bodyFile := stateDir + `\cli.body`
@@ -121,7 +138,11 @@ func (c *remoteCLI) runWindows(args []string, body []byte, env map[string]string
 		if err := c.conn.CopyFile(bytes.NewReader(body), bodyFile, 0600); err != nil {
 			return "", err
 		}
-		call = "Get-Content -Raw " + connector.PSQuote(bodyFile) + " | " + call
+		if bodyAsArg {
+			call += " " + connector.PSQuote(bodyFile)
+		} else {
+			call = "Get-Content -Raw " + connector.PSQuote(bodyFile) + " | " + call
+		}
 		cleanup = append(cleanup, connector.PSQuote(bodyFile))
 	}
 	sb.WriteString("try { " + call + " } finally { ")

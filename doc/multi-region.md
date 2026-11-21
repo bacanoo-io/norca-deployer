@@ -30,6 +30,14 @@ federation:
 
 It bootstraps ACLs as usual. Its servers get `authoritative_region` in the server block.
 
+With ACLs, its servers also get its own management token as `acl.replication_token`. The leader needs it to delete the namespace of a [tenant](https://bacanoo-io.github.io/norca-doc/docs/features/tenants/): it asks every other region whether the namespace still has jobs there, and it asks with this token, because its own credentials never leave the region. Without the token a federation cannot delete tenants.
+
+- **First apply:** the token does not exist before the bootstrap, so the deployer chooses it: it generates a secret, stores it as `<management_token_output>.pending` (encrypted with the master key), writes it into `norca.hcl` and gives it to `norca acl bootstrap`, which makes it the management token. The servers start with it; no second restart. An apply that stops in between finds the same secret again.
+- **Running cluster:** the stored management token is written into `norca.hcl`, so adding the `federation` block restarts the servers one at a time (see [Order](#order)).
+- **`auto_bootstrap: false` and no stored token:** the servers get no replication token, and `apply` warns. Put the management token into `management_token_output` and apply again.
+
+`replication_token_file` is refused in the authoritative region: its servers always get its own management token.
+
 ## Replica regions
 
 ```yaml
@@ -50,7 +58,7 @@ federation:
 
 ## Order
 
-1. Apply the authoritative region. If it already runs, adding the `federation` block changes `norca.hcl`, so its servers restart one at a time.
+1. Apply the authoritative region. If it already runs, adding the `federation` block changes `norca.hcl` (`authoritative_region`, and with ACLs `acl.replication_token`), so its servers restart one at a time.
 2. Apply the replica regions. They start as new clusters and join the authoritative region.
 
 Check the result with `norca operator api /v1/regions` on any server: it lists every region.
