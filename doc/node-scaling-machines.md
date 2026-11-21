@@ -221,7 +221,7 @@ An example `norca-join.json`:
 
 ```json
 {
-  "instance": "ng-scaled-3-1",
+  "instance": "ns-ng-scaled-3-1",
   "region": "ns",
   "urls": ["https://10.77.1.11:8490", "https://10.77.1.13:8490"],
   "endpoint": "spiffe://lab.norca/region/ns/nodescaler/join",

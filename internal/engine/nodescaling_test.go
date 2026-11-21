@@ -74,8 +74,8 @@ func renderTemplate(t *testing.T, tmpl string, data map[string]any) string {
 
 func nodeData(class string) map[string]any {
 	return map[string]any{
-		"Name": "workers-dc1-3-1", "Region": "eu", "Datacenter": "dc1", "Pool": "workers", "Class": class,
-		"Meta":   map[string]string{"norca.instance": "workers-dc1-3-1", "norca.node_group": "workers-dc1"},
+		"Name": "eu-workers-dc1-3-1", "Region": "eu", "Datacenter": "dc1", "Pool": "workers", "Class": class,
+		"Meta":   map[string]string{"norca.instance": "eu-workers-dc1-3-1", "norca.node_group": "workers-dc1"},
 		"CAFile": "/etc/norca/tls/ca.pem", "CertFile": "/etc/norca/tls/client.pem", "KeyFile": "/etc/norca/tls/client-key.pem",
 	}
 }
@@ -90,11 +90,11 @@ func TestGenerateNodeTemplate(t *testing.T) {
 		t.Fatalf("the rendered configuration is not HCL: %v\n%s", err, cfg)
 	}
 	for _, want := range []string{
-		`name       = "workers-dc1-3-1"`, `region     = "eu"`, `datacenter = "dc1"`,
+		`name       = "eu-workers-dc1-3-1"`, `region     = "eu"`, `datacenter = "dc1"`,
 		`node_pool  = "workers"`, `node_class = "gpu"`,
 		`cert_file = "/etc/norca/tls/client.pem"`, `verify_server_hostname = true`,
 		`"10.0.0.1:4647"`, `"10.0.0.2:4647"`,
-		`"norca.instance" = "workers-dc1-3-1"`, `"norca.node_group" = "workers-dc1"`,
+		`"norca.instance" = "eu-workers-dc1-3-1"`, `"norca.node_group" = "workers-dc1"`,
 		`"driver.allowlist" = "raw_exec,exec"`, `plugin "raw_exec"`, "acl {",
 	} {
 		if !strings.Contains(cfg, want) {
