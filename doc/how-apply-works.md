@@ -69,7 +69,7 @@ Allocations keep running while a client agent restarts. A failed batch stops the
 - **Namespaces:** `norca-system`, the namespace of the operator packs, and those of `namespaces`; a missing one is created, and none is deleted (see [Namespaces](secrets-and-policies.md#namespaces)).
 - The **secrets and Variables** of `secrets.bootstrap` (see [Bootstrap secrets and ACL policies](secrets-and-policies.md)), and with `node_scaling.enabled` the Variables of the node scaling operator.
 - **Packs:** the pack registries are created and synced, and changed pack releases are deployed (see [Packs](packs.md)).
-- **Rigger:** the stack of the `rigger` section is applied with `rigger stack apply` (see [Rigger stacks](rigger.md)).
+- **Rigger:** the stack of the `rigger` section is applied with `norca rigger stack apply` on the first server, by the servers; the plan may choose the `rigger` program of the operator machine, and the program as the one that applies (see [Rigger stacks](rigger.md)).
 - **GitOps:** the enabled bindings are fetched into memory, and deployed when the pack or its settings changed (see [GitOps](gitops.md)).
 
 These calls use the `norca` CLI on the first server (`norca operator api`), so the API does not have to be reachable from the operator machine.
@@ -108,7 +108,7 @@ A node whose agent is not running is always started. Successfully provisioned no
 | `.norca-deployer/secrets/`, `acl-policies/`, `namespaces/` | Digests of the written secrets and policies and of the namespace entries |
 | `.norca-deployer/cache/` | Downloaded Norca and CNI artifacts |
 
-On the nodes the deployer uses `/var/lib/norca-deployer/` (script markers, copied `.deb` files and temporary CLI files).
+On the nodes the deployer uses `/var/lib/norca-deployer/` (script markers, copied `.deb` files and temporary CLI files; on the first server also `rigger/`, the copy of the Rigger stack while it is applied).
 
 ## Failure handling
 

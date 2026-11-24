@@ -176,6 +176,14 @@ func (p *DeploymentPlan) SetDefaults() {
 			}
 		}
 	}
+	if r := p.Rigger; r != nil {
+		if r.RunOn == "" {
+			r.RunOn = RiggerOnServer
+		}
+		if r.Mode == "" {
+			r.Mode = RiggerEmbedded
+		}
+	}
 	if p.Secrets != nil {
 		if p.Secrets.Store == "" {
 			p.Secrets.Store = SecretStoreBuiltin

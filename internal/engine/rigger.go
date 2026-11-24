@@ -8,16 +8,23 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 // riggerHeaderRe is a header line of the verbose output of operator api.
@@ -139,10 +146,13 @@ func startRiggerProxy(cli *remoteCLI) (addr string, stop func(), err error) {
 	}, nil
 }
 
-// deployRigger applies the stack of the rigger section with the rigger
-// program, after the packs: rigger stack apply, against the cluster through
-// a local proxy of the API. What is unchanged Rigger decides from the
-// releases of the cluster, so the deployer keeps no marker for it.
+// deployRigger applies the stack of the rigger section with rigger stack
+// apply, after the packs. By default norca rigger runs on the first server,
+// on a copy of the stack, and sends it to the servers, which apply it. The
+// plan may name the rigger program of this machine instead (run_on), and
+// have the program apply the stack itself (mode). What is unchanged Rigger
+// decides from the releases of the cluster, so the deployer keeps no marker
+// for it.
 func (r *Runner) deployRigger(first *target, token string) error {
 	rc := r.plan.Rigger
 	if rc == nil {
@@ -160,25 +170,56 @@ func (r *Runner) deployRigger(first *target, token string) error {
 		return err
 	}
 
-	addr, stop, err := startRiggerProxy(first.cli(r, token))
+	values := make([]string, len(rc.Values))
+	for i, f := range rc.Values {
+		values[i] = r.plan.ResolveLocalPath(f)
+	}
+
+	var prog *riggerProgram
+	if rc.RunsOnServer() {
+		prog, err = serverRigger(first.cli(r, token), dir, values)
+	} else {
+		prog, err = localRigger(first.cli(r, token), rc.Binary, dir, values)
+	}
+
 	if err != nil {
 		return err
 	}
-	defer stop()
+	defer prog.close()
 
+	// A stack written in the plan has its lock in the state of the
+	// deployer: sync keeps its versions from one apply to the next.
+	if rc.StackHCL != "" {
+		if err := prog.sync(dir); err != nil {
+			return err
+		}
+	}
+
+	mode := config.RiggerEmbedded
+	if !rc.Embedded() {
+		mode = config.RiggerStandalone
+	}
+
+	fmt.Printf("    Applying the Rigger stack %s (%s, %s)...\n", dir, prog.name, mode)
+
+	if err := prog.run(riggerApplyArgs(rc, prog.dir, prog.values)...); err != nil {
+		return err
+	}
+
+	fmt.Printf("    [OK] Rigger stack applied\n")
+
+	return nil
+}
+
+// riggerApplyArgs are the arguments of rigger stack apply for the section:
+// the stack in dir with the value files, as the program sees them.
+func riggerApplyArgs(rc *config.RiggerConfig, dir string, values []string) []string {
 	args := []string{"stack", "apply", dir}
-	for _, f := range rc.Values {
-		args = append(args, "-f", r.plan.ResolveLocalPath(f))
+	for _, f := range values {
+		args = append(args, "-f", f)
 	}
 
-	names := make([]string, 0, len(rc.Vars))
-	for name := range rc.Vars {
-		names = append(names, name)
-	}
-
-	sort.Strings(names)
-
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(rc.Vars)) {
 		args = append(args, "-var", name+"="+rc.Vars[name])
 	}
 
@@ -186,11 +227,68 @@ func (r *Runner) deployRigger(first *target, token string) error {
 		args = append(args, "-prune")
 	}
 
-	// Always said: without the flag RIGGER_SERVER of the environment of the
-	// operator would send the stack to the servers.
-	args = append(args, "-server=false")
+	// Who applies is always said: without the flag RIGGER_SERVER of the
+	// environment the program runs in would choose.
+	if rc.Embedded() {
+		return append(args, "-server")
+	}
 
-	binary := rc.Binary
+	return append(args, "-server=false")
+}
+
+// riggerProgram is the program that applies the stack, where the plan runs
+// it, with the stack and the value files as it sees them there.
+type riggerProgram struct {
+	// name is the program and its place, for the messages.
+	name   string
+	dir    string
+	values []string
+	// run runs a command of the program and shows its output.
+	run func(args ...string) error
+	// readLock reads the lock file a sync wrote, nil without one, where the
+	// program works on a copy of the stack; it is nil where the program
+	// wrote into the state of the deployer itself.
+	readLock func() ([]byte, error)
+	// close ends the use of the program.
+	close func()
+}
+
+// riggerLockFile is the lock file of a stack, next to its stack.hcl.
+const riggerLockFile = "rigger.lock.hcl"
+
+// sync runs stack sync, and brings the lock file it wrote into local, the
+// directory of the stack in the state of the deployer.
+func (p *riggerProgram) sync(local string) error {
+	if err := p.run("stack", "sync", p.dir); err != nil {
+		return err
+	}
+
+	if p.readLock == nil {
+		return nil
+	}
+
+	lock, err := p.readLock()
+	if err != nil {
+		return fmt.Errorf("rigger: the lock file of the stack was not read back: %w", err)
+	}
+
+	// A stack without a module of a source has no lock file.
+	if lock == nil {
+		return nil
+	}
+
+	return os.WriteFile(filepath.Join(local, riggerLockFile), lock, 0o600)
+}
+
+// localRigger is the rigger program of this machine. It is a client of the
+// HTTP API, and the deployer reaches the cluster through the CLI of a
+// server, so the program gets the API on a local port (riggerProxy).
+func localRigger(cli *remoteCLI, binary, dir string, values []string) (*riggerProgram, error) {
+	addr, stop, err := startRiggerProxy(cli)
+	if err != nil {
+		return nil, err
+	}
+
 	if binary == "" {
 		binary = "rigger"
 	}
@@ -199,23 +297,176 @@ func (r *Runner) deployRigger(first *target, token string) error {
 	// (global when the stack names none) and reads none of its environment.
 	env := append(riggerEnv(os.Environ()), "NORCA_ADDR="+addr)
 
-	// A stack written in the plan has its lock in the state of the
-	// deployer: sync keeps its versions from one apply to the next.
-	if rc.StackHCL != "" {
-		if err := runRigger(binary, env, "stack", "sync", dir); err != nil {
-			return err
+	return &riggerProgram{
+		name: binary + " on this machine", dir: dir, values: values, close: stop,
+		run: func(args ...string) error { return runRigger(binary, env, args...) },
+	}, nil
+}
+
+// riggerStage is the directory of the first server that holds the copy of
+// the stack and of its value files while norca rigger runs.
+const riggerStage = cliStateDir + "/rigger"
+
+// The bounds of the copy of a stack: those of the archive in which the
+// rigger program sends a stack to the servers.
+const (
+	riggerStageFiles = 4096
+	riggerStageBytes = 64 << 20
+)
+
+// serverRigger is norca rigger on the first server, on a copy of the stack
+// and of the value files: the server has the program and reaches its agent
+// with the settings of every CLI call of the deployer, so the machine of
+// the deployer needs no rigger program. The copy is private, replaces what
+// a run that was cut left behind, and is removed when the program is done:
+// a value file may hold a secret.
+func serverRigger(cli *remoteCLI, dir string, values []string) (*riggerProgram, error) {
+	if cli.isWindows() {
+		return nil, errors.New("rigger: a stack can't be copied to a Windows server; run the first master on Linux or set run_on: local")
+	}
+
+	host := cli.node.Host
+
+	remove := func() error {
+		if _, err := cli.conn.ExecuteCommand("rm -rf " + connector.ShellQuote(riggerStage)); err != nil {
+			return fmt.Errorf("rigger: the copy of the stack on %s (%s) was not removed: %w", host, riggerStage, err)
+		}
+
+		return nil
+	}
+
+	if err := remove(); err != nil {
+		return nil, err
+	}
+
+	p := &riggerProgram{name: "norca rigger on " + host, dir: riggerStage + "/stack"}
+	p.close = func() {
+		if err := remove(); err != nil {
+			fmt.Printf("    [WARN] %v\n", err)
 		}
 	}
 
-	fmt.Printf("    Applying the Rigger stack (%s)...\n", dir)
+	if err := stageRigger(cli.conn, p, dir, values); err != nil {
+		p.close()
 
-	if err := runRigger(binary, env, args...); err != nil {
+		return nil, fmt.Errorf("rigger: the stack was not copied to %s: %w", host, err)
+	}
+
+	p.run = func(args ...string) error {
+		out, err := cli.run(append([]string{"rigger"}, args...), nil)
+		if err != nil {
+			return apiError(fmt.Sprintf("norca rigger %s %s on %s", args[0], args[1], host), 0, out, err)
+		}
+
+		if out = strings.TrimRight(out, "\r\n"); out != "" {
+			fmt.Println(out)
+		}
+
+		return nil
+	}
+
+	lock := p.dir + "/" + riggerLockFile
+	p.readLock = func() ([]byte, error) {
+		if ok, err := cli.conn.FileExists(lock); err != nil || !ok {
+			return nil, err
+		}
+
+		return cli.conn.ReadFile(lock)
+	}
+
+	return p, nil
+}
+
+// stageRigger copies the stack in dir and the value files to the stage of a
+// node, and sets where the program p finds them.
+func stageRigger(conn connector.Connector, p *riggerProgram, dir string, values []string) error {
+	if err := copyTree(conn, dir, p.dir, riggerStageFiles, riggerStageBytes); err != nil {
 		return err
 	}
 
-	fmt.Printf("    [OK] Rigger stack applied\n")
+	// A directory for each: two value files may have one name.
+	for i, f := range values {
+		dest := path.Join(riggerStage, "values", strconv.Itoa(i), filepath.Base(f))
+		if err := conn.MkdirAll(path.Dir(dest), 0o700); err != nil {
+			return err
+		}
+
+		if err := copyLocalFile(conn, f, dest); err != nil {
+			return err
+		}
+
+		p.values = append(p.values, dest)
+	}
 
 	return nil
+}
+
+// copyTree copies the regular files under the local directory dir to the
+// directory dest of a node, private, without the files and directories
+// whose name starts with a dot. Those are no part of a stack, and the
+// rigger program leaves them out of what it sends to the servers too:
+// .rigger holds the local state of a stack, and a working directory keeps
+// secrets in files as .env. More than maxFiles files or maxBytes bytes are
+// an error.
+func copyTree(conn connector.Connector, dir, dest string, maxFiles int, maxBytes int64) error {
+	var (
+		files int
+		total int64
+	)
+
+	return filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if p != dir && strings.HasPrefix(d.Name(), ".") {
+			if d.IsDir() {
+				return fs.SkipDir
+			}
+
+			return nil
+		}
+
+		rel, err := filepath.Rel(dir, p)
+		if err != nil {
+			return err
+		}
+
+		remote := path.Join(dest, filepath.ToSlash(rel))
+
+		if d.IsDir() {
+			return conn.MkdirAll(remote, 0o700)
+		}
+
+		if !d.Type().IsRegular() {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		files++
+		total += info.Size()
+
+		if files > maxFiles || total > maxBytes {
+			return fmt.Errorf("%s has more than %d files or %d bytes", dir, maxFiles, maxBytes)
+		}
+
+		return copyLocalFile(conn, p, remote)
+	})
+}
+
+// copyLocalFile copies a file of this machine to a private file of a node.
+func copyLocalFile(conn connector.Connector, local, remote string) error {
+	f, err := os.Open(local)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	return conn.CopyFile(f, remote, 0o600)
 }
 
 // runRigger runs the rigger program, its output on the deployer's.
@@ -261,6 +512,10 @@ func riggerEnv(env []string) []string {
 // global registry), which it would fetch and apply: a directory of the plan
 // that is missing, or relative to another working directory, must not get
 // that far.
+//
+// The directory of the plan is not in it. Every file of the directory of a
+// stack is copied to the first server, or sent to the servers by the
+// program, and next to the plan are the keys of the cluster (certs/).
 func (r *Runner) riggerStackDir(stack, stackHCL string) (string, error) {
 	if stack != "" {
 		dir, err := filepath.Abs(r.plan.ResolveLocalPath(stack))
@@ -270,6 +525,15 @@ func (r *Runner) riggerStackDir(stack, stackHCL string) (string, error) {
 
 		if info, err := os.Stat(filepath.Join(dir, "stack.hcl")); err != nil || !info.Mode().IsRegular() {
 			return "", fmt.Errorf("rigger: %s is not the directory of a stack: it has no stack.hcl", dir)
+		}
+
+		base, err := filepath.Abs(r.plan.BaseDir())
+		if err != nil {
+			return "", err
+		}
+
+		if rel, err := filepath.Rel(dir, base); err == nil && filepath.IsLocal(rel) {
+			return "", fmt.Errorf("rigger: the stack needs a directory of its own: %s holds the plan, and all files of a stack are copied to the first server or sent to the servers", dir)
 		}
 
 		return dir, nil

@@ -295,9 +295,11 @@ See [Packs](packs.md).
 | `values` | | Values files (`-f`), relative to the plan; only with `stack` |
 | `vars` | | Variables (`-var name=value`) |
 | `prune` | `false` | Destroy the releases removed from the stack |
-| `binary` | `rigger` | The rigger program |
+| `run_on` | `server` | Where the program runs: `server`, `norca rigger` on the first server, on a copy of the stack; `local`, the `rigger` program on the operator machine |
+| `mode` | `embedded` | Who applies the stack: `embedded`, the servers, to which the program sends it (`-server`); `standalone`, the program |
+| `binary` | `rigger` | The rigger program of `run_on: local`; refused with `run_on: server` |
 
-The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. See [Rigger stacks](rigger.md).
+The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. `stack` is a directory of its own, not the one of the plan. See [Rigger stacks](rigger.md).
 
 ## node_scaling
 
