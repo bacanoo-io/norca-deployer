@@ -297,7 +297,7 @@ See [Packs](packs.md).
 | `prune` | `false` | Destroy the releases removed from the stack |
 | `binary` | `rigger` | The rigger program |
 
-See [Rigger stacks](rigger.md).
+The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. See [Rigger stacks](rigger.md).
 
 ## node_scaling
 

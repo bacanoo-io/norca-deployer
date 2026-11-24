@@ -186,15 +186,18 @@ func (r *Runner) deployRigger(first *target, token string) error {
 		args = append(args, "-prune")
 	}
 
+	// Always said: without the flag RIGGER_SERVER of the environment of the
+	// operator would send the stack to the servers.
+	args = append(args, "-server=false")
+
 	binary := rc.Binary
 	if binary == "" {
 		binary = "rigger"
 	}
 
+	// No region is given: the program talks to the region of the stack
+	// (global when the stack names none) and reads none of its environment.
 	env := append(riggerEnv(os.Environ()), "NORCA_ADDR="+addr)
-	if region := r.plan.Metadata.Region; region != "" {
-		env = append(env, "NORCA_REGION="+region)
-	}
 
 	// A stack written in the plan has its lock in the state of the
 	// deployer: sync keeps its versions from one apply to the next.
@@ -251,12 +254,32 @@ func riggerEnv(env []string) []string {
 
 // riggerStackDir is the directory of the stack: the one of the plan, or for
 // a stack written in the plan a directory of the state with its stack.hcl.
+//
+// It is absolute and has a stack.hcl. The rigger program takes a name that
+// is no directory and has a slash for the source of a published stack
+// (stacks/platform: the stack platform of the namespace stacks in the
+// global registry), which it would fetch and apply: a directory of the plan
+// that is missing, or relative to another working directory, must not get
+// that far.
 func (r *Runner) riggerStackDir(stack, stackHCL string) (string, error) {
 	if stack != "" {
-		return r.plan.ResolveLocalPath(stack), nil
+		dir, err := filepath.Abs(r.plan.ResolveLocalPath(stack))
+		if err != nil {
+			return "", err
+		}
+
+		if info, err := os.Stat(filepath.Join(dir, "stack.hcl")); err != nil || !info.Mode().IsRegular() {
+			return "", fmt.Errorf("rigger: %s is not the directory of a stack: it has no stack.hcl", dir)
+		}
+
+		return dir, nil
 	}
 
-	dir := r.store.Path("rigger-stack")
+	dir, err := filepath.Abs(r.store.Path("rigger-stack"))
+	if err != nil {
+		return "", err
+	}
+
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
