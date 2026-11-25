@@ -1,7 +1,7 @@
 # Platform example
 
 A small, complete tree for `norca-deployer platform` (design: `design/platform-management-design.md`).
-It has one namespace (`apps`) with an API job that depends on a Postgres pack release, a periodic
+It has one namespace (`apps`) with an API job that depends on a Postgres release, a periodic
 worker job, a Variable, a secret, a service intention and a few KV entries.
 
 ```text
@@ -19,7 +19,7 @@ examples/platform/
     │   └── node-pools/         general.hcl
     │
     ├── namespaces/apps/        everything one application team owns (CODEOWNERS per namespace)
-    │   ├── references.hcl      read-only dependencies: the postgres pack release (packs stay with `packs`)
+    │   ├── references.hcl      read-only dependencies: the postgres release (releases stay with the `rigger` section)
     │   ├── jobs/api/           api.norca.hcl (the job), unit.hcl (depends_on, tier), vars/default + vars/eu-1
     │   ├── jobs/worker/        a periodic batch job, no unit.hcl needed
     │   ├── variables/api/      config.hcl               a Variable (path api/config)
@@ -39,7 +39,7 @@ examples/platform/
 1. `global/`: ACL policy and role, quota, namespace `apps`, node pool `general`
 2. Variable, secret, KV entries (before the jobs that read them)
 3. service intention
-4. jobs, ordered by the unit graph: `api` waits until the reference `pack/postgres` is healthy
+4. jobs, ordered by the unit graph: `api` waits until the reference `release/postgres` is healthy
    (`pending`, not a failure, if it is not installed yet); `worker` has no dependency
 
 ## Things to try
