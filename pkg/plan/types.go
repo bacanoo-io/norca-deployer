@@ -753,7 +753,33 @@ type NodeConfig struct {
 	ServerSettings *ServerSettings  `yaml:"server_settings,omitempty" json:"server_settings,omitempty"`
 	ClientSettings *ClientSettings  `yaml:"client_settings,omitempty" json:"client_settings,omitempty"`
 	PathOverrides  *PathConfig      `yaml:"path_overrides,omitempty" json:"path_overrides,omitempty"`
+	// HostFacts overrides what the deployer detects on a Linux node; set a
+	// key only when the detection is wrong.
+	HostFacts *HostFacts `yaml:"host_facts,omitempty" json:"host_facts,omitempty"`
 }
+
+// HostFacts are the facts of a node that the plan may set instead of the
+// detection: every key is optional.
+type HostFacts struct {
+	Family         string `yaml:"family,omitempty" json:"family,omitempty"`                   // debian, rhel, alpine
+	PackageManager string `yaml:"package_manager,omitempty" json:"package_manager,omitempty"` // apt, none (dnf and apk follow)
+	Init           string `yaml:"init,omitempty" json:"init,omitempty"`                       // systemd (openrc follows)
+}
+
+// The values of host_facts.
+const (
+	FamilyDebian = "debian"
+	FamilyRHEL   = "rhel"
+	FamilyAlpine = "alpine"
+
+	PackageManagerApt  = "apt"
+	PackageManagerDnf  = "dnf"
+	PackageManagerApk  = "apk"
+	PackageManagerNone = "none"
+
+	InitSystemd = "systemd"
+	InitOpenRC  = "openrc"
+)
 
 type ConnectionConfig struct {
 	Mode             string `yaml:"mode" json:"mode"` // local, ssh
@@ -764,7 +790,10 @@ type ConnectionConfig struct {
 	SSHPrivateKey    string `yaml:"ssh_private_key,omitempty" json:"ssh_private_key,omitempty"`
 	SSHPort          int    `yaml:"ssh_port,omitempty" json:"ssh_port,omitempty"`
 	Become           bool   `yaml:"become,omitempty" json:"become,omitempty"`
-	BecomePassword   string `yaml:"become_password,omitempty" json:"become_password,omitempty"`
+	// BecomeMethod is how become gets root: sudo or doas. Empty: sudo when
+	// the node has it, else doas.
+	BecomeMethod   string `yaml:"become_method,omitempty" json:"become_method,omitempty"`
+	BecomePassword string `yaml:"become_password,omitempty" json:"become_password,omitempty"`
 	// HostKeyChecking: tofu (default; records unknown keys in
 	// .norca-deployer/known_hosts and rejects changed ones), strict (the
 	// key must already be known), off.

@@ -63,6 +63,12 @@ func (p *DeploymentPlan) validateCluster() error {
 		if n.Platform == "windows" && n.Connection.Become {
 			return fmt.Errorf("%s: become is not supported on Windows nodes (connect as an administrator)", what)
 		}
+		if err := validateBecome(&n.Connection); err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
+		if err := validateHostFacts(n); err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
 		for _, key := range []string{n.Host, n.Hostname} {
 			if key == "" {
 				continue
@@ -258,4 +264,58 @@ func (p *DeploymentPlan) hostPackageCoversAllNodes(name string) bool {
 		}
 	}
 	return true
+}
+
+// Escalation methods of connection.become_method.
+const (
+	BecomeSudo = "sudo"
+	BecomeDoas = "doas"
+)
+
+func validateBecome(c *ConnectionConfig) error {
+	switch c.BecomeMethod {
+	case "":
+	case BecomeSudo, BecomeDoas:
+		if !c.Become {
+			return fmt.Errorf("connection.become_method %s needs become: true", c.BecomeMethod)
+		}
+	default:
+		return fmt.Errorf("connection.become_method %q must be sudo or doas", c.BecomeMethod)
+	}
+	if c.BecomeMethod == BecomeDoas && c.BecomePassword != "" {
+		return fmt.Errorf("connection.become_password cannot be used with become_method doas: doas does not read a password; allow the user without one (permit nopass) or use sudo")
+	}
+	return nil
+}
+
+// validateHostFacts checks the overrides of the detection against the
+// drivers the deployer has.
+func validateHostFacts(n *NodeConfig) error {
+	hf := n.HostFacts
+	if hf == nil {
+		return nil
+	}
+	if n.Platform == "windows" {
+		return fmt.Errorf("host_facts are for Linux nodes")
+	}
+	switch hf.Family {
+	case "", FamilyDebian, FamilyRHEL, FamilyAlpine:
+	default:
+		return fmt.Errorf("host_facts.family %q must be debian, rhel or alpine", hf.Family)
+	}
+	switch hf.PackageManager {
+	case "", PackageManagerApt, PackageManagerNone:
+	case PackageManagerDnf, PackageManagerApk:
+		return fmt.Errorf("host_facts.package_manager %s is not supported yet (the deployer drives apt; dnf and apk are planned)", hf.PackageManager)
+	default:
+		return fmt.Errorf("host_facts.package_manager %q must be apt or none", hf.PackageManager)
+	}
+	switch hf.Init {
+	case "", InitSystemd:
+	case InitOpenRC:
+		return fmt.Errorf("host_facts.init openrc is not supported yet (the deployer drives systemd; OpenRC is planned)")
+	default:
+		return fmt.Errorf("host_facts.init %q must be systemd", hf.Init)
+	}
+	return nil
 }

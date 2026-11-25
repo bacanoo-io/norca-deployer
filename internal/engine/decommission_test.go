@@ -159,7 +159,7 @@ func decomRunner(t *testing.T, plan *config.DeploymentPlan, inst *state.Installe
 	}
 	nodes := map[string]*connector.FakeConnector{}
 	r.connect = func(n *config.NodeConfig) (connector.Connector, error) {
-		f := connector.NewFakeConnector()
+		f := probed(debianProbe)
 		nodes[n.Hostname] = f
 		api.mu.Lock()
 		api.events = append(api.events, "uninstall "+n.Hostname)

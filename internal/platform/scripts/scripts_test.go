@@ -95,6 +95,16 @@ func TestFailureKeepsMarkerUnset(t *testing.T) {
 	}
 }
 
+// The command is POSIX sh: timeout with -k, which busybox has too.
+func TestCommandIsPortable(t *testing.T) {
+	p := &Prepared{Config: &config.ScriptConfig{Name: "prep", Timeout: 30}}
+	got := Command(p, "/var/lib/norca-deployer/scripts/prep.env")
+	want := "set -a; . '/var/lib/norca-deployer/scripts/prep.env'; set +a; timeout -k 10 30 bash '/var/lib/norca-deployer/scripts/prep.sh'"
+	if got != want {
+		t.Fatalf("Command = %s\nwant      %s", got, want)
+	}
+}
+
 func TestWindowsSkipped(t *testing.T) {
 	conn := connector.NewFakeConnector()
 	node := &config.NodeConfig{Host: "10.0.0.9", Platform: "windows"}

@@ -46,10 +46,42 @@ func TestSSHPortsOnlyWithDefaultDeny(t *testing.T) {
 
 func TestDetectSSHPorts(t *testing.T) {
 	c := connector.NewFakeConnector()
-	c.Responses["ss -Htlnp"] = `LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))
+	c.Responses["if command -v ss"] = `ss
+LISTEN 0 128 0.0.0.0:2222 0.0.0.0:* users:(("sshd",pid=1,fd=3))
 LISTEN 0 128 [::]:2222 [::]:* users:(("sshd",pid=1,fd=4))`
-	if got := mergePorts([]int{22}, detectSSHPorts(c)); len(got) != 2 || got[0] != 22 || got[1] != 2222 {
+	ports, _ := detectSSHPorts(c)
+	if got := mergePorts([]int{22}, ports); len(got) != 2 || got[0] != 22 || got[1] != 2222 {
 		t.Fatalf("ports = %v", got)
+	}
+}
+
+// Without ss (busybox, a minimal image) the listening sockets come from
+// /proc/net/tcp and tcp6: port 22 and the ports of sshd -T.
+func TestDetectSSHPortsWithoutSS(t *testing.T) {
+	c := connector.NewFakeConnector()
+	c.Responses["if command -v ss"] = `proc
+port 2222
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:08AE 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 2 1 0000000000000000 100 0 0 10 0
+   2: 0A00000B:0016 0A000001:C350 01 00000000:00000000 02:00000000 00000000     0        0 3 4 0000000000000000 20 4 30 10 -1
+  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000000000000:08AE 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 4 1 0000000000000000 100 0 0 10 0
+`
+	ports, warning := detectSSHPorts(c)
+	if len(ports) != 1 || ports[0] != 2222 || warning != "" {
+		t.Fatalf("ports %v, warning %q", ports, warning)
+	}
+	if !strings.Contains(c.Commands[0], "/proc/net/tcp6") || !strings.Contains(c.Commands[0], "sshd -T") {
+		t.Fatalf("command %q", c.Commands[0])
+	}
+
+	// Nothing found: port 22, with a warning.
+	none := connector.NewFakeConnector()
+	none.Responses["if command -v ss"] = "proc\n"
+	ports, warning = detectSSHPorts(none)
+	if len(ports) != 1 || ports[0] != 22 || !strings.Contains(warning, "port 22") {
+		t.Fatalf("fallback: ports %v, warning %q", ports, warning)
 	}
 }
 

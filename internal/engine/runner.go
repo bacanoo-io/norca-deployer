@@ -13,6 +13,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
@@ -110,6 +111,9 @@ type target struct {
 	isMaster bool
 	paths    *storage.ResolvedPaths
 	conn     connector.Connector
+	// facts are what the probe found on the node (with the overrides of
+	// the plan); set when the node is connected.
+	facts *host.Facts
 
 	changed    bool // binary, certificates, configuration or service changed
 	wasRunning bool
@@ -169,6 +173,18 @@ func (r *Runner) Apply(ctx context.Context) error {
 	clients := r.targets(r.plan.Inventory.Clients, false)
 	defer closeAll(masters)
 	defer closeAll(clients)
+
+	// Every node is connected and probed before the first change: the
+	// checks of the plan that need the facts of the nodes run here.
+	fmt.Printf("    Connecting to the nodes and detecting their hosts (%d nodes)...\n", len(masters)+len(clients))
+	all := append(append([]*target{}, masters...), clients...)
+	r.probeAll(ctx, all)
+	if err := collect(masters); err != nil {
+		return fmt.Errorf("master node provisioning failed (nothing was changed): %w", err)
+	}
+	if err := r.checkFacts(all); err != nil {
+		return err
+	}
 
 	fmt.Printf("==> [2/5] Provisioning Master (Server) nodes (%d nodes)...\n", len(masters))
 	r.prepareAll(ctx, masters)
@@ -263,6 +279,9 @@ func (r *Runner) prepareAll(ctx context.Context, ts []*target) {
 		wg.Add(1)
 		go func(t *target) {
 			defer wg.Done()
+			if t.err != nil {
+				return // the connection or the probe failed
+			}
 			if ctx.Err() != nil {
 				t.err = interrupted(ctx, "the provisioning of the node")
 				return
@@ -277,12 +296,10 @@ func (r *Runner) prepareAll(ctx context.Context, ts []*target) {
 // whether anything that needs a restart changed.
 func (r *Runner) prepareNode(t *target) error {
 	node := t.node
-	fmt.Printf("    -> [%s] Connecting (%s mode)...\n", node.Host, node.Connection.Mode)
-	conn, err := r.connect(node)
-	if err != nil {
-		return fmt.Errorf("connection error: %w", err)
+	if err := r.openTarget(t); err != nil {
+		return err
 	}
-	t.conn = conn
+	conn := t.conn
 	isWin := t.isWindows()
 	paths := t.paths
 
@@ -698,6 +715,7 @@ func (r *Runner) createConnector(node *config.NodeConfig) (connector.Connector, 
 		PrivateKeyData:  []byte(c.SSHPrivateKey),
 		Timeout:         15 * time.Second,
 		Become:          c.Become && !isWin,
+		BecomeMethod:    connector.Escalation(c.BecomeMethod),
 		BecomePassword:  c.BecomePassword,
 		HostKeyCallback: hostKeyCallback,
 		Windows:         isWin,

@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -18,6 +19,8 @@ type InstalledNode struct {
 	Release     string            `json:"release"`
 	InstalledAt time.Time         `json:"installed_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
+	// Facts are what the deployer found on the node at the last apply.
+	Facts *host.Facts `json:"facts,omitempty"`
 }
 
 // Installed is the list of installed nodes of one region, keyed by
@@ -58,8 +61,9 @@ func (s *Store) SaveInstalled(inst *Installed) error {
 	return err
 }
 
-// Record marks a node as installed with the given release.
-func (inst *Installed) Record(node *config.NodeConfig, role, release string) {
+// Record marks a node as installed with the given release and the facts
+// the probe found (nil: unknown).
+func (inst *Installed) Record(node *config.NodeConfig, role, release string, facts *host.Facts) {
 	now := time.Now().UTC()
 	key := config.NodeKey(node)
 	e := inst.Nodes[key]
@@ -68,6 +72,9 @@ func (inst *Installed) Record(node *config.NodeConfig, role, release string) {
 		inst.Nodes[key] = e
 	}
 	e.Role, e.Node, e.Release, e.UpdatedAt = role, *node, release, now
+	if facts != nil {
+		e.Facts = facts
+	}
 }
 
 // Lookup finds an installed node by its key, host or hostname.

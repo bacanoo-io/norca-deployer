@@ -19,11 +19,14 @@ import (
 
 // SSHConnector executes commands and manages files on remote nodes over native SSH and SFTP.
 type SSHConnector struct {
-	client         *ssh.Client
-	sftpClient     *sftp.Client
-	host           string
-	user           string
+	client     *ssh.Client
+	sftpClient *sftp.Client
+	host       string
+	user       string
+	// become says that the escalation is on (a Linux node, a user that is not
+	// root, become in the plan); escalation is its method.
 	become         bool
+	escalation     Escalation
 	becomePassword string
 	windows        bool
 	ctx            context.Context
@@ -40,10 +43,12 @@ type SSHOptions struct {
 	PrivateKeyData []byte
 	Timeout        time.Duration
 
-	// Become runs commands and privileged file writes through sudo when the
-	// SSH user is not root. BecomePassword is fed to sudo on stdin; without
-	// it sudo must not ask for a password (NOPASSWD).
+	// Become runs commands and privileged file writes through sudo or doas
+	// (BecomeMethod, default sudo; SetEscalation changes it) when the SSH
+	// user is not root. BecomePassword is fed to sudo on stdin; without it
+	// sudo must not ask for a password (NOPASSWD). doas never asks.
 	Become         bool
+	BecomeMethod   Escalation
 	BecomePassword string
 
 	// HostKeyCallback checks the host key. It is required: a nil callback is
@@ -137,16 +142,49 @@ func NewSSHConnector(opts SSHOptions) (*SSHConnector, error) {
 		return nil, fmt.Errorf("failed to initialize SFTP subsystem (%s): %w", addr, err)
 	}
 
-	return &SSHConnector{
+	sc := &SSHConnector{
 		client:         client,
 		sftpClient:     sftpClient,
 		host:           opts.Host,
 		user:           opts.User,
 		become:         opts.Become && !opts.Windows && opts.User != "" && opts.User != "root",
+		escalation:     EscalationSudo,
 		becomePassword: opts.BecomePassword,
 		windows:        opts.Windows,
 		ctx:            opts.Context,
-	}, nil
+	}
+	if opts.BecomeMethod != "" {
+		if err := sc.SetEscalation(opts.BecomeMethod); err != nil {
+			_ = sc.Close()
+			return nil, err
+		}
+	}
+	return sc, nil
+}
+
+// SetEscalation sets the escalation of the commands that follow. It is
+// ignored when the connection needs none.
+func (s *SSHConnector) SetEscalation(esc Escalation) error {
+	if err := ValidEscalation(esc, s.becomePassword != ""); err != nil {
+		return err
+	}
+	if !s.become {
+		return nil
+	}
+	if esc == EscalationNone {
+		// The probe found the SSH user to be root after all (uid 0).
+		s.become = false
+		return nil
+	}
+	s.escalation = esc
+	return nil
+}
+
+// ExecuteAsUser runs a command as the SSH user, without escalation (the
+// probe of the facts of the node).
+func (s *SSHConnector) ExecuteAsUser(cmd string) (string, error) {
+	stdout, stderr, err := s.exec(cmd, false)
+	return output(stdout, stderr, err)
 }
 
 func parseSigner(pemBytes []byte, passphrase string) (ssh.Signer, error) {
@@ -156,24 +194,32 @@ func parseSigner(pemBytes []byte, passphrase string) (ssh.Signer, error) {
 	return ssh.ParsePrivateKey(pemBytes)
 }
 
-// run executes a command, wrapped in sudo when become is active, and returns
-// stdout and stderr separately.
+// run executes a command, with the escalation when become is active, and
+// returns stdout and stderr separately.
 func (s *SSHConnector) run(cmd string) (string, string, error) {
+	return s.exec(cmd, s.become)
+}
+
+// exec executes a command in the dialect of the node: PowerShell on
+// Windows, sh elsewhere (with the escalation when escalate is set).
+func (s *SSHConnector) exec(cmd string, escalate bool) (string, string, error) {
 	session, err := s.client.NewSession()
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create SSH session: %w", err)
 	}
 	defer session.Close()
 
-	if s.windows {
+	switch {
+	case s.windows:
 		cmd = PowerShellCommand(cmd)
-	} else if s.become {
-		if s.becomePassword != "" {
-			cmd = "sudo -S -p '' -- bash -c " + ShellQuote(cmd)
+	case escalate:
+		password := s.escalation == EscalationSudo && s.becomePassword != ""
+		cmd = PosixCommand(cmd, s.escalation, password)
+		if password {
 			session.Stdin = strings.NewReader(s.becomePassword + "\n")
-		} else {
-			cmd = "sudo -n -- bash -c " + ShellQuote(cmd)
 		}
+	default:
+		cmd = PosixCommand(cmd, EscalationNone, false)
 	}
 
 	var stdout, stderr bytes.Buffer
@@ -192,18 +238,23 @@ func (s *SSHConnector) run(cmd string) (string, string, error) {
 
 func (s *SSHConnector) ExecuteCommand(cmd string) (string, error) {
 	stdout, stderr, err := s.run(cmd)
-	output := stdout
+	return output(stdout, stderr, err)
+}
+
+// output joins stdout and stderr; a failed command's error carries them.
+func output(stdout, stderr string, err error) (string, error) {
+	out := stdout
 	if stderr != "" {
-		if output != "" {
-			output += "\n"
+		if out != "" {
+			out += "\n"
 		}
-		output += stderr
+		out += stderr
 	}
 
 	if err != nil {
-		return output, fmt.Errorf("remote command failed: %w (output: %s)", err, output)
+		return out, fmt.Errorf("remote command failed: %w (output: %s)", err, out)
 	}
-	return output, nil
+	return out, nil
 }
 
 func (s *SSHConnector) CopyFile(srcReader io.Reader, destPath string, mode os.FileMode) error {

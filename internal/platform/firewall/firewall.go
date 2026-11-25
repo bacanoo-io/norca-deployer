@@ -214,7 +214,16 @@ type Result struct {
 
 // Configure applies the spec on a Linux node.
 func Configure(conn connector.Connector, s Spec) (*Result, error) {
-	s.SSHPorts = mergePorts(s.SSHPorts, detectSSHPorts(conn))
+	detected, warning := detectSSHPorts(conn)
+	s.SSHPorts = mergePorts(s.SSHPorts, detected)
+	res, err := configure(conn, s)
+	if res != nil && warning != "" {
+		res.Warnings = append(res.Warnings, warning)
+	}
+	return res, err
+}
+
+func configure(conn connector.Connector, s Spec) (*Result, error) {
 	switch {
 	case active(conn, "ufw status", "Status: active"):
 		return configureUFW(conn, s, false)
@@ -241,12 +250,64 @@ func installed(conn connector.Connector, bin string) bool {
 	return err == nil
 }
 
-// detectSSHPorts returns the TCP ports sshd listens on.
-func detectSSHPorts(conn connector.Connector) []int {
-	out, err := conn.ExecuteCommand(`ss -Htlnp 2>/dev/null | grep '"sshd"' || true`)
+// sshPortsCommand lists the TCP ports sshd listens on: with ss when the
+// node has it; else (busybox, a minimal image) the port lines of sshd -T and
+// the sockets of /proc/net/tcp and tcp6.
+const sshPortsCommand = `if command -v ss >/dev/null 2>&1; then echo ss; ss -Htlnp 2>/dev/null | grep '"sshd"' || true; ` +
+	`else echo proc; sshd -T 2>/dev/null | awk '$1 == "port" { print "port " $2 }'; cat /proc/net/tcp /proc/net/tcp6 2>/dev/null; fi`
+
+// detectSSHPorts returns the TCP ports sshd listens on. Without ss it takes
+// port 22 and the ports of sshd -T that a socket listens on; when it finds
+// none it returns port 22 and a warning.
+func detectSSHPorts(conn connector.Connector) ([]int, string) {
+	out, err := conn.ExecuteCommand(sshPortsCommand)
 	if err != nil {
-		return nil
+		return nil, ""
 	}
+	if first, rest, _ := strings.Cut(out, "\n"); strings.TrimSpace(first) == "proc" {
+		if ports := listeningSSHPorts(rest); len(ports) > 0 {
+			return ports, ""
+		}
+		return []int{22}, "the ports of sshd could not be found (no ss, no listening socket of sshd in /proc/net/tcp): port 22 is assumed"
+	}
+	return parseSS(out), ""
+}
+
+// listeningSSHPorts reads the port lines of sshd -T and the lines of
+// /proc/net/tcp*: the ports of sshd (22 and those of its configuration)
+// that a socket listens on (state 0A).
+func listeningSSHPorts(out string) []int {
+	candidates := map[int]bool{22: true}
+	listening := map[int]bool{}
+	for line := range strings.SplitSeq(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[0] == "port" {
+			if p, err := strconv.Atoi(f[1]); err == nil {
+				candidates[p] = true
+			}
+			continue
+		}
+		if len(f) < 4 || f[3] != "0A" {
+			continue
+		}
+		if i := strings.LastIndex(f[1], ":"); i >= 0 {
+			if p, err := strconv.ParseInt(f[1][i+1:], 16, 32); err == nil {
+				listening[int(p)] = true
+			}
+		}
+	}
+	var ports []int
+	for p := range candidates {
+		if listening[p] {
+			ports = append(ports, p)
+		}
+	}
+	sort.Ints(ports)
+	return ports
+}
+
+// parseSS reads the lines of ss -Htlnp of sshd.
+func parseSS(out string) []int {
 	var ports []int
 	for line := range strings.SplitSeq(out, "\n") {
 		f := strings.Fields(line)

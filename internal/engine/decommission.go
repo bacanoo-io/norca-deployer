@@ -203,7 +203,7 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 // and firewall settings stay. A node that cannot be reached (e.g. a deleted
 // machine) is only reported.
 func (r *Runner) uninstall(d *config.DecommissionNode) {
-	conn, err := r.connect(&d.NodeConfig)
+	conn, _, err := r.openNode(&d.NodeConfig)
 	if err != nil {
 		fmt.Printf("    [WARN] %s not reachable, Norca not uninstalled from it: %v\n", d.Host, err)
 		return

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"time"
 )
 
 // LocalConnector executes commands and file operations directly on the local operating system.
@@ -30,8 +31,13 @@ func (l *LocalConnector) ExecuteCommand(cmd string) (string, error) {
 	if runtime.GOOS == "windows" {
 		execCmd = exec.CommandContext(l.ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd)
 	} else {
-		execCmd = exec.CommandContext(l.ctx, "bash", "-c", cmd)
+		// The POSIX dialect: sh, as on a node over SSH.
+		execCmd = exec.CommandContext(l.ctx, "sh", "-c", cmd)
+		killGroup(execCmd)
 	}
+	// After an abort the wait for the output ends even when a process
+	// that was not killed holds the pipes.
+	execCmd.WaitDelay = 5 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	execCmd.Stdout = &stdout

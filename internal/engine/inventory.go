@@ -115,7 +115,7 @@ func (r *Runner) recordInstalled(ts []*target, role string) error {
 	changed := false
 	for _, t := range ts {
 		if t.err == nil && t.conn != nil {
-			r.installed.Record(t.node, role, r.plan.Release.Version)
+			r.installed.Record(t.node, role, r.plan.Release.Version, t.facts)
 			changed = true
 		}
 	}
@@ -162,6 +162,9 @@ func InventoryReport(plan *config.DeploymentPlan, vault *crypto.Vault) ([]NodeSt
 		status := "new"
 		if e := inst.Nodes[key]; e != nil {
 			status = "installed " + e.Release
+			if e.Facts != nil {
+				status += " on " + e.Facts.String()
+			}
 			if e.Role != role {
 				status = "role change from " + e.Role + " (not allowed)"
 			}

@@ -232,7 +232,7 @@ func equivPackages(plan *config.DeploymentPlan, arch string) (map[string][2]stri
 
 // equivProbe is what the facts probe reads on a Debian 12 node; empty
 // before the probe exists.
-var equivProbe = ""
+var equivProbe = debianProbe
 
 func TestRecordPrepareNode(t *testing.T) {
 	out := os.Getenv("NORCA_EQUIV_OUT")

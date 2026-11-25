@@ -415,6 +415,19 @@ A Variable is written again only when its items changed since the last `apply`.
 | `server_settings` | | Servers only |
 | `client_settings` | | Clients; on a server it also runs a client on that node |
 | `path_overrides` | | Paths for this node |
+| `host_facts` | detected | Overrides of what the deployer detects on a Linux node; see below |
+
+### host_facts
+
+Before it changes anything, the deployer connects to every node of the plan and finds out what the node is: the family of its operating system (`/etc/os-release`: `ID`, then `ID_LIKE`), its package manager, its init system and how commands get root. The apply prints one line per node (`Host: debian 12 (debian family), amd64, systemd, apt`) and the installed list keeps it. A node the deployer cannot drive fails before anything is changed on it, with what was found.
+
+Set a key of `host_facts` only when the detection is wrong; the value is taken as it is and printed (`package manager none (from the plan; detected apt)`).
+
+| Key | Values | Description |
+| --- | --- | --- |
+| `family` | `debian`, `rhel`, `alpine` | The family of the operating system (Ubuntu is `debian`) |
+| `package_manager` | `apt`, `none` | `none`: a system without a package manager; `host_packages` for the node are an error |
+| `init` | `systemd` | The init system that runs the agent |
 
 ### decommission
 
@@ -439,8 +452,9 @@ Nodes to take out of the cluster and uninstall; see [Adding and removing nodes](
 | `ssh_private_key` | | Private key inline (may be `!enc:`) |
 | `ssh_key_passphrase` | | Key passphrase (may be `!enc:`) |
 | `ssh_password` | | Password (may be `!enc:`) |
-| `become` | `false` | Use `sudo` (Linux only) |
-| `become_password` | | sudo password (may be `!enc:`) |
+| `become` | `false` | Run the commands as root with `sudo` or `doas` (Linux only; nothing is needed when `ssh_user` is root) |
+| `become_method` | detected | `sudo` or `doas`; without it `sudo` when the node has it, else `doas` |
+| `become_password` | | sudo password (may be `!enc:`); not with `doas`, which does not read one |
 | `host_key_checking` | `tofu` | `tofu`, `strict` or `off` |
 | `known_hosts_file` | | Known hosts file for `strict` |
 
