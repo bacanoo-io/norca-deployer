@@ -383,6 +383,10 @@ func (r *Runner) prepareNode(t *target) error {
 	if res.Changed && len(bin.Files) > 0 {
 		fmt.Printf("    -> [%s] norca binary %s installed\n", node.Host, r.plan.Release.Version)
 	}
+	// A new binary needs the restart; on Windows it is staged as
+	// norca.exe.new and swapped in by the restart. A package that changed
+	// the binary is found by its digest.
+	t.changed = t.changed || res.Restart
 	if after := r.binaryDigest(t); after != binaryBefore {
 		t.changed = true
 	}
