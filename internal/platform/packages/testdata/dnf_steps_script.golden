@@ -1,0 +1,199 @@
+# dnf_busy prints another dnf, yum or rpm process, and is false when none
+# runs.
+dnf_busy() {
+  for dnf_proc in /proc/[0-9]*; do
+    { read -r dnf_comm <"$dnf_proc/comm"; } 2>/dev/null || continue
+    case $dnf_comm in
+    dnf | dnf-3 | dnf4 | dnf5 | yum | rpm | dnf-automatic)
+      echo "$dnf_comm (process ${dnf_proc#/proc/})"
+      return 0
+      ;;
+    esac
+  done
+  return 1
+}
+# dnf_wait SECONDS waits until no other dnf, yum or rpm process runs, at
+# most SECONDS: dnf 4 waits for its own lock without an end, and dnf and
+# rpm stop at once on the lock of the rpm database.
+dnf_wait() {
+  dnf_waited=0
+  while dnf_holder=$(dnf_busy); do
+    [ "$dnf_waited" -lt "$1" ] || die "another package manager process, $dnf_holder, still runs after $1 seconds (host_packages.lock_timeout)"
+    [ "$dnf_waited" -gt 0 ] || log "waiting for $dnf_holder to finish"
+    sleep 2
+    dnf_waited=$((dnf_waited + 2))
+  done
+}
+# rpm_versions NAME prints the installed versions of a package as
+# EPOCH:VERSION-RELEASE, one line per installed architecture.
+rpm_versions() {
+  rpm -q --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}\n' "$1" 2>/dev/null | sed -n '/^[0-9][0-9]*:[^ ]*$/p'
+}
+# rpm_match VERSIONS WANTED is true when one of the versions
+# (EPOCH:VERSION-RELEASE lines) is WANTED; a WANTED without an epoch matches
+# the version of any epoch.
+rpm_match() {
+  case $2 in
+  *:*) printf '%s\n' "$1" | grep -qxF -- "$2" ;;
+  *) printf '%s\n' "$1" | sed 's/^[0-9]*://' | grep -qxF -- "$2" ;;
+  esac
+}
+# rpm_has NAME VERSION is true when the package is installed (at VERSION,
+# when one is given).
+rpm_has() {
+  rpm_v=$(rpm_versions "$1")
+  [ -n "$rpm_v" ] && { [ -z "$2" ] || rpm_match "$rpm_v" "$2"; }
+}
+# dnf_expect NAME VERSION stops unless the package is installed (at
+# VERSION, when one is given).
+dnf_expect() {
+  rpm_v=$(rpm_versions "$1")
+  [ -n "$rpm_v" ] || die "package $1 is not installed after dnf install"
+  [ -z "$2" ] || rpm_match "$rpm_v" "$2" || die "package $1: version $(printf '%s' "$rpm_v" | tr '\n' ' ') installed, $2 requested"
+  log "package $1 $(printf '%s\n' "$rpm_v" | sed -n '1s/^0://p')"
+}
+# dnf_versionlock_ok is true when dnf has its versionlock command (dnf5, or
+# dnf 4 with its plugin).
+dnf_versionlock_ok() {
+  dnf -q --disablerepo='*' versionlock list >/dev/null 2>&1
+}
+# dnf_locks prints the names of the packages a versionlock entry holds:
+# dnf 4 lists NAME-EPOCH:VERSION-RELEASE.*, dnf5 "Package name: NAME". It
+# prints nothing without the versionlock command.
+dnf_locks() {
+  dnf -q --disablerepo='*' versionlock list 2>/dev/null | awk '
+    /^Package name: / { print $3; next }
+    /^[#!]/ || NF != 1 { next }
+    {
+      n = split($1, part, "-")
+      if (n < 3) next
+      name = part[1]
+      for (i = 2; i <= n - 2; i++) name = name "-" part[i]
+      print name
+    }'
+}
+# dnf_held NAME is true when the package is in the list of dnf_locks that
+# the caller put into dnf_held_list.
+dnf_held() {
+  printf '%s\n' "$dnf_held_list" | grep -qxF -- "$1"
+}
+# dnf_lock NAME holds a package at its installed version.
+dnf_lock() {
+  dnf -q --disablerepo='*' versionlock add "$1" >/dev/null
+}
+# dnf_unlock NAME removes the versionlock entries of a package.
+dnf_unlock() {
+  dnf -q --disablerepo='*' versionlock delete "$1" >/dev/null
+}
+
+# dnf
+if ! command -v dnf >/dev/null 2>&1 || ! command -v rpm >/dev/null 2>&1; then
+  die "host_packages.dnf need a node with dnf and rpm"
+fi
+
+# dnf repository docker
+step_changed=0
+ensure_dir '/etc/pki/rpm-gpg' 0755
+ensure_dir '/etc/yum.repos.d' 0755
+put_file '/etc/pki/rpm-gpg/norca-docker.asc' 0644 <<'NORCA_EOF'
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+xyz
+-----END PGP PUBLIC KEY BLOCK-----
+NORCA_EOF
+[ "$wrote" = 0 ] || step_changed=1
+put_file '/etc/yum.repos.d/norca-docker.repo' 0644 <<'NORCA_EOF'
+# Managed by norca-deployer. Do not edit.
+[norca-docker]
+name=norca-deployer: docker
+baseurl=https://download.docker.com/linux/rhel/$releasever/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/norca-docker.asc
+priority=10
+includepkgs=containerd.io docker-ce*
+excludepkgs=podman*
+NORCA_EOF
+[ "$wrote" = 0 ] || step_changed=1
+if [ "$step_changed" = 1 ] || ! {
+true
+}; then
+dnf_wait 300
+dnf -q makecache --repo='norca-docker' >/dev/null
+log 'repository docker: metadata read'
+  changed=1
+fi
+
+# dnf repositories the plan dropped
+if step_out=$(
+for f in /etc/yum.repos.d/norca-*.repo /etc/pki/rpm-gpg/norca-*.asc; do
+  [ -e "$f" ] || continue
+  case ${f##*/} in
+  norca-docker.repo | norca-docker.asc) continue ;;
+  esac
+  rm -f "$f"
+  echo "removed $f"
+done
+); then
+  step_rc=0
+else
+  step_rc=1
+fi
+step_lines 'dnf repositories the plan dropped' "$step_rc" "$step_out"
+
+# dnf packages
+if ! {
+rpm_has 'containerd.io' '1.7.27-3.1.el9' &&
+  rpm_has 'docker-ce' '3:27.3.1-1.el9' &&
+  rpm_has 'jq' ''
+}; then
+dnf_wait 300
+dnf_held_list=$(dnf_locks)
+if ! rpm_has 'containerd.io' '1.7.27-3.1.el9' && dnf_held 'containerd.io'; then
+  dnf_unlock 'containerd.io'
+fi
+if ! rpm_has 'docker-ce' '3:27.3.1-1.el9' && dnf_held 'docker-ce'; then
+  dnf_unlock 'docker-ce'
+fi
+if ! rpm_has 'jq' '' && dnf_held 'jq'; then
+  dnf_unlock 'jq'
+fi
+dnf -y -q --setopt=install_weak_deps=False --refresh install 'containerd.io-1.7.27-3.1.el9' 'docker-ce-3:27.3.1-1.el9' 'jq'
+  changed=1
+fi
+
+# dnf versionlock
+if ! {
+dnf_versionlock_ok
+}; then
+dnf_wait 300
+if dnf --version 2>/dev/null | head -n 1 | grep -q '^dnf5'; then
+  dnf -y -q install 'dnf5-command(versionlock)'
+else
+  dnf -y -q install python3-dnf-plugin-versionlock
+fi
+dnf_versionlock_ok || die "dnf has no versionlock command after the install of its plugin"
+log "versionlock of dnf installed"
+  changed=1
+fi
+
+# dnf holds
+dnf_wait 300
+dnf_held_list=$(dnf_locks)
+if ! dnf_held 'containerd.io'; then
+  dnf_lock 'containerd.io'
+  log "package containerd.io held"
+fi
+if dnf_held 'docker-ce'; then
+  dnf_unlock 'docker-ce'
+  log "package docker-ce released"
+fi
+if dnf_held 'jq'; then
+  dnf_unlock 'jq'
+  log "package jq released"
+fi
+
+# dnf versions
+dnf_expect 'containerd.io' '1.7.27-3.1.el9'
+dnf_expect 'docker-ce' '3:27.3.1-1.el9'
+dnf_expect 'jq' ''
+

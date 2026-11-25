@@ -288,7 +288,7 @@ func TestStepsWithoutUpdateCache(t *testing.T) {
 
 func TestNoPackageManager(t *testing.T) {
 	sel := Select(testHostPackages().Apt, testNode, false)
-	for _, m := range []Manager{None{}, Unsupported{Manager: "dnf"}} {
+	for _, m := range []Manager{None{}, Unsupported{Manager: "apk"}} {
 		if steps, err := m.Steps(&Selection{}, Context{}); err != nil || steps != nil {
 			t.Errorf("%s with nothing: %v %v", m.Name(), steps, err)
 		}
