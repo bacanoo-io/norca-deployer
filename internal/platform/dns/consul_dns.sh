@@ -1,8 +1,9 @@
 # Conditional DNS forwarding of one domain (consul) to the DNS interface of
-# the local Consul agent: consul.dns_forwarding of norca-deployer. Only that
-# domain goes to Consul; every other name keeps going to the resolver the
-# host has. The resolver must be there already (systemd-resolved or
-# dnsmasq); nothing is installed here.
+# the local Consul agent: consul.dns_forwarding of norca-deployer. Consul
+# answers that domain; every other name keeps being answered by the servers
+# the host has (systemd-resolved asks the global DNS= server too, in
+# parallel, and Consul refuses those names). The resolver must be there
+# already (systemd-resolved or dnsmasq); nothing is installed here.
 #
 # One implementation for both ways the deployer reaches a host: the SSH path
 # uploads this file and runs it with sh, the install script of a scaled
@@ -360,11 +361,21 @@ ncd_write_resolved() {
     printf '; consul.dns_forwarding: no DNSSEC validation below the %s domain, whose\n' "$ncd_domain"
     printf '; answers the Consul agent does not sign.\n'
     printf '%s\n' "$ncd_domain"
+    printf '; A .negative file replaces the built-in negative trust anchors of\n'
+    printf '; systemd-resolved, so they follow (the list of systemd 252).\n'
+    for ncd_nta in home.arpa 10.in-addr.arpa 16.172.in-addr.arpa 17.172.in-addr.arpa 18.172.in-addr.arpa \
+      19.172.in-addr.arpa 20.172.in-addr.arpa 21.172.in-addr.arpa 22.172.in-addr.arpa 23.172.in-addr.arpa \
+      24.172.in-addr.arpa 25.172.in-addr.arpa 26.172.in-addr.arpa 27.172.in-addr.arpa 28.172.in-addr.arpa \
+      29.172.in-addr.arpa 30.172.in-addr.arpa 31.172.in-addr.arpa 170.0.0.192.in-addr.arpa \
+      171.0.0.192.in-addr.arpa 168.192.in-addr.arpa d.f.ip6.arpa ipv4only.arpa corp home internal intranet \
+      lan local private test; do
+      printf '%s\n' "$ncd_nta"
+    done
   } >"$ncd_tmp/anchor"
   {
     printf '# Managed by norca-deployer. Do not edit.\n'
-    printf '# consul.dns_forwarding: the %s domain goes to the Consul agent; other\n' "$ncd_domain"
-    printf '# names keep going to the servers the host has.\n'
+    printf '# consul.dns_forwarding: the Consul agent answers the %s domain; other\n' "$ncd_domain"
+    printf '# names are answered by the servers the host has.\n'
     printf '[Resolve]\n'
     printf 'DNS=%s\n' "$NCD_RESOLVED_DNS"
     printf 'Domains=~%s\n' "$ncd_domain"
@@ -384,6 +395,7 @@ ncd_write_resolved() {
   if [ "$ncd_changed" = 1 ]; then
     ncd_restart systemd-resolved || return 1
   fi
+  ncd_check_upstream
   if [ "$ncd_docker" = 1 ]; then
     ncd_say "bridge $ncd_bridge"
     ncd_write_docker
@@ -391,6 +403,22 @@ ncd_write_resolved() {
   fi
   if [ "$ncd_had_extra" = 1 ]; then
     ncd_warn_daemon_json
+  fi
+}
+
+# ncd_check_upstream warns when systemd-resolved has no DNS server but the
+# Consul agent: names outside the domain then do not resolve (and the global
+# server of the drop-in keeps the fallback servers of resolved unused). On
+# Debian with ifupdown, a systemd-resolved installed after the network came
+# up gets the DHCP servers only with the next lease.
+ncd_check_upstream() {
+  [ "$ncd_online" = 1 ] || return 0
+  ncd_servers=$(resolvectl dns 2>/dev/null) || return 0
+  ncd_others=$(printf '%s\n' "$ncd_servers" | awk -v own="$NCD_RESOLVED_DNS" '
+    { sub(/^[^:]*:/, ""); for (i = 1; i <= NF; i++) if ($i != own) n++ }
+    END { print n + 0 }') || ncd_others=1
+  if [ "$ncd_others" = 0 ]; then
+    ncd_say "warn systemd-resolved has no DNS server but the Consul agent (resolvectl dns): names outside the $ncd_domain domain do not resolve. Give it the servers of the network: with ifupdown and DHCP they come with the next lease (ifdown and ifup the interface, or reboot), or set DNS= in a file of /etc/systemd/resolved.conf.d"
   fi
 }
 

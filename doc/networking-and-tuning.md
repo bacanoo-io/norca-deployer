@@ -128,7 +128,10 @@ consul:
     docker: false            # containers on docker0 resolve the domain too (systemd-resolved only)
 ```
 
-This is **conditional forwarding**: only the `consul` domain goes to Consul; every other name keeps going to the resolver the host already has. The deployer does not send all lookups to Consul and sets no recursors in Consul.
+This is **conditional forwarding**: the `consul` domain is answered by Consul, every other name keeps being answered by the resolver the host already has. The deployer does not make Consul the resolver of the host and sets no recursors in Consul.
+
+> [!NOTE]
+> **systemd-resolved also asks Consul for other names.** The server of the drop-in is a global `DNS=` server, and systemd-resolved sends a name that matches no routing domain to the servers of every link with `DefaultRoute=` *and* to the global ones, in parallel (systemd-resolved.service(8); seen on Debian 12, systemd 252). Consul refuses such a name (`REFUSED`, it has no recursors) and the answer of the servers of the host is used, so names resolve as before; the Consul agent only sees the extra queries. dnsmasq sends only the domain to Consul.
 
 **The deployer never installs a resolver.** It configures the one the node has, before the directories of the agent are made (after the host packages and the tuning):
 
@@ -151,12 +154,15 @@ host_packages:
     - name: systemd-resolved   # takes over /etc/resolv.conf (127.0.0.53)
 ```
 
+> [!WARNING]
+> **Debian with ifupdown and DHCP:** the package points `/etc/resolv.conf` to the stub of systemd-resolved at once, but systemd-resolved gets the DNS servers of the DHCP lease only with the next lease (dhclient hands them over through `resolvconf`). Until then names outside the `consul` domain do not resolve; the deployer warns (`systemd-resolved has no DNS server but the Consul agent`) on every `apply` until `resolvectl dns` shows a server of the network. Renew the lease (`ifdown`/`ifup` of the interface, or a reboot), or give systemd-resolved its servers with `DNS=` in a file of `/etc/systemd/resolved.conf.d`. Hosts with systemd-networkd or NetworkManager hand the servers over themselves.
+
 **What it writes** (each file starts with `# Managed by norca-deployer. Do not edit.`, or `;` in the trust anchor):
 
 | Method | File | Content |
 | --- | --- | --- |
 | systemd-resolved | `/etc/systemd/resolved.conf.d/norca-consul.conf` | `[Resolve]`, `DNS=127.0.0.1:8600`, `Domains=~consul` (and `DNSStubListenerExtra=` with `docker`) |
-| systemd-resolved | `/etc/dnssec-trust-anchors.d/norca-consul.negative` | `consul`: a negative trust anchor, so that DNSSEC validation (when it is on) skips the domain, whose answers Consul does not sign; DNSSEC stays as it is for every other name |
+| systemd-resolved | `/etc/dnssec-trust-anchors.d/norca-consul.negative` | `consul`: a negative trust anchor, so that DNSSEC validation (`DNSSEC=yes` or `allow-downgrade`) skips the domain, whose answers Consul does not sign; DNSSEC stays as it is for every other name. A `.negative` file replaces the built-in negative trust anchors of systemd-resolved (the private zones: `10.in-addr.arpa`, `local`, `home.arpa`, ...), so the file lists them too (the list of systemd 252) |
 | dnsmasq | `/etc/dnsmasq.d/norca-consul.conf` | `server=/consul/127.0.0.1#8600` |
 
 A file is written only when its content differs, and the resolver is restarted (`systemctl restart systemd-resolved` or `dnsmasq`) only when a file changed or was removed; a second `apply` restarts nothing. The agent is not restarted for it. The work is done by a POSIX `sh` script that the deployer uploads to `/var/lib/norca-deployer/consul-dns.sh` and runs; the install script of [scaled machines](node-scaling-machines.md) runs the same functions.

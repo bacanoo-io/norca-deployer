@@ -1,7 +1,9 @@
 // Package dns makes Linux nodes resolve the Consul domain through the DNS
 // interface of the local Consul agent (consul.dns_forwarding): conditional
-// forwarding, so only that domain goes to Consul and every other name keeps
-// going to the resolver the host has.
+// forwarding, so Consul answers that domain and every other name keeps being
+// answered by the resolver the host has. systemd-resolved also asks its
+// global DNS= server (Consul) for other names, in parallel; Consul refuses
+// them.
 //
 // The work is done by one POSIX sh script (consul_dns.sh): it detects the
 // local resolver (systemd-resolved or dnsmasq), checks what it needs before

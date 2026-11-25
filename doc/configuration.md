@@ -223,7 +223,7 @@ Norca does not need Consul. Without this section every agent gets `auto_advertis
 
 ### consul.dns_forwarding
 
-Conditional forwarding: only the Consul domain goes to the DNS interface of the local Consul agent, every other name keeps going to the resolver the host has. The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes only; a Windows node is skipped with a warning.
+Conditional forwarding: the Consul domain is answered by the DNS interface of the local Consul agent, every other name keeps being answered by the resolver the host has (systemd-resolved asks Consul for them too, in parallel; Consul refuses them). The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes only; a Windows node is skipped with a warning.
 
 | Key | Default | Description |
 | --- | --- | --- |

@@ -204,9 +204,9 @@ type ConsulConfig struct {
 	DNSForwarding *ConsulDNSForwarding `yaml:"dns_forwarding,omitempty" json:"dns_forwarding,omitempty"`
 }
 
-// ConsulDNSForwarding is conditional DNS forwarding on the Linux nodes: only
-// the Consul domain goes to the local Consul agent, every other name keeps
-// going to the resolver the host has. The deployer configures a local
+// ConsulDNSForwarding is conditional DNS forwarding on the Linux nodes: the
+// local Consul agent answers the Consul domain, every other name keeps being
+// answered by the resolver the host has. The deployer configures a local
 // resolver that is there already (systemd-resolved or dnsmasq); it never
 // installs one.
 type ConsulDNSForwarding struct {

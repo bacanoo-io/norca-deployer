@@ -101,6 +101,14 @@ show) cat "$s/mainpid-$5" 2>/dev/null || echo 0 ;;
 esac
 `
 
+// resolvectlStub prints the servers of resolvectl dns when the test gave
+// them; without them it fails, as without a running resolved.
+const resolvectlStub = `#!/bin/sh
+[ "$1" = dns ] || exit 2
+[ -f "$NCD_TEST_STATE/resolvectl-dns" ] || exit 1
+cat "$NCD_TEST_STATE/resolvectl-dns"
+`
+
 const ipStub = `#!/bin/sh
 if [ "$*" != "-4 -o addr show dev docker0" ]; then
   echo "ip stub: unexpected $*" >&2
@@ -129,6 +137,7 @@ func newHost(t *testing.T, sh shell) *host {
 	h := &host{t: t, sh: sh, root: t.TempDir(), state: t.TempDir(), bin: t.TempDir()}
 	h.write(filepath.Join(h.bin, "systemctl"), systemctlStub, 0o755)
 	h.write(filepath.Join(h.bin, "ip"), ipStub, 0o755)
+	h.write(filepath.Join(h.bin, "resolvectl"), resolvectlStub, 0o755)
 	// A running systemd, a Debian 12 without a local resolver.
 	if err := os.MkdirAll(filepath.Join(h.root, "run/systemd/system"), 0o755); err != nil {
 		t.Fatal(err)
@@ -289,17 +298,53 @@ func (h *host) assertUntouched() {
 }
 
 const wantDropIn = `# Managed by norca-deployer. Do not edit.
-# consul.dns_forwarding: the consul domain goes to the Consul agent; other
-# names keep going to the servers the host has.
+# consul.dns_forwarding: the Consul agent answers the consul domain; other
+# names are answered by the servers the host has.
 [Resolve]
 DNS=127.0.0.1:8600
 Domains=~consul
 `
 
+// wantAnchor keeps the built-in negative trust anchors of systemd-resolved,
+// which any .negative file replaces (seen on Debian 12, systemd 252: the
+// journal listed only "consul" after the file of the domain alone).
 const wantAnchor = `; Managed by norca-deployer. Do not edit.
 ; consul.dns_forwarding: no DNSSEC validation below the consul domain, whose
 ; answers the Consul agent does not sign.
 consul
+; A .negative file replaces the built-in negative trust anchors of
+; systemd-resolved, so they follow (the list of systemd 252).
+home.arpa
+10.in-addr.arpa
+16.172.in-addr.arpa
+17.172.in-addr.arpa
+18.172.in-addr.arpa
+19.172.in-addr.arpa
+20.172.in-addr.arpa
+21.172.in-addr.arpa
+22.172.in-addr.arpa
+23.172.in-addr.arpa
+24.172.in-addr.arpa
+25.172.in-addr.arpa
+26.172.in-addr.arpa
+27.172.in-addr.arpa
+28.172.in-addr.arpa
+29.172.in-addr.arpa
+30.172.in-addr.arpa
+31.172.in-addr.arpa
+170.0.0.192.in-addr.arpa
+171.0.0.192.in-addr.arpa
+168.192.in-addr.arpa
+d.f.ip6.arpa
+ipv4only.arpa
+corp
+home
+internal
+intranet
+lan
+local
+private
+test
 `
 
 const wantDnsmasq = `# Managed by norca-deployer. Do not edit.
@@ -408,6 +453,37 @@ func TestScriptResolvedThroughNSS(t *testing.T) {
 	})
 }
 
+// systemd-resolved without a server for other names (Debian 12 with
+// ifupdown right after systemd-resolved is installed: the DHCP server comes
+// with the next lease): a warning, on every run until it is fixed.
+func TestScriptResolvedWithoutUpstream(t *testing.T) {
+	tests := []struct {
+		name    string
+		servers string
+		warn    bool
+	}{
+		{name: "only the Consul agent", servers: "Global: 127.0.0.1:8600\nLink 2 (mgmt0):\nLink 3 (lab0):\nLink 4 (docker0):\n", warn: true},
+		{name: "a server on a link", servers: "Global: 127.0.0.1:8600\nLink 2 (mgmt0): 172.25.64.1\nLink 3 (lab0):\n"},
+		{name: "a global server too", servers: "Global: 127.0.0.1:8600 10.0.0.2\nLink 2 (eth0):\n"},
+		{name: "an IPv6 server on a link", servers: "Global: 127.0.0.1:8600\nLink 2 (eth0): fe80::1%2\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			eachShell(t, func(t *testing.T, h *host) {
+				h.resolved()
+				h.write(filepath.Join(h.state, "resolvectl-dns"), tt.servers, 0o644)
+				for run := range 2 {
+					res := h.mustApply(forward(config.DNSMethodAuto, false))
+					got := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "systemd-resolved has no DNS server but the Consul agent")
+					if got != tt.warn || len(res.Warnings) > 1 {
+						t.Fatalf("run %d: warnings = %q, want the warning: %v", run+1, res.Warnings, tt.warn)
+					}
+				}
+			})
+		})
+	}
+}
+
 func TestScriptOtherDomainAndPort(t *testing.T) {
 	eachShell(t, func(t *testing.T, h *host) {
 		h.resolved()
@@ -415,7 +491,7 @@ func TestScriptOtherDomainAndPort(t *testing.T) {
 		if got := h.read(ResolvedDropIn); !strings.Contains(got, "\nDNS=[::1]:18600\nDomains=~dc1.example\n") {
 			t.Fatalf("%s:\n%s", ResolvedDropIn, got)
 		}
-		if got := h.read(TrustAnchor); !strings.HasSuffix(got, "\ndc1.example\n") {
+		if got := h.read(TrustAnchor); !strings.Contains(got, "\ndc1.example\n;") || !strings.HasSuffix(got, "\ntest\n") {
 			t.Fatalf("%s:\n%s", TrustAnchor, got)
 		}
 	})
