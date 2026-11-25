@@ -114,6 +114,27 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(out, "  - %s-%s hold=%t %s\n", p.Name, version, p.Hold, rolesLabel(p.Roles, p.Hosts))
 				}
 			}
+			if hp := plan.ApkPackages(); hp != nil {
+				fmt.Fprintf(out, "apk Repositories (%d):\n", len(hp.Repositories))
+				for _, r := range hp.Repositories {
+					tag := ""
+					if r.Tagged {
+						tag = "@norca-" + r.Name + " "
+					}
+					fmt.Fprintf(out, "  - %s: %s%s %s\n", r.Name, tag, r.URL, rolesLabel(r.Roles, nil))
+				}
+				fmt.Fprintf(out, "Host Packages of apk (%d):\n", len(hp.Install))
+				for _, p := range hp.Install {
+					name, version := p.Name, p.Version
+					if p.Repository != "" {
+						name += "@norca-" + p.Repository
+					}
+					if version == "" {
+						version = "any"
+					}
+					fmt.Fprintf(out, "  - %s=%s hold=%t %s\n", name, version, p.Hold, rolesLabel(p.Roles, p.Hosts))
+				}
+			}
 			if len(plan.Scripts) > 0 {
 				fmt.Fprintf(out, "Scripts (%d):\n", len(plan.Scripts))
 				for _, s := range plan.Scripts {

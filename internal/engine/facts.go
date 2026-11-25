@@ -144,6 +144,10 @@ func (r *Runner) checkNodeFacts(t *target) error {
 				f.PackageManager, strings.Join(others, ", ")))
 		}
 	}
+	if f.Init == host.InitOpenRC && r.plan.Consul.DNSForwardingEnabled() {
+		errs = append(errs, fmt.Errorf("consul.dns_forwarding needs systemd (systemd-resolved, or dnsmasq run by systemd), but the node runs OpenRC: "+
+			"set consul.dns_forwarding.enabled = false for a plan with Alpine nodes"))
+	}
 	if r.plan.Release.Source == config.ReleaseHostPackage && !own.Installs(r.plan.Release.Package) {
 		errs = append(errs, fmt.Errorf("release.source host-package: the block of host_packages of the node's package manager (%s) does not install %q on it",
 			f.PackageManager, r.plan.Release.Package))

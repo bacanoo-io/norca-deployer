@@ -102,6 +102,9 @@ func (h *equivHost) ExecuteCommand(cmd string) (string, error) {
 		return "norca-step no\n", nil
 	case h.probe != "" && strings.Contains(cmd, "/etc/os-release"):
 		return h.probe, nil
+	case strings.HasPrefix(cmd, "[ -d /run/systemd/system ]") && strings.Contains(h.probe, "\n/run/openrc\n"):
+		// An OpenRC node has no systemd.
+		return "", fmt.Errorf("exit status 1")
 	case strings.HasPrefix(cmd, "sha256sum "):
 		w := unquote(strings.TrimSuffix(cmd, " 2>/dev/null"))
 		if len(w) == 2 {

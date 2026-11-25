@@ -75,8 +75,8 @@ func hostPackageBinaryStep(bin, pkg string) step.Step {
 }
 
 // binaryStep is the norca binary of a node over SSH: the file of the
-// release, copied when the node has another one (on Windows staged as
-// norca.exe.new for the restart).
+// release (the musl build on Alpine), copied when the node has another one
+// (on Windows staged as norca.exe.new for the restart).
 func (r *Runner) binaryStep(t *target) (step.Step, error) {
 	if r.plan.Release.Source == config.ReleaseHostPackage {
 		return hostPackageBinaryStep(t.paths.BinDir+"/norca", r.plan.Release.Package), nil
@@ -85,7 +85,7 @@ func (r *Runner) binaryStep(t *target) (step.Step, error) {
 	if t.isWindows() {
 		goos, dest = "windows", t.paths.BinDir+`\norca.exe`
 	}
-	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch, artifacts.LibcGlibc)
+	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch, t.libc())
 	if err != nil {
 		return step.Step{}, err
 	}
@@ -143,6 +143,15 @@ func defaultDrivers(windows bool) *platform.Drivers {
 		return &platform.Drivers{Packages: packages.None{}, Service: service.Windows{}, Tuning: tuning.Windows{}}
 	}
 	return &platform.Drivers{Packages: packages.Apt{}, Service: service.Systemd{}, Tuning: tuning.Linux{}}
+}
+
+// libc is the C library of the node, which the release binary must be
+// built against: musl on Alpine, glibc elsewhere.
+func (t *target) libc() string {
+	if t.facts != nil && t.facts.Family == host.FamilyAlpine {
+		return artifacts.LibcMusl
+	}
+	return artifacts.LibcGlibc
 }
 
 // serviceManager is the init system driver of the node: from its facts, or

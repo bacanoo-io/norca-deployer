@@ -20,9 +20,10 @@ type Drivers struct {
 	Tuning   tuning.Tuner
 }
 
-// For returns the drivers of a node. A package manager the deployer does
-// not drive yet (apk) gets a driver that refuses packages; an init system
-// without a driver (OpenRC) is an error.
+// For returns the drivers of a node: apt, dnf or apk; systemd or OpenRC
+// (and their tuning); the service manager of Windows. A package manager the
+// deployer does not drive gets a driver that refuses packages; an init
+// system without a driver is an error.
 func For(f *host.Facts) (*Drivers, error) {
 	d := &Drivers{}
 	switch f.PackageManager {
@@ -30,6 +31,8 @@ func For(f *host.Facts) (*Drivers, error) {
 		d.Packages = packages.Apt{}
 	case config.PackageManagerDnf:
 		d.Packages = packages.Dnf{}
+	case config.PackageManagerApk:
+		d.Packages = packages.Apk{}
 	case config.PackageManagerNone:
 		d.Packages = packages.None{}
 	default:
@@ -37,16 +40,13 @@ func For(f *host.Facts) (*Drivers, error) {
 	}
 	switch f.Init {
 	case host.InitSystemd:
-		d.Service = service.Systemd{}
+		d.Service, d.Tuning = service.Systemd{}, tuning.Linux{}
+	case host.InitOpenRC:
+		d.Service, d.Tuning = service.OpenRC{}, tuning.OpenRC{}
 	case host.InitWindows:
-		d.Service = service.Windows{}
+		d.Service, d.Tuning = service.Windows{}, tuning.Windows{}
 	default:
-		return nil, fmt.Errorf("the init system %s is not supported yet: the deployer runs the agent as a systemd service", f.Init)
-	}
-	if f.Family == host.FamilyWindows {
-		d.Tuning = tuning.Windows{}
-	} else {
-		d.Tuning = tuning.Linux{}
+		return nil, fmt.Errorf("the init system %s is not supported: the deployer runs the agent as a service of systemd or OpenRC", f.Init)
 	}
 	return d, nil
 }

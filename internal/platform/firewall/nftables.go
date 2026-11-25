@@ -152,11 +152,11 @@ WantedBy=sysinit.target
 `
 }
 
-// nftInitScript is the OpenRC service that loads the ruleset at boot:
+// NFTInitScript is the OpenRC service that loads the ruleset at boot:
 // before the network, and after the nftables service, whose ruleset starts
 // with flush ruleset. The deployer does not enable the nftables service of
 // Alpine: its default ruleset drops what it does not list, SSH included.
-func nftInitScript(nft string) string {
+func NFTInitScript(nft string) string {
 	return `#!/sbin/openrc-run
 # Managed by norca-deployer. Do not edit.
 description="Norca firewall rules (nftables table ` + NFTTable + `)"
@@ -211,7 +211,7 @@ func configureNFTables(conn connector.Connector, s Spec, nft string) (*Result, e
 		}
 		res.run(conn, "systemctl is-enabled --quiet "+nftUnit+" || systemctl enable --quiet "+nftUnit)
 	} else if _, err := conn.ExecuteCommand("[ -d /run/openrc ] && command -v rc-update >/dev/null"); err == nil {
-		if _, err := connector.SyncFile(conn, NFTInitScriptPath, []byte(nftInitScript(nft)), 0o755); err != nil {
+		if _, err := connector.SyncFile(conn, NFTInitScriptPath, []byte(NFTInitScript(nft)), 0o755); err != nil {
 			return nil, err
 		}
 		res.run(conn, "[ -e /etc/runlevels/boot/"+nftService+" ] || rc-update add "+nftService+" boot >/dev/null")

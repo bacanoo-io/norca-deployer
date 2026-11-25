@@ -13,6 +13,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/firewall"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
@@ -36,15 +37,21 @@ func portableScripts(t *testing.T) map[string]string {
 			res[fmt.Sprintf("cmd-%s-%03d", name, len(seen))] = c
 		}
 	}
-	// A RHEL node: the steps of dnf and the SELinux labels.
-	_, rhel := recordPlanWith(t, loadPlan(t, rhelPlan), rhelProbe)
-	seen := map[string]bool{}
-	for _, c := range rhel {
-		if !seen[c] {
-			seen[c] = true
-			res[fmt.Sprintf("cmd-rhel-%03d", len(seen))] = c
+	// A RHEL node: the steps of dnf and the SELinux labels. An Alpine node:
+	// apk, OpenRC and its tuning.
+	for name, family := range map[string][2]string{"rhel": {rhelPlan, rhelProbe}, "alpine": {alpinePlan, alpineProbe}} {
+		_, cmds := recordPlanWith(t, loadPlan(t, family[0]), family[1])
+		seen := map[string]bool{}
+		for _, c := range cmds {
+			if !seen[c] {
+				seen[c] = true
+				res[fmt.Sprintf("cmd-%s-%03d", name, len(seen))] = c
+			}
 		}
 	}
+	// The OpenRC services are scripts of openrc-run, which is a POSIX sh.
+	res["openrc-norca"] = service.OpenRCScript(storage.ResolveNodePaths(&config.NodeConfig{Platform: "linux"}, loadPlan(t, alpinePlan)), 0)
+	res["openrc-nftables"] = firewall.NFTInitScript("/usr/sbin/nft")
 	res["probe"] = host.ProbeCommand
 	res["nftables-remove"] = firewall.RemoveNFTablesCommand
 	res["consul-dns"] = dns.Script()
@@ -87,6 +94,12 @@ func TestShellPortability(t *testing.T) {
 		file := filepath.Join(dir, name+".sh")
 		if !strings.HasPrefix(script, "#!") {
 			script = "#!/bin/sh\n" + script + "\n"
+		}
+		if strings.HasPrefix(name, "openrc-") {
+			// openrc-run reads the variables of a service (command,
+			// description, ...): they are not unused.
+			shebang, body, _ := strings.Cut(script, "\n")
+			script = shebang + "\n# shellcheck disable=SC2034\n" + body
 		}
 		if err := os.WriteFile(file, []byte(script), 0o600); err != nil {
 			t.Fatal(err)
