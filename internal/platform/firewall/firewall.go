@@ -1,11 +1,12 @@
-// Package firewall opens the Norca ports on Linux nodes with ufw, firewalld
-// or, as a fallback, iptables. Windows nodes are not configured.
+// Package firewall opens the Norca ports on Linux nodes with ufw, firewalld,
+// nftables or, as a fallback, iptables. Windows nodes are not configured.
 //
-// Every rule the deployer adds carries an identifier (ufw and iptables
-// comments), so that a later apply can remove its own rules that the plan no
-// longer asks for (e.g. after a CIDR change) without touching other rules.
-// New rules are added before stale ones are removed, so a port that stays
-// open is never closed in between.
+// Every rule the deployer adds carries an identifier (ufw, iptables and
+// nftables comments), so that a later apply can remove its own rules that
+// the plan no longer asks for (e.g. after a CIDR change) without touching
+// other rules. New rules are added before stale ones are removed, so a port
+// that stays open is never closed in between; the nftables backend writes
+// its own table whole, in one transaction.
 package firewall
 
 import (
@@ -75,9 +76,10 @@ type Spec struct {
 	LeafNodes      bool
 	EphemeralCIDRs []string // allocation ports; default ClusterCIDRs
 
-	// DefaultDeny turns on ufw with incoming traffic denied by default
-	// (firewalld denies by default already). SSHPorts are always allowed
-	// then, so the deployer cannot lock itself out.
+	// DefaultDeny denies incoming traffic by default: the policy drop of
+	// the nftables table, or ufw enabled with deny incoming (firewalld
+	// denies by default already). SSHPorts are always allowed then, so the
+	// deployer cannot lock itself out.
 	DefaultDeny bool
 	SSHPorts    []int
 
@@ -223,20 +225,38 @@ func Configure(conn connector.Connector, s Spec) (*Result, error) {
 	return res, err
 }
 
+// configure chooses the backend: an active ufw, a running firewalld,
+// nftables (nft), with default_deny an installed ufw that it enables, else
+// iptables, else none. The table of the nftables backend is removed when
+// another backend filters the node.
 func configure(conn connector.Connector, s Spec) (*Result, error) {
+	var res *Result
+	var err error
 	switch {
 	case active(conn, "ufw status", "Status: active"):
-		return configureUFW(conn, s, false)
+		res, err = configureUFW(conn, s, false)
 	case active(conn, "firewall-cmd --state", "running"):
-		return configureFirewalld(conn, s)
-	case s.DefaultDeny && installed(conn, "ufw"):
-		return configureUFW(conn, s, true)
-	case s.DefaultDeny:
-		return nil, fmt.Errorf("default_deny needs ufw or a running firewalld (install ufw with host_packages)")
-	case installed(conn, "iptables"):
-		return configureIPTables(conn, s)
+		res, err = configureFirewalld(conn, s)
+	default:
+		if nft, ok := lookPath(conn, "nft"); ok {
+			return configureNFTables(conn, s, nft)
+		}
+		switch {
+		case s.DefaultDeny && installed(conn, "ufw"):
+			res, err = configureUFW(conn, s, true)
+		case s.DefaultDeny:
+			return nil, fmt.Errorf("default_deny needs nftables (nft), ufw or a running firewalld (install nftables with host_packages)")
+		case installed(conn, "iptables"):
+			res, err = configureIPTables(conn, s)
+		default:
+			return &Result{Backend: "none", Warnings: []string{"no ufw, firewalld, nft or iptables found: no firewall rules applied"}}, nil
+		}
 	}
-	return &Result{Backend: "none", Warnings: []string{"no ufw, firewalld or iptables found: no firewall rules applied"}}, nil
+	if err != nil {
+		return res, err
+	}
+	removeNFTables(conn, res)
+	return res, nil
 }
 
 func active(conn connector.Connector, cmd, marker string) bool {
@@ -248,6 +268,20 @@ func active(conn connector.Connector, cmd, marker string) bool {
 func installed(conn connector.Connector, bin string) bool {
 	_, err := conn.ExecuteCommand("command -v " + bin + " >/dev/null")
 	return err == nil
+}
+
+// lookPath returns the path of a command of the node; a command found
+// without an absolute path (a fake node) is in /usr/sbin.
+func lookPath(conn connector.Connector, bin string) (string, bool) {
+	out, err := conn.ExecuteCommand("command -v " + bin)
+	if err != nil {
+		return "", false
+	}
+	p := strings.TrimSpace(out)
+	if !strings.HasPrefix(p, "/") || strings.ContainsAny(p, " \t\n") {
+		p = "/usr/sbin/" + bin
+	}
+	return p, true
 }
 
 // sshPortsCommand lists the TCP ports sshd listens on: with ss when the

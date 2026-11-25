@@ -85,7 +85,7 @@ port 2222
 	}
 }
 
-// ufwFake simulates ufw with an existing rule set.
+// ufwFake simulates ufw with an existing rule set, on a node without nft.
 func ufwFake(active bool, added string) *connector.FakeConnector {
 	c := connector.NewFakeConnector()
 	c.Handler = func(cmd string) (string, error, bool) {
@@ -97,7 +97,7 @@ func ufwFake(active bool, added string) *connector.FakeConnector {
 				return "Status: active", nil, true
 			}
 			return "Status: inactive", nil, true
-		case strings.HasPrefix(cmd, "command -v firewall-cmd"):
+		case strings.HasPrefix(cmd, "command -v firewall-cmd"), strings.HasPrefix(cmd, "command -v nft"):
 			return "", errors.New("not found"), true
 		case cmd == "command -v ufw >/dev/null":
 			return "", nil, true
@@ -213,7 +213,7 @@ ufw route allow in on cni0 comment 'norca:cni-egress'`)
 		c := connector.NewFakeConnector()
 		c.Handler = func(cmd string) (string, error, bool) {
 			switch {
-			case strings.HasPrefix(cmd, "command -v ufw"), strings.HasPrefix(cmd, "command -v firewall-cmd"):
+			case strings.HasPrefix(cmd, "command -v ufw"), strings.HasPrefix(cmd, "command -v firewall-cmd"), strings.HasPrefix(cmd, "command -v nft"):
 				return "", errors.New("not found"), true
 			case cmd == "iptables -S FORWARD":
 				return "-P FORWARD DROP\n" +
@@ -283,7 +283,7 @@ func TestIPTablesTaggedRulesAndWarning(t *testing.T) {
 	c := connector.NewFakeConnector()
 	c.Handler = func(cmd string) (string, error, bool) {
 		switch {
-		case strings.HasPrefix(cmd, "command -v ufw"), strings.HasPrefix(cmd, "command -v firewall-cmd"):
+		case strings.HasPrefix(cmd, "command -v ufw"), strings.HasPrefix(cmd, "command -v firewall-cmd"), strings.HasPrefix(cmd, "command -v nft"):
 			return "", errors.New("not found"), true
 		case cmd == "iptables -S INPUT":
 			return "-P INPUT ACCEPT\n-A INPUT -s 10.9.0.0/24 -p tcp -m tcp --dport 4647 -m comment --comment norca:4647/tcp:10.9.0.0/24 -j ACCEPT", nil, true
