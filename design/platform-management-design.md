@@ -117,7 +117,7 @@ Things Norca gives us for free that the design leans on:
 | SSH, node install, agent HCL, TLS, gossip, firewall, tuning, host packages, decommission | `apply` (`cluster-deploy.yaml`) | needs node access |
 | ACL **bootstrap** (first management token) | `apply` | chicken-and-egg: needs the cluster before the API is usable |
 | Backup/seal/server settings in agent config | `apply` | agent configuration |
-| `consul_compat` listener of the clients (bind address, KV backend), firewall for it | `apply` (agent config, `extra_hcl`, firewall rules) | node configuration; `platform` only needs the address |
+| `consul_compat` listener of the clients (bind address, KV backend), firewall for it | `apply` (agent config, `extra`, firewall rules) | node configuration; `platform` only needs the address |
 | **Pack registries, pack releases, GitOps pack bindings** | existing `packs` section and `gitops` | one owner, no migration; `platform` references the releases (`reference`, §7.10) |
 | **Every other API object** (table in §2) | `platform` | needs only the API |
 
