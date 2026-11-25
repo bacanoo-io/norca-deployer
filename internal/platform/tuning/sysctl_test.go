@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -30,9 +31,9 @@ func TestOpenRCSteps(t *testing.T) {
 	}
 }
 
-// The functions and the steps of the OpenRC tuning in the shells of this
-// machine, on runlevels of the test: a service in a runlevel, one in none.
-func TestOpenRCServicesStep(t *testing.T) {
+// testShells are the POSIX shells of this machine, by name.
+func testShells(t *testing.T) map[string][]string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the steps run in a POSIX shell")
 	}
@@ -48,8 +49,64 @@ func TestOpenRCServicesStep(t *testing.T) {
 	if len(shells) == 0 {
 		t.Skip("no POSIX shell")
 	}
+	return shells
+}
+
+// The sysctl step of OpenRC on the answers of busybox sysctl (exit 0 after
+// errors) and of procps: a key the host does not have (outside the first
+// network namespace, or before br_netfilter is loaded) is a warning; any
+// other error stops the step where /proc/sys is writable.
+func TestOpenRCSysctl(t *testing.T) {
+	apply := OpenRC{}.Steps()[1].Apply
+	tests := []struct {
+		name, out string
+		rc        int
+		want      string
+	}{
+		{name: "applied", out: "vm.swappiness = 1\nnet.ipv4.ip_forward = 1", want: ""},
+		{name: "keys of busybox the host does not have", out: "vm.swappiness = 1\n" +
+			"sysctl: error: 'net.ipv4.neigh.default/gc_thresh1' is an unknown key\nsysctl: error: 'net.bridge.bridge-nf-call-iptables' is an unknown key",
+			want: "warn sysctl: keys this host does not have were skipped: net.ipv4.neigh.default/gc_thresh1 net.bridge.bridge-nf-call-iptables"},
+		{name: "keys of procps the host does not have", rc: 255,
+			out:  "sysctl: cannot stat /proc/sys/net/bridge/bridge-nf-call-iptables: No such file or directory",
+			want: "warn sysctl: keys this host does not have were skipped: net/bridge/bridge-nf-call-iptables"},
+		{name: "keys of busybox that are read-only here", out: "sysctl: error setting key 'vm.swappiness': Read-only file system\nnet.ipv4.ip_forward = 1",
+			want: "warn sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
+		{name: "keys of procps that are read-only here", rc: 255, out: "sysctl: setting key \"vm.swappiness\": Read-only file system",
+			want: "warn sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
+		{name: "another error of busybox", out: "sysctl: error setting key 'vm.swappiness': Invalid argument",
+			want: "error sysctl -p " + SysctlConfigPath + " failed: sysctl: error setting key 'vm.swappiness': Invalid argument"},
+	}
+	for shell, argv := range testShells(t) {
+		t.Run(shell, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					dir := t.TempDir()
+					// /proc/sys is writable here: an error stops the step.
+					stubs := "log() { printf 'log %s\\n' \"$*\"; }\nwarn() { printf 'warn %s\\n' \"$*\"; }\n" +
+						"die() {\n  printf 'error %s\\n' \"$*\"\n  exit 1\n}\n" +
+						"sysctl() {\n  printf '%s\\n' \"$SYSCTL_OUT\" >&2\n  return \"$SYSCTL_RC\"\n}\n"
+					prog := stubs + "set -eu\n" + strings.ReplaceAll(apply, "/proc/sys/net/ipv4/ip_forward", filepath.Join(dir, "w")) + "\n"
+					if err := os.WriteFile(filepath.Join(dir, "w"), nil, 0o600); err != nil {
+						t.Fatal(err)
+					}
+					c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+					c.Env = []string{"PATH=/usr/bin:/bin", "SYSCTL_OUT=" + tt.out, "SYSCTL_RC=" + strconv.Itoa(tt.rc)}
+					out, _ := c.CombinedOutput()
+					if got := strings.TrimSpace(string(out)); got != tt.want {
+						t.Fatalf("got %q, want %q", got, tt.want)
+					}
+				})
+			}
+		})
+	}
+}
+
+// The functions and the steps of the OpenRC tuning in the shells of this
+// machine, on runlevels of the test: a service in a runlevel, one in none.
+func TestOpenRCServicesStep(t *testing.T) {
 	s := OpenRC{}.Steps()[2]
-	for shell, argv := range shells {
+	for shell, argv := range testShells(t) {
 		t.Run(shell, func(t *testing.T) {
 			root := t.TempDir()
 			for _, d := range []string{"etc/init.d", "etc/runlevels/boot", "etc/runlevels/sysinit", "etc/runlevels/default"} {

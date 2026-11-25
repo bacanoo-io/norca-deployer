@@ -113,9 +113,25 @@ openrc_cgroups() {
 func (OpenRC) Steps() []step.Step {
 	linux := Linux{}.Steps()
 	modules, sysctl := linux[0], linux[1]
-	sysctl.Apply = "if ! sysctl_out=$(sysctl -p " + SysctlConfigPath + " 2>&1) || printf '%s\\n' \"$sysctl_out\" | grep -qi -e error -e cannot; then\n" +
+	// A key the host does not have (the neighbour table outside the first
+	// network namespace, net.bridge before br_netfilter is loaded) is a
+	// warning, as sysctl --system leaves it; busybox calls it an unknown
+	// key, procps cannot stat it. A key that is read-only here (a
+	// container) is the warning of a read-only /proc/sys.
+	sysctl.Apply = "sysctl_rc=0\n" +
+		"sysctl_out=$(sysctl -p " + SysctlConfigPath + " 2>&1) || sysctl_rc=$?\n" +
+		"sysctl_unknown=$(printf '%s\\n' \"$sysctl_out\" | sed -n -e \"s/.*error: '\\(.*\\)' is an unknown key.*/\\1/p\" -e 's|.*cannot stat /proc/sys/\\([^:]*\\):.*|\\1|p' | tr '\\n' ' ')\n" +
+		"sysctl_ro=$(printf '%s\\n' \"$sysctl_out\" | sed -n \"s/.*setting key [\\\"']\\(.*\\)[\\\"']: Read-only file system.*/\\1/p\" | tr '\\n' ' ')\n" +
+		"sysctl_bad=$(printf '%s\\n' \"$sysctl_out\" | grep -i -e error -e cannot | grep -v -e 'is an unknown key' -e 'cannot stat /proc/sys/' -e 'Read-only file system' || true)\n" +
+		"if [ -n \"$sysctl_unknown\" ]; then\n" +
+		"  warn \"sysctl: keys this host does not have were skipped: ${sysctl_unknown% }\"\n" +
+		"fi\n" +
+		"if [ -n \"$sysctl_ro\" ]; then\n" +
+		"  warn \"sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: ${sysctl_ro% }\"\n" +
+		"fi\n" +
+		"if [ -n \"$sysctl_bad\" ] || { [ \"$sysctl_rc\" != 0 ] && [ -z \"$sysctl_unknown$sysctl_ro\" ]; }; then\n" +
 		"  if [ -w /proc/sys/net/ipv4/ip_forward ]; then\n" +
-		"    die \"sysctl -p " + SysctlConfigPath + " failed: $(printf '%s\\n' \"$sysctl_out\" | tail -n 3 | tr '\\n' ' ')\"\n" +
+		"    die \"sysctl -p " + SysctlConfigPath + " failed: $(printf '%s\\n' \"${sysctl_bad:-$sysctl_out}\" | tail -n 3 | tr '\\n' ' ')\"\n" +
 		"  fi\n" +
 		"  warn \"sysctl -p failed: the settings apply at the next boot\"\nfi"
 	services := step.Step{
