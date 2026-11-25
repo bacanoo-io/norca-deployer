@@ -11,6 +11,7 @@ import (
 
 	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/firewall"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
@@ -35,7 +36,17 @@ func portableScripts(t *testing.T) map[string]string {
 			res[fmt.Sprintf("cmd-%s-%03d", name, len(seen))] = c
 		}
 	}
+	// A RHEL node: the steps of dnf and the SELinux labels.
+	_, rhel := recordPlanWith(t, loadPlan(t, rhelPlan), rhelProbe)
+	seen := map[string]bool{}
+	for _, c := range rhel {
+		if !seen[c] {
+			seen[c] = true
+			res[fmt.Sprintf("cmd-rhel-%03d", len(seen))] = c
+		}
+	}
 	res["probe"] = host.ProbeCommand
+	res["nftables-remove"] = firewall.RemoveNFTablesCommand
 	res["consul-dns"] = dns.Script()
 	paths := storage.ResolveNodePaths(&config.NodeConfig{Platform: "linux"}, loadPlan(t, machinePlan(officialRelease, "")))
 	res["uninstall"] = linuxUninstallScript(paths, true)
@@ -46,18 +57,21 @@ func portableScripts(t *testing.T) map[string]string {
 	return res
 }
 
-// Every script and command is POSIX sh: dash and busybox sh read it
-// (NORCA_TEST_BUSYBOX names a static busybox), and shellcheck -s sh finds
-// nothing when it is installed. NORCA_SHELL_SCRIPTS=<dir> writes them
-// there, for a shellcheck of its own (koalaman/shellcheck -s sh).
+// Every script and command is POSIX sh: dash, bash (/bin/sh of RHEL) and
+// busybox sh read it (NORCA_TEST_BUSYBOX names a static busybox), and
+// shellcheck -s sh finds nothing when it is installed.
+// NORCA_SHELL_SCRIPTS=<dir> writes them there, for a shellcheck of its own
+// (koalaman/shellcheck -s sh).
 func TestShellPortability(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the scripts run on Linux")
 	}
 	all := portableScripts(t)
 	checkers := map[string][]string{}
-	if p, err := exec.LookPath("dash"); err == nil {
-		checkers["dash"] = []string{p, "-n"}
+	for _, shell := range []string{"dash", "bash"} {
+		if p, err := exec.LookPath(shell); err == nil {
+			checkers[shell] = []string{p, "-n"}
+		}
 	}
 	if bb := os.Getenv("NORCA_TEST_BUSYBOX"); bb != "" {
 		checkers["busybox"] = []string{bb, "sh", "-n"}

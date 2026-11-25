@@ -12,6 +12,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/selinux"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
@@ -32,7 +33,8 @@ import (
 // certificates and the firewall: the bootstrap writes the first two, the
 // cloud does the third. The machine is a machine the deployer never sees,
 // so the script finds out its family at run time and runs the steps of
-// that family (Debian for now).
+// that family: the host packages and the service of Debian (apt) and RHEL
+// (dnf, with the SELinux labels restored).
 
 //go:embed machine_install.sh.tmpl
 var machineScriptText string
@@ -66,13 +68,62 @@ type machineJoin struct {
 
 type machineScriptData struct {
 	Cluster, Region, Mode, Arch, Version string
-	// Families are the families the script has steps of.
-	Families string
+	// Families are the families the script has steps of: their names for
+	// the messages ("debian, rhel") and as a case pattern ("debian |
+	// rhel"), and their parts.
+	Families, FamilyPattern string
+	Parts                   []machineFamily
+	// HasPackages: a family has host packages; HasRHEL: the RHEL family is
+	// one of them (the SELinux warning).
+	HasPackages, HasRHEL bool
 	// Functions are the functions of the steps.
 	Functions string
-	// The rendered steps.
-	Packages, Tuning, DNS, Dirs, Binary, CNI, Service string
-	Join                                              machineJoin
+	// The rendered steps common to the families.
+	Tuning, DNS, Dirs, Binary, CNI string
+	Join                           machineJoin
+}
+
+// machineFamily is the part of the install script of one family: its host
+// packages and the service of the agent.
+type machineFamily struct {
+	Name, Manager, Packages, Service string
+}
+
+// machineFamilies are the families of the install script and the managers
+// of their packages.
+var machineFamilies = []struct {
+	family  string
+	manager string
+	driver  packages.Manager
+}{
+	{config.FamilyDebian, config.PackageManagerApt, packages.Apt{}},
+	{config.FamilyRHEL, config.PackageManagerDnf, packages.Dnf{}},
+}
+
+// scriptFamilies returns the families the install script installs on, as
+// apply does for a client: a family whose manager has no block in
+// host_packages while another block selects packages for a client is left
+// out (the script stops on such a machine, as apply stops on such a node).
+func scriptFamilies(plan *config.DeploymentPlan, node *config.NodeConfig) []int {
+	var res []int
+	for i, f := range machineFamilies {
+		if _, has := packages.Block(plan.HostPackages, f.manager, node, false); !has && otherBlockSelects(plan, node, f.manager) {
+			continue
+		}
+		res = append(res, i)
+	}
+	return res
+}
+
+// otherBlockSelects reports whether a block of host_packages other than the
+// one of manager selects packages for a client.
+func otherBlockSelects(plan *config.DeploymentPlan, node *config.NodeConfig, manager string) bool {
+	for _, m := range packages.BlockManagers {
+		if sel, _ := packages.Block(plan.HostPackages, m, node, false); m != manager && !sel.Empty() {
+			return true
+		}
+	}
+	return false
 }
 
 // validMachineArch are the architectures of a scaled machine.
@@ -107,9 +158,8 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	paths := storage.ResolveNodePaths(node, plan)
 	data := &machineScriptData{
 		Cluster: plan.Metadata.Name, Region: plan.Metadata.Region, Mode: mode, Arch: arch,
-		Version:  plan.Release.Version,
-		Families: config.FamilyDebian,
-		Join:     machineJoin{Path: machine.JoinBinaryPath()},
+		Version: plan.Release.Version,
+		Join:    machineJoin{Path: machine.JoinBinaryPath()},
 	}
 	var all []step.Step
 	render := func(steps []step.Step) (string, error) {
@@ -117,17 +167,36 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		return step.Render(steps, renderOpts)
 	}
 
-	// The host packages of a client, with apt (the Debian family).
-	sel := packages.Select(plan.AptPackages(), node, false)
-	pkgSteps, err := packages.Apt{}.Steps(sel, packages.Context{Plan: plan, Arch: arch, Script: true,
-		Resolve: func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) }})
-	if err != nil {
-		return "", err
+	// Per family: the host packages of a client with the manager of the
+	// family, and the service (on RHEL with the SELinux labels).
+	var names []string
+	for _, i := range scriptFamilies(plan, node) {
+		f := machineFamilies[i]
+		sel, _ := packages.Block(plan.HostPackages, f.manager, node, false)
+		pkgSteps, err := f.driver.Steps(sel, packages.Context{Plan: plan, Arch: arch, Script: true,
+			Resolve: func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) }})
+		if err != nil {
+			return "", fmt.Errorf("host_packages.%s: %w", f.manager, err)
+		}
+		part := machineFamily{Name: f.family, Manager: f.manager}
+		if part.Packages, err = render(pkgSteps); err != nil {
+			return "", fmt.Errorf("host_packages.%s: %w", f.manager, err)
+		}
+		svc := service.Systemd{}.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)
+		if f.family == config.FamilyRHEL {
+			svc = append(svc, selinux.RestoreStep(selinux.NodePaths(paths), true))
+			data.HasRHEL = true
+		}
+		if part.Service, err = render(svc); err != nil {
+			return "", err
+		}
+		data.HasPackages = data.HasPackages || part.Packages != ""
+		data.Parts = append(data.Parts, part)
+		names = append(names, f.family)
 	}
-	if data.Packages, err = render(pkgSteps); err != nil {
-		return "", fmt.Errorf("host_packages: %w", err)
-	}
+	data.Families, data.FamilyPattern = strings.Join(names, ", "), strings.Join(names, " | ")
 
+	var err error
 	if plan.Tuning.ApplySysctl {
 		if data.Tuning, err = render(tuning.Linux{}.Steps()); err != nil {
 			return "", err
@@ -166,10 +235,6 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		if data.CNI, err = render([]step.Step{cni}); err != nil {
 			return "", err
 		}
-	}
-
-	if data.Service, err = render(service.Systemd{}.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)); err != nil {
-		return "", err
 	}
 
 	if machine != nil && machine.JoinDownload != nil {

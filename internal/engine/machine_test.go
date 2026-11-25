@@ -493,10 +493,116 @@ func TestNodeScalingBootstrapMachineItems(t *testing.T) {
 	}
 }
 
+// dnfBlock is a dnf block for machinePlan: a repository and a held
+// package for the clients, a package of the servers.
+const dnfBlock = `  dnf:
+    repositories:
+      - name: docker
+        baseurl: https://download.docker.com/linux/rhel/$releasever/$basearch/stable
+        key: |
+          -----BEGIN PGP PUBLIC KEY BLOCK-----
+          mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
+          -----END PGP PUBLIC KEY BLOCK-----
+        priority: 10
+        include: [containerd.io, docker-ce, docker-ce-cli]
+        roles: [client]
+    install:
+      - {name: containerd.io, version: "1.7.27-3.1.el9", hold: true, roles: [client]}
+      - {name: jq}
+      - {name: etcd-only, roles: [master]}
+`
+
+// rhelMachinePlan is machinePlan with the dnf block next to the apt block.
+func rhelMachinePlan() string {
+	return strings.Replace(machinePlan(officialRelease, joinMachine), "node_scaling:", dnfBlock+"node_scaling:", 1)
+}
+
+// The script of a plan with an apt and a dnf block holds the packages and
+// the service of both families and runs those of the family of the
+// machine; on RHEL it warns under SELinux enforcing and restores the labels
+// after a change.
+func TestInstallScriptRHEL(t *testing.T) {
+	script := generate(t, loadPlan(t, rhelMachinePlan()), MachineScriptOptions{})
+	for _, want := range []string{
+		"# Architecture: amd64. Families: debian, rhel.\n",
+		"On RHEL it restores the SELinux labels",
+		"debian | rhel) log \"family $os_family (${os_id})\" ;;",
+		"it installs on the families: debian, rhel\"",
+		"packages_debian() {\n", "packages_rhel() {\n", "service_debian() {\n", "service_rhel() {\n",
+		"debian) packages_debian ;;\nrhel) packages_rhel ;;\nesac",
+		"debian) service_debian ;;\nrhel) service_rhel ;;\nesac",
+		"if [ \"$os_family\" = rhel ] && command -v getenforce >/dev/null 2>&1 && [ \"$(getenforce)\" = Enforcing ]; then\n  warn \"SELinux is enforcing",
+		"put_file '/etc/yum.repos.d/norca-docker.repo' 0644",
+		"includepkgs=containerd.io docker-ce docker-ce-cli\n",
+		"dnf -y -q --setopt=install_weak_deps=False --refresh install 'containerd.io-1.7.27-3.1.el9' 'jq'",
+		"dnf_lock 'containerd.io'",
+		"dnf_expect 'containerd.io' '1.7.27-3.1.el9'",
+		"# SELinux labels\nif {\n[ \"$changed\" = 1 ] && command -v getenforce >/dev/null 2>&1 && [ \"$(getenforce)\" != Disabled ]\n}; then",
+		"restorecon -R \"$p\"",
+		// The functions of both managers, each once.
+		"\nexpect_package() {\n", "\nrpm_has() {\n",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script has no %q", want)
+		}
+	}
+	for _, unwanted := range []string{"etcd-only", "cmp -s", "pipefail", "[[", "<<<"} {
+		if strings.Contains(script, unwanted) {
+			t.Errorf("the script has %q", unwanted)
+		}
+	}
+	// The restore of the labels is the last step of the RHEL service.
+	rhel := script[strings.Index(script, "service_rhel() {"):]
+	if i, j := strings.Index(rhel, "# norca service enabled"), strings.Index(rhel, "# SELinux labels"); i < 0 || j < i {
+		t.Errorf("the labels are not restored after the service:\n%s", rhel)
+	}
+	if strings.Count(script, "\nrpm_has() {\n") != 1 || strings.Count(script, "\nexpect_package() {\n") != 1 {
+		t.Error("a function is defined twice")
+	}
+}
+
+// The families of a script are those apply installs a client of: a family
+// whose manager has no block while another block selects packages for a
+// client is left out.
+func TestInstallScriptFamilies(t *testing.T) {
+	base := machinePlan(officialRelease, "")
+	noPackages := base[:strings.Index(base, "host_packages:")] + base[strings.Index(base, "node_scaling:"):]
+	dnfOnly := strings.Replace(noPackages, "node_scaling:", "host_packages:\n"+dnfBlock+"node_scaling:", 1)
+	aptServersOnly := strings.Replace(noPackages, "node_scaling:", "host_packages:\n  apt:\n    install:\n      - {name: jq, roles: [master]}\n"+dnfBlock+"node_scaling:", 1)
+	tests := []struct {
+		name     string
+		plan     string
+		families string
+	}{
+		{name: "apt only", plan: base, families: "debian"},
+		{name: "apt and dnf", plan: rhelMachinePlan(), families: "debian, rhel"},
+		{name: "dnf only", plan: dnfOnly, families: "rhel"},
+		{name: "no host packages", plan: noPackages, families: "debian, rhel"},
+		{name: "an apt block of the servers only", plan: aptServersOnly, families: "debian, rhel"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			script := generate(t, loadPlan(t, tt.plan), MachineScriptOptions{})
+			if !strings.Contains(script, "Families: "+tt.families+".\n") {
+				t.Fatalf("families: %s", script[:strings.Index(script, "set -eu")])
+			}
+			for fam := range strings.SplitSeq(tt.families, ", ") {
+				if !strings.Contains(script, "\n"+fam+") service_"+fam+" ;;") {
+					t.Errorf("no service of %s", fam)
+				}
+			}
+			if tt.name == "no host packages" && (strings.Contains(script, "packages_") || strings.Contains(script, "log \"host packages\"")) {
+				t.Error("packages without host_packages")
+			}
+		})
+	}
+}
+
 // machineScriptPlans are the plans of the install scripts of the tests
 // above.
 func machineScriptPlans() map[string]string {
 	return map[string]string{
+		"rhel":     rhelMachinePlan(),
 		"official": machinePlan(officialRelease, joinMachine),
 		"boot":     machinePlan(officialRelease, "  machine: {install: boot}"),
 		"local":    machinePlan(`release: {version: v0.3.0, source: local-path, local_binary_path: ./norca}`, ""),

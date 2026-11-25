@@ -330,7 +330,7 @@ func TestNFTablesOnThisSystem(t *testing.T) {
 		t.Skip("no nft")
 	}
 	conn := connector.NewLocalConnector(t.Context())
-	t.Cleanup(func() { _, _ = conn.ExecuteCommand(removeNFTablesCommand) })
+	t.Cleanup(func() { _, _ = conn.ExecuteCommand(RemoveNFTablesCommand) })
 	list := func(t *testing.T) string {
 		t.Helper()
 		out, err := conn.ExecuteCommand("nft list table " + NFTTable)

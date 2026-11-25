@@ -8,10 +8,11 @@
 # by hand); the machines of the image then need no download at boot.{{end}}
 # Architecture: {{.Arch}}. Families: {{.Families}}.
 #
-# It installs {{if .Packages}}the host packages, {{end}}{{if .Tuning}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
+# It installs {{if .HasPackages}}the host packages, {{end}}{{if .Tuning}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
 # {{if .CNI}}the CNI plugins, {{end}}norca-join and the systemd unit of the agent, which it enables but
 # does not start: the bootstrap (or norca-join) starts it once the configuration
-# and the certificate are there. It does not open the firewall: that is the
+# and the certificate are there.{{if .HasRHEL}} On RHEL it restores the SELinux labels
+# of what it changed.{{end}} It does not open the firewall: that is the
 # security group of the cloud or the image (the ranges of the region are in the
 # Variable nodescaler/network/{{.Region}}).
 #
@@ -66,8 +67,9 @@ same_mode() {
 }
 
 # put_file PATH MODE [base64] writes standard input (decoded from base64
-# with base64) to PATH unless PATH already has that content and mode. wrote
-# is 1 when it changed something.
+# with base64) to PATH unless PATH already has that content (the same
+# SHA-256: cmp is not on a minimal RHEL) and mode. wrote is 1 when it
+# changed something.
 put_file() {
   put_tmp=$(mktemp "$work/put.XXXXXX")
   if [ "${3:-}" = base64 ]; then
@@ -76,7 +78,7 @@ put_file() {
     cat >"$put_tmp"
   fi
   wrote=0
-  if [ -f "$1" ] && cmp -s "$put_tmp" "$1"; then
+  if [ -f "$1" ] && [ "$(sha256_of "$put_tmp")" = "$(sha256_of "$1")" ]; then
     rm -f "$put_tmp"
     if ! same_mode "$1" "$2"; then
       chmod "$2" "$1"
@@ -187,29 +189,38 @@ family_of() {
 os_id=$(os_release ID)
 os_family=$(family_of "$os_id" "$(os_release ID_LIKE)")
 case $os_family in
-{{.Families}}) log "family $os_family (${os_id})" ;;
+{{.FamilyPattern}}) log "family $os_family (${os_id})" ;;
 *) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: {{.Families}}" ;;
 esac
-for tool in sha256sum tar install cmp stat mktemp base64 find; do
+for tool in sha256sum tar install stat mktemp base64 find; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
 done
+{{- if .HasRHEL}}
+if [ "$os_family" = rhel ] && command -v getenforce >/dev/null 2>&1 && [ "$(getenforce)" = Enforcing ]; then
+  warn "SELinux is enforcing: Norca under SELinux enforcing is not verified yet; the script restores the SELinux labels of what it changes, but the agent and its drivers may be denied (set SELinux to permissive if the agent fails)"
+fi
+{{- end}}
+{{- range .Parts}}
 {{- if .Packages}}
 
-# Host packages (host_packages for a client), per family
-packages_debian() {
+# Host packages of the {{.Name}} family (host_packages.{{.Manager}} for a client)
+packages_{{.Name}}() {
 {{.Packages}}
 }
 {{- end}}
 
-# The service of the agent, per family: enabled, not started
-service_debian() {
+# The service of the agent on the {{.Name}} family: enabled, not started
+service_{{.Name}}() {
 {{.Service}}
 }
-{{- if .Packages}}
+{{- end}}
+{{- if .HasPackages}}
 
 log "host packages"
 case $os_family in
-debian) packages_debian ;;
+{{- range .Parts}}{{if .Packages}}
+{{.Name}}) packages_{{.Name}} ;;
+{{- end}}{{end}}
 esac
 {{- end}}
 {{- if .Tuning}}
@@ -256,7 +267,9 @@ fi
 {{- end}}
 
 case $os_family in
-debian) service_debian ;;
+{{- range .Parts}}
+{{.Name}}) service_{{.Name}} ;;
+{{- end}}
 esac
 
 if [ "$changed" = 1 ]; then

@@ -191,9 +191,9 @@ func configureNFTables(conn connector.Connector, s Spec, nft string) (*Result, e
 	return res, nil
 }
 
-// removeNFTablesCommand removes the table, the ruleset and the boot unit of
+// RemoveNFTablesCommand removes the table, the ruleset and the boot unit of
 // the nftables backend; it prints "removed" when there was something.
-const removeNFTablesCommand = `if command -v nft >/dev/null 2>&1 && nft list table ` + NFTTable + ` >/dev/null 2>&1; then
+const RemoveNFTablesCommand = `if command -v nft >/dev/null 2>&1 && nft list table ` + NFTTable + ` >/dev/null 2>&1; then
   nft delete table ` + NFTTable + `
   echo removed
 fi
@@ -212,7 +212,7 @@ fi`
 // backend filters the node: its table with a policy drop would still
 // filter what the other one lets in.
 func removeNFTables(conn connector.Connector, res *Result) {
-	out, err := conn.ExecuteCommand(removeNFTablesCommand)
+	out, err := conn.ExecuteCommand(RemoveNFTablesCommand)
 	switch {
 	case err != nil:
 		res.Warnings = append(res.Warnings, "the nftables table "+NFTTable+" of an earlier apply could not be removed: "+strings.TrimSpace(out))
