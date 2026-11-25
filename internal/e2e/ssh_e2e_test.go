@@ -107,7 +107,7 @@ func TestScriptsAndPackages(t *testing.T) {
 		}},
 	}
 	node := &config.NodeConfig{Host: "e2e", Platform: "linux", Arch: "amd64"}
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := scripts.Run(conn, plan, config.PhasePreInstall, scripts.Target{Node: node, Family: "debian"}, nil); err != nil {
 			t.Fatal(err)
 		}
