@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
@@ -143,8 +144,9 @@ func (f *Facts) Override(hf *config.HostFacts) []string {
 }
 
 // Check returns the error of a node the deployer cannot drive: a family
-// outside Debian, RHEL and Alpine, no package manager, or an init system
-// that is neither systemd nor OpenRC. It lists what the probe found.
+// outside Debian, RHEL and Alpine, no package manager, an init system that
+// is neither systemd nor OpenRC, or a RHEL older than MinRHELMajor. It
+// lists what the probe found.
 func (f *Facts) Check() error {
 	if f.Platform == "windows" {
 		return nil
@@ -159,10 +161,51 @@ func (f *Facts) Check() error {
 	if f.Init == "" {
 		problems = append(problems, "its init system is neither systemd nor OpenRC")
 	}
+	if major, ok := majorVersion(f.OSVersion); ok && f.Family == FamilyRHEL && major < MinRHELMajor {
+		problems = append(problems, fmt.Sprintf("it runs %s %s, but RHEL and its rebuilds are supported from version %d: "+
+			"the Norca binary needs glibc 2.34, and version %d has glibc 2.28 or older", f.OSID, f.OSVersion, MinRHELMajor, major))
+	}
 	if len(problems) == 0 {
 		return nil
 	}
 	return fmt.Errorf("%w: %s (found: %s)", ErrUnsupported, strings.Join(problems, "; "), f.found())
+}
+
+// SELinux modes of getenforce, lower case.
+const (
+	SELinuxEnforcing  = "enforcing"
+	SELinuxPermissive = "permissive"
+	SELinuxDisabled   = "disabled"
+)
+
+// SELinuxActive reports whether SELinux labels the files of the node
+// (enforcing or permissive): the deployer then restores the labels of the
+// files it writes.
+func (f *Facts) SELinuxActive() bool {
+	return f.SELinux == SELinuxEnforcing || f.SELinux == SELinuxPermissive
+}
+
+// Warnings returns what the apply should tell about a node it goes on
+// with: SELinux in enforcing mode, under which Norca is not verified yet.
+func (f *Facts) Warnings() []string {
+	if f.SELinux != SELinuxEnforcing {
+		return nil
+	}
+	return []string{"SELinux is enforcing: Norca under SELinux enforcing is not verified yet; the deployer restores " +
+		"the SELinux labels of the files it writes, but the agent and its drivers may be denied (set SELinux to " +
+		"permissive if the agent fails)"}
+}
+
+// MinRHELMajor is the first major version of RHEL (and of its rebuilds)
+// the deployer installs on: the Linux release of Norca is built against
+// glibc 2.34, which RHEL 9 has and RHEL 8 (glibc 2.28) has not.
+const MinRHELMajor = 9
+
+// majorVersion reads the major version of a VERSION_ID ("8.10" is 8).
+func majorVersion(v string) (int, bool) {
+	major, _, _ := strings.Cut(v, ".")
+	n, err := strconv.Atoi(major)
+	return n, err == nil
 }
 
 // found describes what the probe saw, for an error.

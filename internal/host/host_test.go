@@ -105,6 +105,12 @@ func TestParseRootAndErrors(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
+	for _, sample := range []string{"rhel-9", "rocky-9", "alma-9", "alma-10", "fedora-41"} {
+		f, _ := Parse(probeOutput(t, sample, "x86_64", "systemd", rhelTools, "1000"))
+		if err := f.Check(); err != nil {
+			t.Errorf("%s: %v", sample, err)
+		}
+	}
 	ok, _ := Parse(probeOutput(t, "debian-12", "x86_64", "systemd", debianTools, "1000"))
 	if err := ok.Check(); err != nil {
 		t.Fatalf("debian 12: %v", err)
@@ -123,6 +129,10 @@ func TestCheck(t *testing.T) {
 			[]string{"neither systemd nor OpenRC", "process 1 runit", "ID=debian", "VERSION_ID=12"}},
 		{"no os-release", probeOutput(t, "", "x86_64", "systemd", nil, "1000"),
 			[]string{"ID=none (no /etc/os-release)", "tools: none"}},
+		{"rocky 8", probeOutput(t, "rocky-8", "x86_64", "systemd", rhelTools, "1000"),
+			[]string{"rocky 8.10", "from version 9", "glibc 2.34", "glibc 2.28", "VERSION_ID=8.10"}},
+		{"rhel 8", probeOutput(t, "rhel-8", "x86_64", "systemd", rhelTools, "1000"),
+			[]string{"rhel 8.10", "from version 9"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,6 +148,37 @@ func TestCheck(t *testing.T) {
 				if !strings.Contains(err.Error(), w) {
 					t.Errorf("the error has no %q: %v", w, err)
 				}
+			}
+		})
+	}
+}
+
+// SELinux: enforcing is a warning of the node, and enforcing and
+// permissive both label files.
+func TestSELinux(t *testing.T) {
+	tests := []struct {
+		mode    string
+		active  bool
+		warning bool
+	}{
+		{mode: "Enforcing", active: true, warning: true},
+		{mode: "Permissive", active: true},
+		{mode: "Disabled"},
+		{mode: ""},
+	}
+	for _, tt := range tests {
+		t.Run("mode "+tt.mode, func(t *testing.T) {
+			out := strings.Replace(probeOutput(t, "rocky-9", "x86_64", "systemd", rhelTools, "1000"), "--\nDisabled\n--", "--\n"+tt.mode+"\n--", 1)
+			f, err := Parse(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.SELinuxActive() != tt.active {
+				t.Errorf("SELinuxActive() = %t, want %t", f.SELinuxActive(), tt.active)
+			}
+			w := f.Warnings()
+			if (len(w) == 1) != tt.warning || (tt.warning && !strings.Contains(w[0], "Norca under SELinux enforcing is not verified yet")) {
+				t.Errorf("Warnings() = %q", w)
 			}
 		})
 	}
