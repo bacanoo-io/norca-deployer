@@ -1,6 +1,6 @@
 // Package packages installs the host packages of a node with the package
 // manager of the node: apt (Debian, Ubuntu), dnf (RHEL, Rocky Linux,
-// AlmaLinux); none on a system without one.
+// AlmaLinux), apk (Alpine); none on a system without one.
 // A driver returns steps (internal/platform/step), so that the SSH path and
 // the install script of a scaled machine do the same.
 package packages
@@ -32,7 +32,7 @@ const (
 
 // Manager is the driver of a package manager.
 type Manager interface {
-	// Name is the package manager: apt, dnf, none.
+	// Name is the package manager: apt, dnf, apk, none.
 	Name() string
 	// Arch maps a GOARCH name to the {arch} of a package file of this
 	// manager.
@@ -131,21 +131,26 @@ func RenderAuth(repo *config.AptRepository, password string) string {
 }
 
 // Selection is the part of the block of one package manager that applies
-// to one node: its repositories (apt or dnf) and its packages.
+// to one node: its repositories (apt, dnf or apk) and its packages.
 type Selection struct {
 	Repositories    []config.AptRepository
 	DnfRepositories []config.DnfRepository
+	ApkRepositories []config.ApkRepository
 	Packages        []config.HostPackage
 }
 
 // Empty reports whether nothing is to be done on the node.
 func (s *Selection) Empty() bool {
-	return len(s.Repositories) == 0 && len(s.DnfRepositories) == 0 && len(s.Packages) == 0
+	return !s.hasRepositories() && len(s.Packages) == 0
+}
+
+func (s *Selection) hasRepositories() bool {
+	return len(s.Repositories) > 0 || len(s.DnfRepositories) > 0 || len(s.ApkRepositories) > 0
 }
 
 // BlockManagers are the package managers that have a block in
 // host_packages.
-var BlockManagers = []string{config.PackageManagerApt, config.PackageManagerDnf}
+var BlockManagers = []string{config.PackageManagerApt, config.PackageManagerDnf, config.PackageManagerApk}
 
 // Block returns what the block of a package manager selects for a node, and
 // whether the plan has that block at all.
@@ -158,6 +163,8 @@ func Block(hp *config.HostPackages, manager string, node *config.NodeConfig, isM
 		return Select(hp.Apt, node, isMaster), hp.Apt != nil
 	case config.PackageManagerDnf:
 		return SelectDnf(hp.Dnf, node, isMaster), hp.Dnf != nil
+	case config.PackageManagerApk:
+		return SelectApk(hp.Apk, node, isMaster), hp.Apk != nil
 	}
 	return &Selection{}, false
 }
@@ -177,7 +184,7 @@ func (s *Selection) Installs(name string) bool {
 // local file. Nodes without any reachable repository can install local
 // package files only.
 func (s *Selection) NeedsIndex() bool {
-	if len(s.Repositories) > 0 || len(s.DnfRepositories) > 0 {
+	if s.hasRepositories() {
 		return true
 	}
 	for _, p := range s.Packages {
@@ -463,8 +470,8 @@ func (None) Steps(sel *Selection, _ Context) ([]step.Step, error) {
 	return nil, fmt.Errorf("the node has no package manager, but host_packages selects packages for it")
 }
 
-// Unsupported is the driver of a package manager the deployer does not drive
-// yet (apk): a selection that is not empty is an error.
+// Unsupported is the driver of a package manager the deployer does not
+// drive: a selection that is not empty is an error.
 type Unsupported struct{ Manager string }
 
 // Name implements Manager.

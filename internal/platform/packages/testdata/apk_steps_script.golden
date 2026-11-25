@@ -1,0 +1,132 @@
+# apk_version NAME prints the installed version of a package.
+apk_version() {
+  awk -v p="P:$1" '$0 == p { f = 1; next } f && /^V:/ { print substr($0, 3); exit } /^$/ { f = 0 }' /lib/apk/db/installed 2>/dev/null
+}
+# apk_has NAME VERSION is true when the package is installed (at VERSION,
+# when one is given).
+apk_has() {
+  apk_v=$(apk_version "$1")
+  [ -n "$apk_v" ] && { [ -z "$2" ] || [ "$apk_v" = "$2" ]; }
+}
+# apk_world ENTRY is true when /etc/apk/world has the entry (name@tag=version).
+apk_world() {
+  grep -qxF -- "$1" /etc/apk/world 2>/dev/null
+}
+# apk_expect NAME VERSION stops unless the package is installed (at
+# VERSION, when one is given).
+apk_expect() {
+  apk_v=$(apk_version "$1")
+  [ -n "$apk_v" ] || die "package $1 is not installed after apk add"
+  [ -z "$2" ] || [ "$apk_v" = "$2" ] || die "package $1: version $apk_v installed, $2 requested"
+  if apk_held "$1"; then
+    log "package $1 $apk_v (held)"
+  else
+    log "package $1 $apk_v"
+  fi
+}
+# apk_held NAME is true when the world entry of a package has a version
+# constraint (name=1.2-r0, name@tag=1.2-r0, or name><checksum of a file).
+apk_held() {
+  awk -v n="$1" '{ e = $0; sub(/[=<>~].*/, "", e); sub(/@.*/, "", e) } e == n && /[=<>~]/ { h = 1 } END { exit !h }' /etc/apk/world 2>/dev/null
+}
+# apk_key_drop NAME removes a key of /etc/apk/keys that an earlier plan
+# installed, unless a package owns it (the keys of Alpine).
+apk_key_drop() {
+  apk_kf=/etc/apk/keys/$1
+  [ -e "$apk_kf" ] || return 0
+  if apk info -q --who-owns "$apk_kf" >/dev/null 2>&1; then
+    return 0
+  fi
+  rm -f "$apk_kf"
+  echo "removed $apk_kf"
+}
+
+# apk
+if ! command -v apk >/dev/null 2>&1; then
+  die "host_packages.apk need a node with apk"
+fi
+for apk_tag in $(sed -n 's/^[^@=<>~]*@\(norca-[a-z0-9-]*\).*/\1/p' /etc/apk/world 2>/dev/null | sort -u); do
+  case ' norca-mine ' in
+  *" $apk_tag "*) ;;
+  *) die "/etc/apk/world takes packages from the tagged repository @$apk_tag, which host_packages.apk no longer gives the node: keep the repository, or remove its packages (apk del) first" ;;
+  esac
+done
+
+# apk repositories
+step_changed=0
+ensure_dir '/etc/apk/keys' 0755
+ensure_dir '/etc/apk/repositories.d' 0755
+put_file '/etc/apk/keys/packager-6b0763be.rsa.pub' 0644 <<'NORCA_EOF'
+-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAutQkua2CAig4VFSJ7v54
+ALyu/J1WB3oni7qwCZD3veURw7HxpNAj9hR+S5N/pNeZgubQvJWyaPuQDm7PTs1+
+tFGiYNfAsiibX6Rv0wci3M+z2XEVAeR9Vzg6v4qoofDyoTbovn2LztaNEjTkB+oK
+tlvpNhg1zhou0jDVYFniEXvzjckxswHVb8cT0OMTKHALyLPrPOJzVtM9C1ew2Nnc
+3848xLiApMu3NBk0JqfcS3Bo5Y2b1FRVBvdt+2gFoKZix1MnZdAEZ8xQzL/a0YS5
+Hd0wj5+EEKHfOd3A75uPa/WQmA+o0cBFfrzm69QDcSJSwGpzWrD1ScH3AK8nWvoj
+v7e9gukK/9yl1b4fQQ00vttwJPSgm9EnfPHLAtgXkRloI27H6/PuLoNvSAMQwuCD
+hQRlyGLPBETKkHeodfLoULjhDi1K2gKJTMhtbnUcAA7nEphkMhPWkBpgFdrH+5z4
+Lxy+3ek0cqcI7K68EtrffU8jtUj9LFTUC8dERaIBs7NgQ/LfDbDfGh9g6qVj1hZl
+k9aaIPTm/xsi8v3u+0qaq7KzIBc9s59JOoA8TlpOaYdVgSQhHHLBaahOuAigH+VI
+isbC9vmqsThF2QdDtQt37keuqoda2E6sL7PUvIyVXDRfwX7uMDjlzTxHTymvq2Ck
+htBqojBnThmjJQFgZXocHG8CAwEAAQ==
+-----END PUBLIC KEY-----
+NORCA_EOF
+[ "$wrote" = 0 ] || step_changed=1
+put_file '/etc/apk/repositories.d/norca.list' 0644 <<'NORCA_EOF'
+# Managed by norca-deployer. Do not edit: the deployer writes this file whole.
+https://dl-cdn.alpinelinux.org/alpine/v3.22/community
+@norca-mine https://apk.example.com/v3.22/main
+NORCA_EOF
+[ "$wrote" = 0 ] || step_changed=1
+if [ "$step_changed" = 1 ] || ! {
+true
+}; then
+apk --wait 300 update >/dev/null
+log 'repositories: indexes read'
+  changed=1
+fi
+
+# apk keys the plan dropped
+if step_out=$(
+apk_keys_keep='packager-6b0763be.rsa.pub'
+if [ -f /var/lib/norca-deployer/apk-keys ]; then
+  while IFS= read -r apk_key; do
+    [ -n "$apk_key" ] || continue
+    if printf '%s\n' "$apk_keys_keep" | grep -qxF -- "$apk_key"; then
+      continue
+    fi
+    apk_key_drop "$apk_key"
+  done </var/lib/norca-deployer/apk-keys
+fi
+mkdir -p /var/lib/norca-deployer
+printf '%s\n' "$apk_keys_keep" >/var/lib/norca-deployer/apk-keys
+); then
+  step_rc=0
+else
+  step_rc=1
+fi
+step_lines 'apk keys the plan dropped' "$step_rc" "$step_out"
+
+# apk packages
+if ! {
+apk_has 'containerd' '1.7.27-r0' &&
+  apk_world 'containerd=1.7.27-r0' &&
+  apk_has 'norca-agent' '0.3.0-r1' &&
+  apk_world 'norca-agent@norca-mine' &&
+  apk_has 'jq' '' &&
+  apk_world "jq=$(apk_version 'jq')" &&
+  apk_has 'tree' '' &&
+  apk_world 'tree'
+}; then
+apk --wait 300 add -q -U 'containerd=1.7.27-r0' 'norca-agent@norca-mine=0.3.0-r1' 'jq' 'tree'
+apk --wait 300 add -q 'norca-agent@norca-mine' "jq=$(apk_version 'jq')"
+  changed=1
+fi
+
+# apk versions
+apk_expect 'containerd' '1.7.27-r0'
+apk_expect 'norca-agent' '0.3.0-r1'
+apk_expect 'jq' ''
+apk_expect 'tree' ''
+
