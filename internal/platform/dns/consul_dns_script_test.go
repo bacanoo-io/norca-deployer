@@ -48,7 +48,7 @@ func (s shell) hasPython() bool {
 const systemPath = "/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin"
 
 // busyboxApplets are the commands the script and the stubs use.
-var busyboxApplets = []string{"sh", "awk", "grep", "cmp", "cp", "mv", "rm", "mkdir", "chmod", "mktemp", "dirname", "tr", "cat", "printf", "echo", "["}
+var busyboxApplets = []string{"sh", "awk", "grep", "sha256sum", "cp", "mv", "rm", "mkdir", "chmod", "mktemp", "dirname", "tr", "cat", "printf", "echo", "["}
 
 func shells(t *testing.T) []shell {
 	t.Helper()
@@ -58,6 +58,9 @@ func shells(t *testing.T) []shell {
 	var res []shell
 	if p, err := exec.LookPath("dash"); err == nil {
 		res = append(res, shell{name: "dash", argv: []string{p}, path: systemPath})
+		if dir := minimalPath(t); dir != "" {
+			res = append(res, shell{name: "dash-minimal", argv: []string{p}, path: dir})
+		}
 	}
 	bb := os.Getenv("NORCA_TEST_BUSYBOX")
 	if bb == "" {
@@ -84,6 +87,28 @@ func shells(t *testing.T) []shell {
 		t.Skip("neither dash, busybox nor bash is installed")
 	}
 	return res
+}
+
+// minimalTools are the commands of a minimal system that the script and
+// the stubs may use: those of coreutils, grep and gawk (or busybox). A
+// minimal RHEL image has no diffutils, so no cmp.
+var minimalTools = []string{"sh", "awk", "grep", "sha256sum", "cp", "mv", "rm", "mkdir", "chmod", "mktemp", "dirname", "tr", "cat", "printf", "echo", "["}
+
+// minimalPath returns a directory with links to the minimal tools of this
+// system, for a PATH of nothing else; "" when one is missing.
+func minimalPath(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for _, tool := range minimalTools {
+		p, err := exec.LookPath(tool)
+		if err != nil {
+			return ""
+		}
+		if err := os.Symlink(p, filepath.Join(dir, tool)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
 }
 
 const systemctlStub = `#!/bin/sh

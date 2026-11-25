@@ -193,12 +193,18 @@ ncd_choose() {
   fi
 }
 
+# ncd_same FILE1 FILE2 is true when the files have the same content. It
+# compares their SHA-256: cmp is not on a minimal RHEL (no diffutils).
+ncd_same() {
+  ncd_sum1=$(sha256sum <"$1") && ncd_sum2=$(sha256sum <"$2") && [ "$ncd_sum1" = "$ncd_sum2" ]
+}
+
 # ncd_put PATH MODE FILE writes the content of FILE to PATH unless PATH has
 # it already; ncd_wrote is 1 when it wrote.
 ncd_put() {
   ncd_wrote=0
   ncd_dst=$ncd_root$1
-  if [ -f "$ncd_dst" ] && cmp -s "$3" "$ncd_dst"; then
+  if [ -f "$ncd_dst" ] && ncd_same "$3" "$ncd_dst"; then
     ncd_say "unchanged $1"
     return 0
   fi
@@ -263,7 +269,7 @@ ncd_docker_json() {
     return 0
   fi
   # The file this function made: no tool is needed to see it is unchanged.
-  if cmp -s "$ncd_tmp/daemon.json" "$ncd_dj"; then
+  if ncd_same "$ncd_tmp/daemon.json" "$ncd_dj"; then
     ncd_json_same=1
     return 0
   fi
