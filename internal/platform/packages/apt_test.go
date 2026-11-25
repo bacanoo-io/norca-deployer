@@ -1,14 +1,14 @@
 package packages
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
-	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -108,145 +108,195 @@ func TestInstallCommand(t *testing.T) {
 	}
 }
 
-func TestApply(t *testing.T) {
+// stepNamed returns the step of a name.
+func stepNamed(t *testing.T, steps []step.Step, name string) *step.Step {
+	t.Helper()
+	for i := range steps {
+		if steps[i].Name == name {
+			return &steps[i]
+		}
+	}
+	var names []string
+	for _, s := range steps {
+		names = append(names, s.Name)
+	}
+	t.Fatalf("no step %q in %q", name, names)
+	return nil
+}
+
+func fileOf(s *step.Step, path string) *step.File {
+	for i := range s.Files {
+		if s.Files[i].Path == path {
+			return &s.Files[i]
+		}
+	}
+	return nil
+}
+
+func TestSteps(t *testing.T) {
 	hp := testHostPackages()
 	hp.Apt.Repositories[0].PinPriority = 900
 	hp.Apt.Repositories[0].Auth = &config.AptAuth{Username: "u", Password: "!enc:secret"}
 	plan := &config.DeploymentPlan{HostPackages: hp}
-	conn := connector.NewFakeConnector()
-	conn.Responses["dpkg-query"] = "norca-redis 8.0.2-1norca1\njq 1.6-2.1\n"
 	resolve := func(v string) (string, error) { return strings.TrimPrefix(v, "!enc:"), nil }
 
-	sel := Select(hp.Apt, testNode, false)
-	if err := Apply(conn, plan, sel, testNode, resolve); err != nil {
-		t.Fatalf("Apply: %v", err)
-	}
-
-	if string(conn.Files["/etc/apt/keyrings/norca-internal.asc"]) != testKey {
-		t.Errorf("keyring not written")
-	}
-	if !strings.Contains(string(conn.Files["/etc/apt/sources.list.d/norca-internal.sources"]), "Signed-By: /etc/apt/keyrings/norca-internal.asc") {
-		t.Errorf("source not written")
-	}
-	if !strings.Contains(string(conn.Files["/etc/apt/preferences.d/norca-internal.pref"]), "Pin-Priority: 900") {
-		t.Errorf("pin not written")
-	}
-	if auth := conn.Files["/etc/apt/auth.conf.d/norca-internal.conf"]; !strings.Contains(string(auth), "password secret") ||
-		conn.Modes["/etc/apt/auth.conf.d/norca-internal.conf"] != 0600 {
-		t.Errorf("auth = %q mode %v", auth, conn.Modes["/etc/apt/auth.conf.d/norca-internal.conf"])
-	}
-	if len(conn.CommandsWithPrefix("apt-get update")) != 1 {
-		t.Errorf("apt-get update not run")
-	}
-	if hold := conn.CommandsWithPrefix("apt-mark hold"); len(hold) != 1 || !strings.Contains(hold[0], "'norca-redis'") {
-		t.Errorf("hold = %v", hold)
-	}
-}
-
-func TestBinaryKey(t *testing.T) {
-	hp := testHostPackages()
-	binKey := []byte{0x99, 0x01, 0x0d, 0x04} // old-format public key packet
-	hp.Apt.Repositories[0].Key = string(binKey)
-	hp.Apt.Install = nil
-	conn := connector.NewFakeConnector()
-
-	sel := Select(hp.Apt, testNode, false)
-	if err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, sel, testNode, nil); err != nil {
+	steps, err := Apt{}.Steps(Select(hp.Apt, testNode, false), Context{Plan: plan, Arch: "amd64", Resolve: resolve})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if string(conn.Files["/etc/apt/keyrings/norca-internal.gpg"]) != string(binKey) {
-		t.Fatalf("binary key must go to a .gpg keyring: %v", conn.Files)
+	var names []string
+	for _, s := range steps {
+		names = append(names, s.Name)
 	}
-	if !strings.Contains(string(conn.Files["/etc/apt/sources.list.d/norca-internal.sources"]), "norca-internal.gpg") {
-		t.Fatalf("source must reference the .gpg keyring")
+	want := []string{"apt", "apt repository internal (with credentials)", "apt packages", "apt holds", "apt versions"}
+	if !slices.Equal(names, want) {
+		t.Fatalf("steps %q, want %q", names, want)
 	}
-	if rm := conn.CommandsWithPrefix("rm -f '/etc/apt/keyrings/norca-internal.asc'"); len(rm) != 1 {
-		t.Fatalf("stale armored keyring not removed: %v", conn.Commands)
+
+	repo := stepNamed(t, steps, "apt repository internal (with credentials)")
+	if f := fileOf(repo, "/etc/apt/keyrings/norca-internal.asc"); f == nil || string(f.Content) != testKey {
+		t.Errorf("keyring: %+v", f)
+	}
+	if f := fileOf(repo, "/etc/apt/sources.list.d/norca-internal.sources"); f == nil ||
+		!strings.Contains(string(f.Content), "Signed-By: /etc/apt/keyrings/norca-internal.asc") {
+		t.Errorf("source: %+v", f)
+	}
+	if f := fileOf(repo, "/etc/apt/preferences.d/norca-internal.pref"); f == nil || !strings.Contains(string(f.Content), "Pin-Priority: 900") {
+		t.Errorf("pin: %+v", f)
+	}
+	if f := fileOf(repo, "/etc/apt/auth.conf.d/norca-internal.conf"); f == nil || f.Mode != 0o600 ||
+		!strings.Contains(string(f.Content), "password secret") || !repo.Secret {
+		t.Errorf("credentials: %+v, secret %t", f, repo.Secret)
+	}
+	if !slices.Equal(repo.Remove, []string{"/etc/apt/keyrings/norca-internal.gpg"}) {
+		t.Errorf("remove %q", repo.Remove)
+	}
+
+	install := stepNamed(t, steps, "apt packages")
+	for _, w := range []string{"apt-get update -q -o DPkg::Lock::Timeout=300\n", "DEBIAN_FRONTEND=noninteractive apt-get install", "'norca-redis=8.0.2-1norca1' 'jq'"} {
+		if !strings.Contains(install.Apply, w) {
+			t.Errorf("install has no %q:\n%s", w, install.Apply)
+		}
+	}
+	if install.Check != "" {
+		t.Errorf("with update_cache the install runs every time, check %q", install.Check)
+	}
+	holds := stepNamed(t, steps, "apt holds").Apply
+	if !strings.Contains(holds, "apt-mark hold 'norca-redis'") || !strings.Contains(holds, "apt-mark unhold 'jq'") {
+		t.Errorf("holds:\n%s", holds)
+	}
+	if v := stepNamed(t, steps, "apt versions").Apply; v != "expect_package 'norca-redis' '8.0.2-1norca1'\nexpect_package 'jq' ''" {
+		t.Errorf("versions:\n%s", v)
+	}
+
+	// Without a pin and credentials their files of an earlier plan go.
+	hp.Apt.Repositories[0].PinPriority, hp.Apt.Repositories[0].Auth = 0, nil
+	steps, err = Apt{}.Steps(Select(hp.Apt, testNode, true), Context{Plan: plan, Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo = stepNamed(t, steps, "apt repository internal")
+	if repo.Secret || !slices.Equal(repo.Remove, []string{"/etc/apt/keyrings/norca-internal.gpg", "/etc/apt/preferences.d/norca-internal.pref", "/etc/apt/auth.conf.d/norca-internal.conf"}) {
+		t.Errorf("repository without pin and credentials: %+v", repo)
 	}
 }
 
-func TestLocalDebWithoutRepository(t *testing.T) {
+func TestStepsBinaryKey(t *testing.T) {
+	hp := testHostPackages()
+	hp.Apt.Repositories[0].Key = string([]byte{0x99, 0x01, 0x0d, 0x04}) // old-format public key packet
+	hp.Apt.Install = nil
+	steps, err := Apt{}.Steps(Select(hp.Apt, testNode, false), Context{Plan: &config.DeploymentPlan{HostPackages: hp}, Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := stepNamed(t, steps, "apt repository internal")
+	if fileOf(repo, "/etc/apt/keyrings/norca-internal.gpg") == nil ||
+		!strings.Contains(string(fileOf(repo, "/etc/apt/sources.list.d/norca-internal.sources").Content), "norca-internal.gpg") ||
+		repo.Remove[0] != "/etc/apt/keyrings/norca-internal.asc" {
+		t.Fatalf("a binary key goes to a .gpg keyring: %+v", repo)
+	}
+	if len(steps) != 2 {
+		t.Fatalf("repositories only: %d steps", len(steps))
+	}
+}
+
+// A local .deb is copied over SSH and checked; the install script of a
+// machine can only require it to be installed.
+func TestStepsLocalDeb(t *testing.T) {
 	dir := t.TempDir()
 	deb := filepath.Join(dir, "norca-redis_8.0.2-1norca1_amd64.deb")
-	if err := os.WriteFile(deb, []byte("fake deb"), 0644); err != nil {
+	if err := os.WriteFile(deb, []byte("fake deb"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	sum, _ := artifacts.FileSHA256(deb)
-
 	hp := &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{
 		Name: "norca-redis", File: filepath.Join(dir, "norca-redis_8.0.2-1norca1_{arch}.deb"), Version: "8.0.2-1norca1",
 	}}}}
 	plan := &config.DeploymentPlan{HostPackages: hp}
-	conn := connector.NewFakeConnector()
-	conn.Responses["dpkg-deb -f"] = "Package: norca-redis\nVersion: 8.0.2-1norca1\n"
-	conn.Responses["dpkg-query"] = "norca-redis 8.0.2-1norca1\n"
-
 	sel := Select(hp.Apt, testNode, false)
-	if err := Apply(conn, plan, sel, testNode, nil); err != nil {
+
+	steps, err := Apt{}.Steps(sel, Context{Plan: plan, Arch: "amd64"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	remote := DebDir + "/norca-redis_8.0.2-1norca1_amd64.deb"
-	if string(conn.Files[remote]) != "fake deb" {
-		t.Fatalf(".deb not copied: %v", conn.Files)
+	file := stepNamed(t, steps, "apt package file norca-redis_8.0.2-1norca1_amd64.deb")
+	if f := fileOf(file, remote); f == nil || f.Local != deb || f.SHA256 != sum ||
+		file.Apply != "deb_check '"+remote+"' 'norca-redis' '8.0.2-1norca1'" {
+		t.Fatalf("file step: %+v", file)
 	}
-	if len(conn.CommandsWithPrefix("apt-get update")) != 0 {
-		t.Fatalf("offline install must not run apt-get update")
-	}
-	if inst := conn.CommandsWithPrefix("DEBIAN_FRONTEND"); len(inst) != 1 || !strings.Contains(inst[0], "'"+remote+"'") {
-		t.Fatalf("install = %v", inst)
+	install := stepNamed(t, steps, "apt packages")
+	if strings.Contains(install.Apply, "apt-get update") || !strings.Contains(install.Apply, "'"+remote+"'") {
+		t.Fatalf("an offline node gets no apt-get update:\n%s", install.Apply)
 	}
 
-	// Second apply: same digest on the node, no upload.
-	conn2 := connector.NewFakeConnector()
-	conn2.Responses["sha256sum"] = sum + "  " + remote + "\n"
-	conn2.Responses["dpkg-deb -f"] = "Package: norca-redis\nVersion: 8.0.2-1norca1\n"
-	conn2.Responses["dpkg-query"] = "norca-redis 8.0.2-1norca1\n"
-	if err := Apply(conn2, plan, sel, testNode, nil); err != nil {
+	script, err := Apt{}.Steps(sel, Context{Plan: plan, Arch: "amd64", Script: true})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := conn2.Files[remote]; ok {
-		t.Fatalf("unchanged .deb uploaded again")
+	if s := stepNamed(t, script, "apt package norca-redis"); s.Apply != "require_package 'norca-redis' '8.0.2-1norca1' 'norca-redis_8.0.2-1norca1_amd64.deb'" {
+		t.Fatalf("script: %+v", s)
+	}
+	for _, s := range script {
+		if s.Name == "apt packages" {
+			t.Fatal("the script installs a file it cannot reach")
+		}
+	}
+
+	hp.Apt.Install[0].File = deb
+	hp.Apt.Install[0].SHA256 = strings.Repeat("0", 64)
+	if _, err := (Apt{}).Steps(Select(hp.Apt, testNode, false), Context{Plan: plan, Arch: "amd64"}); err == nil || !strings.Contains(err.Error(), "expected 0000") {
+		t.Fatalf("a wrong digest: %v", err)
 	}
 }
 
-func TestLocalDebWrongPackage(t *testing.T) {
-	dir := t.TempDir()
-	deb := filepath.Join(dir, "x.deb")
-	os.WriteFile(deb, []byte("x"), 0644)
-	hp := &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{Name: "norca-redis", File: deb}}}}
-	conn := connector.NewFakeConnector()
-	conn.Responses["dpkg-deb -f"] = "Package: other\nVersion: 1\n"
-
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
-	if err == nil || !strings.Contains(err.Error(), `contains package "other"`) {
-		t.Fatalf("expected a package name error, got %v", err)
-	}
-	if len(conn.CommandsWithPrefix("DEBIAN_FRONTEND")) != 0 {
-		t.Fatalf("a mismatching .deb must not be installed")
-	}
-}
-
-func TestApplyVersionMismatch(t *testing.T) {
+// Without update_cache only a missing package (or one not at its version)
+// is installed.
+func TestStepsWithoutUpdateCache(t *testing.T) {
 	hp := testHostPackages()
-	conn := connector.NewFakeConnector()
-	conn.Responses["dpkg-query"] = "norca-redis 8.0.1-1norca1\njq 1.6-2.1\n"
-
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
-	if err == nil || !strings.Contains(err.Error(), "8.0.1-1norca1 installed") {
-		t.Fatalf("expected version mismatch error, got %v", err)
+	off := false
+	hp.UpdateCache = &off
+	steps, err := Apt{}.Steps(Select(hp.Apt, testNode, false), Context{Plan: &config.DeploymentPlan{HostPackages: hp}, Arch: "amd64"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	install := stepNamed(t, steps, "apt packages")
+	if strings.Contains(install.Apply, "apt-get update") || install.Check != "apt_has 'norca-redis' '8.0.2-1norca1' &&\n  apt_has 'jq' ''" {
+		t.Fatalf("install: %+v", install)
 	}
 }
 
-func TestApplyNotDebian(t *testing.T) {
-	hp := testHostPackages()
-	conn := connector.NewFakeConnector()
-	conn.Failures["command -v apt-get"] = errors.New("exit 1")
-
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
-	if err == nil || !strings.Contains(err.Error(), "Debian-based") {
-		t.Fatalf("expected a Debian check error, got %v", err)
+func TestNoPackageManager(t *testing.T) {
+	sel := Select(testHostPackages().Apt, testNode, false)
+	for _, m := range []Manager{None{}, Unsupported{Manager: "dnf"}} {
+		if steps, err := m.Steps(&Selection{}, Context{}); err != nil || steps != nil {
+			t.Errorf("%s with nothing: %v %v", m.Name(), steps, err)
+		}
+		if _, err := m.Steps(sel, Context{}); err == nil {
+			t.Errorf("%s with packages: no error", m.Name())
+		}
 	}
-	if len(conn.Files) != 0 {
-		t.Fatalf("nothing may be written on a non-Debian node: %v", conn.Files)
+	if (Apt{}).Arch("arm") != "armhf" || (Apt{}).Arch("amd64") != "amd64" {
+		t.Error("the Debian names of the architectures")
 	}
 }

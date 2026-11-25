@@ -25,6 +25,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -142,12 +143,17 @@ func TestScriptsAndPackages(t *testing.T) {
 		},
 }}
 	sel := packages.Select(plan.AptPackages(), node, false)
-	if err := packages.Apply(conn, plan, sel, node, nil); err != nil {
+	steps, err := packages.Apt{}.Steps(sel, packages.Context{Plan: plan, Arch: node.Arch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ex := &step.Executor{Conn: conn, Host: node.Host}
+	if _, _, err := ex.RunAll(t.Context(), steps); err != nil {
 		t.Fatal(err)
 	}
 	// Idempotent second run.
-	if err := packages.Apply(conn, plan, sel, node, nil); err != nil {
-		t.Fatal(err)
+	if changed, _, err := ex.RunAll(t.Context(), steps); err != nil || changed {
+		t.Fatalf("second run: changed %t, %v", changed, err)
 	}
 
 	checks := map[string]string{

@@ -104,12 +104,12 @@ func cannedNode(exists bool, out string, err error) *connector.FakeConnector {
 	f := connector.NewFakeConnector()
 	f.Handler = func(cmd string) (string, error, bool) {
 		switch {
-		case strings.HasPrefix(cmd, "if [ -e "):
+		case strings.HasPrefix(cmd, "# when: "+StepName+"\n"):
 			if exists {
-				return "yes\n", nil, true
+				return "norca-step yes\n", nil, true
 			}
-			return "no\n", nil, true
-		case strings.HasSuffix(cmd, " sh "+ScriptPath):
+			return "norca-step no\n", nil, true
+		case strings.Contains(cmd, " sh "+ScriptPath):
 			return out, err, true
 		}
 		return "", nil, true
@@ -119,15 +119,15 @@ func cannedNode(exists bool, out string, err error) *connector.FakeConnector {
 
 func TestApplyUploadsAndRuns(t *testing.T) {
 	conn := cannedNode(false, "method dnsmasq\nchanged "+DnsmasqConf+"\nrestarted dnsmasq\n", nil)
-	res, err := Apply(conn, "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto"})
+	res, err := Apply(t.Context(), conn, "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(conn.Files[ScriptPath]) != Script() || conn.Modes[ScriptPath] != 0o700 {
 		t.Fatalf("the script was not uploaded to %s", ScriptPath)
 	}
-	runs := conn.CommandsWithPrefix("NCD_ENABLED='1' ")
-	if len(runs) != 1 || !strings.HasSuffix(runs[0], " sh "+ScriptPath) {
+	runs := conn.CommandsWithPrefix("# apply: " + StepName + "\n")
+	if len(runs) != 1 || !strings.Contains(runs[0], "\nNCD_ENABLED='1' ") || !strings.HasSuffix(runs[0], " sh "+ScriptPath) {
 		t.Fatalf("commands = %q, want one run of the script", conn.Commands)
 	}
 	if res.Method != "dnsmasq" || len(res.Restarted) != 1 {
@@ -153,12 +153,12 @@ func TestApplyErrors(t *testing.T) {
 			name: "failure without an error line",
 			out:  "sh: 1: cannot open /var/lib/norca-deployer/consul-dns.sh\n",
 			err:  fail,
-			want: "consul.dns_forwarding: 10.0.0.1: the script failed",
+			want: "consul.dns_forwarding failed: exit status 1 (output: sh: 1: cannot open",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Apply(cannedNode(false, tt.out, tt.err), "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true})
+			_, err := Apply(t.Context(), cannedNode(false, tt.out, tt.err), "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true})
 			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 				t.Fatalf("Apply() = %v, want %q", err, tt.want)
 			}
@@ -170,7 +170,7 @@ func TestApplyErrors(t *testing.T) {
 func TestApplyDisabledWithoutFiles(t *testing.T) {
 	for _, f := range []*config.ConsulDNSForwarding{nil, {Enabled: false}} {
 		conn := cannedNode(false, "", nil)
-		res, err := Apply(conn, "10.0.0.1", f)
+		res, err := Apply(t.Context(), conn, "10.0.0.1", f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,11 +182,12 @@ func TestApplyDisabledWithoutFiles(t *testing.T) {
 
 func TestApplyDisabledRemoves(t *testing.T) {
 	conn := cannedNode(true, "removed "+ResolvedDropIn+"\nrestarted systemd-resolved\n", nil)
-	res, err := Apply(conn, "10.0.0.1", nil)
+	res, err := Apply(t.Context(), conn, "10.0.0.1", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(conn.CommandsWithPrefix("NCD_ENABLED='0' ")) != 1 || len(conn.CommandsWithPrefix("rm -f "+ScriptPath)) != 1 {
+	runs := conn.CommandsWithPrefix("# apply: " + StepName + "\n")
+	if len(runs) != 1 || !strings.Contains(runs[0], "\nNCD_ENABLED='0' ") || !strings.HasSuffix(runs[0], " sh "+ScriptPath+"\nrm -f "+ScriptPath) {
 		t.Fatalf("commands = %q, want the script run with NCD_ENABLED=0 and then removed", conn.Commands)
 	}
 	if len(res.Removed) != 1 || res.Restarted[0] != "systemd-resolved" {

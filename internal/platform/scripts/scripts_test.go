@@ -26,7 +26,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(conn.CommandsWithPrefix("set -a;")); got != 1 {
+	if got := len(conn.CommandsWithPrefix("set -a\n")); got != 1 {
 		t.Fatalf("first apply: %d runs, want 1", got)
 	}
 	if string(conn.Files[ScriptPath("disk")]) != "echo disk\n" || conn.Modes[ScriptPath("disk")] != 0700 {
@@ -40,7 +40,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(conn.CommandsWithPrefix("set -a;")); got != 1 {
+	if got := len(conn.CommandsWithPrefix("set -a\n")); got != 1 {
 		t.Fatalf("unchanged script ran again (%d runs)", got)
 	}
 
@@ -49,7 +49,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(conn.CommandsWithPrefix("set -a;")); got != 2 {
+	if got := len(conn.CommandsWithPrefix("set -a\n")); got != 2 {
 		t.Fatalf("changed env did not re-run the script (%d runs)", got)
 	}
 }
@@ -64,7 +64,7 @@ func TestAlwaysAndRoles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := len(conn.CommandsWithPrefix("set -a;")); got != 2 {
+	if got := len(conn.CommandsWithPrefix("set -a\n")); got != 2 {
 		t.Fatalf("always script: %d runs, want 2", got)
 	}
 
@@ -81,7 +81,7 @@ func TestFailureKeepsMarkerUnset(t *testing.T) {
 	plan := testPlan()
 	node := &config.NodeConfig{Host: "10.0.0.1", Platform: "linux"}
 	conn := connector.NewFakeConnector()
-	conn.Failures["set -a;"] = errBoom{}
+	conn.Failures["set -a\n"] = errBoom{}
 
 	err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil)
 	if err == nil || !strings.Contains(err.Error(), `script "disk" failed`) {
@@ -99,7 +99,7 @@ func TestFailureKeepsMarkerUnset(t *testing.T) {
 func TestCommandIsPortable(t *testing.T) {
 	p := &Prepared{Config: &config.ScriptConfig{Name: "prep", Timeout: 30}}
 	got := Command(p, "/var/lib/norca-deployer/scripts/prep.env")
-	want := "set -a; . '/var/lib/norca-deployer/scripts/prep.env'; set +a; timeout -k 10 30 bash '/var/lib/norca-deployer/scripts/prep.sh'"
+	want := "set -a\n# shellcheck source=/dev/null\n. '/var/lib/norca-deployer/scripts/prep.env'\nset +a\ntimeout -k 10 30 bash '/var/lib/norca-deployer/scripts/prep.sh'"
 	if got != want {
 		t.Fatalf("Command = %s\nwant      %s", got, want)
 	}

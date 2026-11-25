@@ -14,11 +14,11 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
 	"github.com/bacanoo-io/norca-deployer/internal/host"
+	"github.com/bacanoo-io/norca-deployer/internal/platform"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
-	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
-	"github.com/bacanoo-io/norca-deployer/internal/platform/tuning"
 	"github.com/bacanoo-io/norca-deployer/internal/state"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 	"github.com/bacanoo-io/norca-pki"
@@ -112,8 +112,10 @@ type target struct {
 	paths    *storage.ResolvedPaths
 	conn     connector.Connector
 	// facts are what the probe found on the node (with the overrides of
-	// the plan); set when the node is connected.
-	facts *host.Facts
+	// the plan) and drivers the drivers they choose; set when the node is
+	// connected.
+	facts   *host.Facts
+	drivers *platform.Drivers
 
 	changed    bool // binary, certificates, configuration or service changed
 	wasRunning bool
@@ -308,6 +310,11 @@ func (r *Runner) prepareNode(t *target) error {
 	if err := r.openTarget(t); err != nil {
 		return err
 	}
+	if t.drivers == nil {
+		// A node connected without its facts (a test): the drivers of
+		// its platform.
+		t.drivers = defaultDrivers(t.isWindows())
+	}
 	conn := t.conn
 	isWin := t.isWindows()
 	paths := t.paths
@@ -319,27 +326,33 @@ func (r *Runner) prepareNode(t *target) error {
 		return err
 	}
 
-	// 0b. Debian packages from APT repositories or local .deb files
-	if sel := packages.Select(r.plan.AptPackages(), node, t.isMaster); !sel.Empty() {
+	// 0b. Host packages: the block of the node's package manager
+	if sel := packageSelection(r.plan, t); !sel.Empty() {
 		if isWin {
 			fmt.Printf("    [WARN] [%s] host_packages skipped on a Windows node\n", node.Host)
-		} else if err := packages.Apply(conn, r.plan, sel, node, r.resolveSecret); err != nil {
-			return fmt.Errorf("host packages: %w", err)
+		} else {
+			steps, err := t.drivers.Packages.Steps(sel, packages.Context{Plan: r.plan, Arch: node.Arch, Resolve: r.resolveSecret})
+			if err != nil {
+				return fmt.Errorf("host packages: %w", err)
+			}
+			if err := r.runSteps(t, "host packages", steps); err != nil {
+				return err
+			}
 		}
 	}
 	if err := scripts.Run(conn, r.plan, config.PhasePostPackages, t.scriptTarget(), r.resolveSecret); err != nil {
 		return err
 	}
 
-	// 1. Host tuning (sysctl / Windows Registry)
+	// 1. Host tuning (kernel modules and sysctl / Windows Registry)
 	if r.plan.Tuning.ApplySysctl && !isWin {
-		if err := tuning.ApplyLinuxTuning(conn); err != nil {
-			return fmt.Errorf("Linux sysctl tuning error: %w", err)
+		if err := r.runSteps(t, "Linux sysctl tuning error", t.drivers.Tuning.Steps()); err != nil {
+			return err
 		}
 	}
 	if r.plan.Tuning.WindowsLongPaths && isWin {
-		if err := tuning.ApplyWindowsTuning(conn); err != nil {
-			return fmt.Errorf("Windows environment tuning error: %w", err)
+		if err := r.runSteps(t, "Windows environment tuning error", t.drivers.Tuning.Steps()); err != nil {
+			return err
 		}
 	}
 
@@ -350,55 +363,37 @@ func (r *Runner) prepareNode(t *target) error {
 	}
 
 	// 2. Directory structure preparation
-	dirs := []struct {
-		path string
-		mode os.FileMode
-	}{
-		{paths.BinDir, 0755},
-		{paths.ConfigDir, 0750},
-		{paths.DataDir, 0750},
-		{paths.LogDir, 0750},
-		{paths.TLSDir, 0700},
-	}
-	if t.needsClient() {
-		dirs = append(dirs, struct {
-			path string
-			mode os.FileMode
-		}{paths.CNIBinDir, 0755}, struct {
-			path string
-			mode os.FileMode
-		}{paths.CNIConfigDir, 0755})
-		if paths.AppsDir != "" && node.ClientSettings != nil && node.ClientSettings.NativeAppVolumes != nil &&
-			node.ClientSettings.NativeAppVolumes.EnableDefaults {
-			dirs = append(dirs, []struct {
-				path string
-				mode os.FileMode
-			}{{paths.AppsBinDir, 0755}, {paths.AppsWorkDir, 0770}, {paths.AppsConfigDir, 0750}, {paths.AppsDataDir, 0750}}...)
-		}
-	}
-	for _, d := range dirs {
-		if d.path == "" {
-			continue
-		}
-		if err := conn.MkdirAll(d.path, d.mode); err != nil {
-			return fmt.Errorf("failed to create %s: %w", d.path, err)
-		}
+	if err := r.runSteps(t, "directories", []step.Step{dirsStep(nodeDirs(node, paths, t.needsClient()))}); err != nil {
+		return err
 	}
 	if err := r.prepareHostVolumes(t); err != nil {
 		return err
 	}
 
 	// 3. Norca binary
-	if err := r.installBinary(t); err != nil {
+	bin, err := r.binaryStep(t)
+	if err != nil {
 		return fmt.Errorf("norca binary: %w", err)
+	}
+	ex := &step.Executor{Conn: conn, Host: node.Host, Windows: isWin}
+	res, err := ex.Run(r.abortCtx(), &bin)
+	if err != nil {
+		return fmt.Errorf("norca binary: %w", err)
+	}
+	if res.Changed && len(bin.Files) > 0 {
+		fmt.Printf("    -> [%s] norca binary %s installed\n", node.Host, r.plan.Release.Version)
 	}
 	if after := r.binaryDigest(t); after != binaryBefore {
 		t.changed = true
 	}
 	// 4. CNI plugins
 	if t.needsClient() && !isWin && r.plan.CNI != nil && r.plan.CNI.Install != nil && *r.plan.CNI.Install {
-		if err := r.installCNI(t); err != nil {
+		cni, err := r.cniStep(t)
+		if err != nil {
 			return fmt.Errorf("CNI plugins: %w", err)
+		}
+		if err := r.runSteps(t, "CNI plugins", []step.Step{cni}); err != nil {
+			return err
 		}
 	}
 
@@ -429,12 +424,11 @@ func (r *Runner) prepareNode(t *target) error {
 	}
 
 	// 8. Register the service (started by the rolling restart)
-	changed, err = service.InstallService(conn, paths, isWin, r.plan.Tuning.FileDescriptorLimit)
-	if err != nil {
-		return fmt.Errorf("service installation error: %w", err)
+	svc := t.serviceManager()
+	if err := r.runSteps(t, "service installation error", svc.InstallSteps(paths, r.plan.Tuning.FileDescriptorLimit)); err != nil {
+		return err
 	}
-	t.changed = t.changed || changed
-	t.wasRunning = service.IsServiceRunning(conn, isWin)
+	t.wasRunning = svc.IsRunning(conn)
 
 	status := "unchanged"
 	if t.changed {
@@ -466,7 +460,7 @@ func (r *Runner) restartMasters(ctx context.Context, masters []*target) error {
 	if bootstrap {
 		fmt.Printf("    New cluster: starting all %d servers\n", len(masters))
 		for _, t := range masters {
-			if err := service.RestartService(t.conn, t.paths, t.isWindows()); err != nil {
+			if err := t.serviceManager().Restart(t.conn, t.paths); err != nil {
 				return fmt.Errorf("node [%s]: %w", t.node.Host, err)
 			}
 		}
@@ -485,7 +479,7 @@ func (r *Runner) restartMasters(ctx context.Context, masters []*target) error {
 				continue
 			}
 			fmt.Printf("    [%s] restarting...\n", t.node.Host)
-			if err := service.RestartService(t.conn, t.paths, t.isWindows()); err != nil {
+			if err := t.serviceManager().Restart(t.conn, t.paths); err != nil {
 				return fmt.Errorf("node [%s]: %w", t.node.Host, err)
 			}
 			if err := r.waitHealthy(t, expectPeers); err != nil {
@@ -529,7 +523,7 @@ func (r *Runner) restartClients(ctx context.Context, clients []*target) error {
 					fmt.Printf("    [%s] unchanged, not restarted\n", t.node.Host)
 				} else {
 					fmt.Printf("    [%s] restarting...\n", t.node.Host)
-					if err := service.RestartService(t.conn, t.paths, t.isWindows()); err != nil {
+					if err := t.serviceManager().Restart(t.conn, t.paths); err != nil {
 						t.err = err
 						return
 					}
@@ -587,76 +581,6 @@ func (r *Runner) binaryDigest(t *target) string {
 		return f[0]
 	}
 	return ""
-}
-
-func (r *Runner) installBinary(t *target) error {
-	if r.plan.Release.Source == config.ReleaseHostPackage {
-		// The package provides the binary; link it into bin_dir when it is
-		// installed elsewhere (e.g. /usr/bin/norca).
-		target := t.paths.BinDir + "/norca"
-		cmd := "if [ ! -x " + connector.ShellQuote(target) + " ]; then p=\"$(command -v norca)\" && [ -n \"$p\" ] && ln -sf \"$p\" " +
-			connector.ShellQuote(target) + "; fi; test -x " + connector.ShellQuote(target)
-		if out, err := t.conn.ExecuteCommand(cmd); err != nil {
-			return fmt.Errorf("package %q did not install an executable norca binary: %w (output: %s)", r.plan.Release.Package, err, out)
-		}
-		return nil
-	}
-
-	goos := "linux"
-	dest := t.paths.BinDir + "/norca"
-	if t.isWindows() {
-		goos = "windows"
-		dest = t.paths.BinDir + `\norca.exe`
-	}
-	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch)
-	if err != nil {
-		return err
-	}
-	changed, err := connector.SyncLocalFile(t.conn, file.Path, file.SHA256, dest, 0755, t.isWindows())
-	if err != nil {
-		return err
-	}
-	if changed {
-		fmt.Printf("    -> [%s] norca binary %s installed\n", t.node.Host, r.plan.Release.Version)
-	}
-	return nil
-}
-
-// installCNI unpacks the CNI plugin archive into cni_bin_dir unless the same
-// archive was installed before. CNI plugins are run per allocation, so a new
-// version needs no agent restart.
-func (r *Runner) installCNI(t *target) error {
-	file, err := r.artifacts.CNIArchive(r.abortCtx(), t.node.Arch)
-	if err != nil {
-		return err
-	}
-	marker := t.paths.CNIBinDir + "/.norca-deployer-cni.sha256"
-	if current, err := t.conn.ReadFile(marker); err == nil && strings.TrimSpace(string(current)) == file.SHA256 {
-		return nil
-	}
-	remote := cliStateDir + "/cni-plugins.tgz"
-	if err := t.conn.MkdirAll(cliStateDir, 0700); err != nil {
-		return err
-	}
-	f, err := os.Open(file.Path)
-	if err != nil {
-		return err
-	}
-	err = t.conn.CopyFile(f, remote, 0600)
-	_ = f.Close() // read only
-	if err != nil {
-		return err
-	}
-	cmd := "tar -xzf " + connector.ShellQuote(remote) + " -C " + connector.ShellQuote(t.paths.CNIBinDir) +
-		" && rm -f " + connector.ShellQuote(remote)
-	if out, err := t.conn.ExecuteCommand(cmd); err != nil {
-		return fmt.Errorf("failed to unpack: %w (output: %s)", err, out)
-	}
-	if err := t.conn.CopyFile(strings.NewReader(file.SHA256+"\n"), marker, 0644); err != nil {
-		return err
-	}
-	fmt.Printf("    -> [%s] CNI plugins %s installed\n", t.node.Host, r.plan.CNI.Version)
-	return nil
 }
 
 // prepareHostVolumes creates the directories of custom host volumes with

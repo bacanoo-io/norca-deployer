@@ -8,11 +8,12 @@
 // The work is done by one POSIX sh script (consul_dns.sh): it detects the
 // local resolver (systemd-resolved or dnsmasq), checks what it needs before
 // it changes anything, writes the files and restarts the resolver when one
-// changed. The SSH path uploads it and runs it (Apply); the install script
-// of a scaled machine embeds its functions (Functions, Assignments).
+// changed. Its steps (Steps) upload it and run it, over SSH and in the
+// install script of a scaled machine alike.
 package dns
 
 import (
+	"context"
 	_ "embed"
 	"fmt"
 	"net/netip"
@@ -21,6 +22,7 @@ import (
 	"strings"
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -180,64 +182,74 @@ func (r *Result) Summary() string {
 	return strings.Join(parts, "; ")
 }
 
-// Apply configures the forwarding of a Linux node: f enabled forwards the
-// domain, nil or disabled removes what an earlier apply wrote. node names
-// the node in the errors. A node without a suitable resolver is an error,
-// found before anything is changed on it.
-func Apply(conn connector.Connector, node string, f *config.ConsulDNSForwarding) (*Result, error) {
-	return apply(conn, node, f, "")
+// StepName names the steps of the forwarding in the log and in the errors.
+const StepName = "consul.dns_forwarding"
+
+// Steps returns the steps of a forwarding block, the same for the SSH path
+// and the install script of a scaled machine: the script is written to
+// ScriptPath and run with the parameters; its result lines decide the
+// change, the warnings and the errors. nil or disabled removes what an
+// earlier run wrote: the script runs only on a node that has a file of an
+// earlier run, and the script goes afterwards.
+func Steps(f *config.ConsulDNSForwarding) ([]step.Step, error) {
+	return steps(f, "")
 }
 
-// apply is Apply with every path of the node below root (tests).
-func apply(conn connector.Connector, node string, f *config.ConsulDNSForwarding, root string) (*Result, error) {
+func steps(f *config.ConsulDNSForwarding, root string) ([]step.Step, error) {
 	vs, err := vars(f, root)
 	if err != nil {
 		return nil, err
 	}
-	enabled := f != nil && f.Enabled
-	if !enabled {
-		found, err := anyManagedFile(conn, root)
-		if err != nil {
-			return nil, fmt.Errorf("consul.dns_forwarding: %s: %w", node, err)
-		}
-		if !found {
-			return &Result{}, nil
-		}
+	run := step.Step{
+		Name:  StepName,
+		Dirs:  []step.Dir{{Path: path.Dir(ScriptPath), Mode: 0o755}},
+		Files: []step.File{{Path: ScriptPath, Mode: 0o700, Content: []byte(Script())}},
+		Apply: Assignments(vs, " ") + " sh " + ScriptPath,
+		Lines: true,
 	}
+	if f != nil && f.Enabled {
+		return []step.Step{run}, nil
+	}
+	run.When = anyManagedFile(root)
+	// Nothing is managed any more: the script goes too.
+	run.Apply += "\nrm -f " + ScriptPath
+	return []step.Step{run}, nil
+}
 
-	if err := conn.MkdirAll(path.Dir(ScriptPath), 0o755); err != nil {
-		return nil, fmt.Errorf("consul.dns_forwarding: %s: %w", node, err)
+// Apply configures the forwarding of a Linux node: f enabled forwards the
+// domain, nil or disabled removes what an earlier apply wrote. node names
+// the node in the errors. A node without a suitable resolver is an error,
+// found before anything is changed on it.
+func Apply(ctx context.Context, conn connector.Connector, node string, f *config.ConsulDNSForwarding) (*Result, error) {
+	return apply(ctx, conn, node, f, "")
+}
+
+// apply is Apply with every path of the node below root (tests).
+func apply(ctx context.Context, conn connector.Connector, node string, f *config.ConsulDNSForwarding, root string) (*Result, error) {
+	steps, err := steps(f, root)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := connector.SyncFile(conn, ScriptPath, []byte(Script()), 0o700); err != nil {
-		return nil, fmt.Errorf("consul.dns_forwarding: %s: %w", node, err)
-	}
-	out, runErr := conn.ExecuteCommand(Assignments(vs, " ") + " sh " + ScriptPath)
-	res := Parse(out)
-	if len(res.Errors) > 0 {
-		return res, fmt.Errorf("consul.dns_forwarding: %s %s", node, strings.Join(res.Errors, "; "))
-	}
-	if runErr != nil {
-		return res, fmt.Errorf("consul.dns_forwarding: %s: the script failed: %w (output: %s)", node, runErr, strings.TrimSpace(out))
-	}
-	if !enabled {
-		// Nothing is managed any more: the script goes too.
-		if out, err := conn.ExecuteCommand("rm -f " + ScriptPath); err != nil {
-			res.Warnings = append(res.Warnings, fmt.Sprintf("could not remove %s: %s", ScriptPath, strings.TrimSpace(out)))
+	ex := &step.Executor{Conn: conn, Host: node}
+	res := &Result{}
+	for i := range steps {
+		r, err := ex.Run(ctx, &steps[i])
+		if r != nil && steps[i].Lines && r.Output != "" {
+			res = Parse(r.Output)
+		}
+		if err != nil {
+			return res, err
 		}
 	}
 	return res, nil
 }
 
-// anyManagedFile reports whether a file the script writes is on the node,
-// so that a node that never had the forwarding gets no upload.
-func anyManagedFile(conn connector.Connector, root string) (bool, error) {
+// anyManagedFile is the condition that a file the script writes is on the
+// node, so that a node that never had the forwarding gets no upload.
+func anyManagedFile(root string) string {
 	var tests []string
 	for _, p := range []string{ResolvedDropIn, TrustAnchor, DnsmasqConf} {
 		tests = append(tests, "[ -e "+connector.ShellQuote(root+p)+" ]")
 	}
-	out, err := conn.ExecuteCommand("if " + strings.Join(tests, " || ") + "; then echo yes; else echo no; fi")
-	if err != nil {
-		return false, fmt.Errorf("could not look for the files of an earlier apply: %w (output: %s)", err, strings.TrimSpace(out))
-	}
-	return strings.TrimSpace(out) == "yes", nil
+	return strings.Join(tests, " || ")
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/host"
+	"github.com/bacanoo-io/norca-deployer/internal/platform"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
@@ -61,7 +62,12 @@ func (r *Runner) openTarget(t *target) error {
 	if err != nil {
 		return err
 	}
-	t.conn, t.facts = conn, facts
+	drivers, err := platform.For(facts)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	t.conn, t.facts, t.drivers = conn, facts, drivers
 	return nil
 }
 

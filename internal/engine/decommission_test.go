@@ -185,7 +185,7 @@ func TestDecommissionClientDrainsBeforeUninstallAndPurge(t *testing.T) {
 		t.Fatalf("events: %s", got)
 	}
 	script := strings.Join(nodes["w2"].Commands, "\n")
-	for _, want := range []string{"systemctl disable --now norca", "docker rm -f $ids", "rm -f '/usr/local/bin/norca'", "rm -rf '/var/lib/norca'"} {
+	for _, want := range []string{"systemctl disable --now norca", "xargs docker rm -f", "rm -f '/usr/local/bin/norca'", "rm -rf '/var/lib/norca'"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("uninstall script lacks %q:\n%s", want, script)
 		}

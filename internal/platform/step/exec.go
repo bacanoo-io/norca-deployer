@@ -208,7 +208,7 @@ func WhenCommand(s *Step) string { return conditionCommand("when", s, s.When) }
 func CheckCommand(s *Step) string { return conditionCommand("check", s, s.Check) }
 
 func conditionCommand(kind string, s *Step, cond string) string {
-	return header(kind, s) + s.Functions + "if {\n" + strings.TrimRight(cond, "\n") + "\n}; then echo '" + answerYes +
+	return header(kind, s) + UsedFunctions(s.Functions, cond) + "if {\n" + strings.TrimRight(cond, "\n") + "\n}; then echo '" + answerYes +
 		"'; else echo '" + answerNo + "'; fi"
 }
 
@@ -224,9 +224,9 @@ func RemoveCommand(s *Step) string {
 }
 
 // ApplyCommand is the POSIX command of Apply over SSH: set -eu, the
-// helpers, the functions of the step and Apply.
+// helpers and the functions of the step that Apply calls, and Apply.
 func ApplyCommand(s *Step) string {
-	return header("apply", s) + "set -eu\n" + Prelude + s.Functions + strings.TrimRight(s.Apply, "\n")
+	return header("apply", s) + "set -eu\n" + UsedFunctions(Prelude+s.Functions, s.Apply) + strings.TrimRight(s.Apply, "\n")
 }
 
 // lines are the result lines of an Apply.

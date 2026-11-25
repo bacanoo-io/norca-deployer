@@ -36,7 +36,7 @@ func TestNodeScalingInstallScript(t *testing.T) {
 	if code != exitOK || stderr != "" {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
-	if !strings.HasPrefix(stdout, "#!/usr/bin/env bash\n") || !strings.Contains(stdout, "norca_0.3.0_linux_arm64.tar.gz") ||
+	if !strings.HasPrefix(stdout, "#!/bin/sh\n") || !strings.Contains(stdout, "norca_0.3.0_linux_arm64.tar.gz") ||
 		!strings.HasSuffix(stdout, "fi\n") {
 		t.Fatalf("stdout is not the script:\n%s", stdout)
 	}

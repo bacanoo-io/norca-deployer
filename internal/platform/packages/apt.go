@@ -1,18 +1,19 @@
-// Package packages installs Debian packages on Debian-based Linux nodes,
-// from APT repositories or from local .deb files copied by the deployer.
+// Package packages installs the host packages of a node with the package
+// manager of the node: apt (Debian, Ubuntu); none on a system without one.
+// A driver returns steps (internal/platform/step), so that the SSH path and
+// the install script of a scaled machine do the same.
 package packages
 
 import (
-	"bytes"
 	"fmt"
 	"net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -27,6 +28,33 @@ const (
 	// DefaultLockTimeout is the dpkg lock wait in seconds without host_packages.lock_timeout.
 	DefaultLockTimeout = 300
 )
+
+// Manager is the driver of a package manager.
+type Manager interface {
+	// Name is the package manager: apt, none.
+	Name() string
+	// Arch maps a GOARCH name to the {arch} of a package file of this
+	// manager.
+	Arch(goarch string) string
+	// Steps installs a selection: the repositories (key, source, pin,
+	// credentials), the cache refresh, the packages, the holds and the
+	// check of the installed versions.
+	Steps(sel *Selection, c Context) ([]step.Step, error)
+}
+
+// Resolver decrypts inline secrets.
+type Resolver func(string) (string, error)
+
+// Context is what the steps of a selection depend on.
+type Context struct {
+	Plan *config.DeploymentPlan
+	// Arch is the GOARCH of the node, for the {arch} of package files.
+	Arch    string
+	Resolve Resolver
+	// Script makes the steps of the install script of a scaled machine: a
+	// package of a local file cannot be copied there and is only checked.
+	Script bool
+}
 
 // SourcePath is the deb822 source file of a repository.
 func SourcePath(repo *config.AptRepository) string {
@@ -182,50 +210,101 @@ func InstallCommand(targets []string, lockTimeout int) string {
 	return strings.Join(args, " ")
 }
 
-// Resolver decrypts inline secrets.
-type Resolver func(string) (string, error)
+// aptFunctions are the shell functions of the apt steps.
+const aptFunctions = `# installed_version NAME prints the version of an installed Debian package.
+installed_version() {
+  # shellcheck disable=SC2016 # dpkg-query fields, not shell variables
+  dpkg-query -W -f='${Status} ${Version}\n' "$1" 2>/dev/null | awk '$3 == "installed" { print $4 }'
+}
 
-// Apply configures the repositories and installs the packages selected for
-// the node. It is idempotent: files are rewritten with the same content,
-// copied .deb files are only uploaded when their digest changed, and apt-get
-// skips packages already at the requested version.
-func Apply(conn connector.Connector, plan *config.DeploymentPlan, sel *Selection, node *config.NodeConfig, resolve Resolver) error {
+# apt_has NAME VERSION is true when the package is installed (at VERSION,
+# when one is given).
+apt_has() {
+  apt_v=$(installed_version "$1")
+  [ -n "$apt_v" ] && { [ -z "$2" ] || [ "$apt_v" = "$2" ]; }
+}
+
+# deb_field FILE FIELD prints a field of a .deb file.
+deb_field() {
+  dpkg-deb -f "$1" "$2" 2>/dev/null
+}
+
+# deb_check FILE NAME VERSION stops unless a .deb holds the package NAME
+# (at VERSION, when one is given).
+deb_check() {
+  deb_name=$(deb_field "$1" Package) || die "package $2: ${1##*/} is not a valid .deb"
+  deb_version=$(deb_field "$1" Version)
+  [ "$deb_name" = "$2" ] || die "package $2: ${1##*/} contains package $deb_name"
+  [ -z "$3" ] || [ "$deb_version" = "$3" ] || die "package $2: ${1##*/} has version $deb_version, expected $3"
+}
+
+# expect_package NAME VERSION stops unless the package is installed (at
+# VERSION, when one is given).
+expect_package() {
+  apt_v=$(installed_version "$1")
+  [ -n "$apt_v" ] || die "package $1 is not installed after apt-get install"
+  [ -z "$2" ] || [ "$apt_v" = "$2" ] || die "package $1: version $apt_v installed, $2 requested"
+  log "package $1 $apt_v"
+}
+
+# require_package NAME VERSION FILE stops unless a package that the plan
+# installs from a local .deb file is installed: the install script of a
+# machine cannot reach a file on the deployer machine.
+require_package() {
+  apt_has "$1" "$2" || die "package $1${2:+ $2} is installed from the local file $3 on the deployer machine: install it into the image first"
+}
+
+# is_held NAME reports whether apt holds a package.
+is_held() {
+  apt-mark showhold | grep -qxF -- "$1"
+}
+`
+
+// Apt is the driver of apt.
+type Apt struct{}
+
+var _ Manager = Apt{}
+
+// Name implements Manager.
+func (Apt) Name() string { return config.PackageManagerApt }
+
+// Arch implements Manager: the Debian names.
+func (Apt) Arch(goarch string) string { return config.DebArch(goarch) }
+
+// Steps implements Manager. The steps are: apt is there; per repository its
+// files (keyring, source, pin, credentials; the files of a setting the plan
+// dropped are removed); the local .deb files (copied and checked over SSH,
+// required to be installed in the install script); apt-get update and
+// install (every time while update_cache is on, so that a package without a
+// version follows its candidate; else only when a package is missing or not
+// at its version); the holds; the check of the installed versions.
+func (Apt) Steps(sel *Selection, c Context) ([]step.Step, error) {
 	if sel.Empty() {
-		return nil
+		return nil, nil
 	}
-	hp := plan.HostPackages
-	host := node.Host
-
-	if out, err := conn.ExecuteCommand("command -v apt-get >/dev/null && command -v dpkg-query >/dev/null"); err != nil {
-		return fmt.Errorf("host_packages need a Debian-based node with apt-get and dpkg (%w, output: %s)", err, out)
-	}
-
-	// 1. Repositories: keyring, source, pin, credentials
-	if len(sel.Repositories) > 0 {
-		if err := conn.MkdirAll(KeyringsDir, 0755); err != nil {
-			return fmt.Errorf("failed to create %s: %w", KeyringsDir, err)
-		}
-	}
+	hp := c.Plan.HostPackages
+	steps := []step.Step{{
+		Name: "apt",
+		Apply: "if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-query >/dev/null 2>&1; then\n" +
+			"  die \"host_packages need a Debian-based node with apt-get and dpkg\"\nfi",
+	}}
 	for i := range sel.Repositories {
-		repo := &sel.Repositories[i]
-		if err := applyRepository(conn, plan, repo, resolve); err != nil {
-			return err
+		s, err := repositoryStep(c, &sel.Repositories[i])
+		if err != nil {
+			return nil, err
 		}
-		fmt.Printf("    -> [%s] APT repository %q configured (%s %s)\n", host, repo.Name, repo.URI, repo.Suite)
+		steps = append(steps, s)
 	}
-
 	if len(sel.Packages) == 0 {
-		return nil
+		return steps, nil
 	}
-
 	lockTimeout := hp.LockTimeout
 	if lockTimeout <= 0 {
 		lockTimeout = DefaultLockTimeout
 	}
+	q := connector.ShellQuote
 
-	// 2. Local .deb files
-	targets := make([]string, 0, len(sel.Packages))
-	fileVersions := map[string]string{}
+	var targets, has, expect []string
 	for i := range sel.Packages {
 		p := &sel.Packages[i]
 		if p.File == "" {
@@ -234,201 +313,148 @@ func Apply(conn connector.Connector, plan *config.DeploymentPlan, sel *Selection
 				spec += "=" + p.Version
 			}
 			targets = append(targets, spec)
+			has = append(has, "apt_has "+q(p.Name)+" "+q(p.Version))
+			expect = append(expect, "expect_package "+q(p.Name)+" "+q(p.Version))
 			continue
 		}
-		remote, version, err := copyDeb(conn, plan, p, node)
+		local := c.Plan.DebFile(p, c.Arch)
+		if c.Script {
+			// The machine cannot reach the file: it must be in the image.
+			steps = append(steps, step.Step{
+				Name: "apt package " + p.Name, Functions: aptFunctions,
+				Apply: "require_package " + q(p.Name) + " " + q(p.Version) + " " + q(filepath.Base(local)),
+			})
+			expect = append(expect, "expect_package "+q(p.Name)+" "+q(p.Version))
+			continue
+		}
+		sum, err := artifacts.FileSHA256(local)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("package %q: %w", p.Name, err)
 		}
-		fileVersions[p.Name] = version
+		if p.SHA256 != "" && !strings.EqualFold(sum, p.SHA256) {
+			return nil, fmt.Errorf("package %q: %s has sha256 %s, expected %s", p.Name, local, sum, p.SHA256)
+		}
+		remote := path.Join(DebDir, filepath.Base(local))
+		steps = append(steps, step.Step{
+			Name:      "apt package file " + filepath.Base(local),
+			Dirs:      []step.Dir{{Path: DebDir, Mode: 0o755}},
+			Files:     []step.File{{Path: remote, Mode: 0o644, Local: local, SHA256: sum}},
+			Functions: aptFunctions,
+			Apply:     "deb_check " + q(remote) + " " + q(p.Name) + " " + q(p.Version),
+		})
 		targets = append(targets, remote)
+		// The version of the file is the one to find installed.
+		has = append(has, "apt_has "+q(p.Name)+` "$(deb_field `+q(remote)+` Version)"`)
+		expect = append(expect, "expect_package "+q(p.Name)+` "$(deb_field `+q(remote)+` Version)"`)
 	}
 
-	// 3. Package index
-	if sel.NeedsIndex() && (hp.UpdateCache == nil || *hp.UpdateCache) {
-		cmd := fmt.Sprintf("apt-get update -q -o DPkg::Lock::Timeout=%d", lockTimeout)
-		if out, err := conn.ExecuteCommand(cmd); err != nil {
-			return fmt.Errorf("apt-get update failed: %w (output: %s)", err, lastLines(out, 20))
+	if len(targets) > 0 {
+		var apply strings.Builder
+		if sel.NeedsIndex() && (hp.UpdateCache == nil || *hp.UpdateCache) {
+			fmt.Fprintf(&apply, "apt-get update -q -o DPkg::Lock::Timeout=%d\n", lockTimeout)
 		}
+		apply.WriteString(InstallCommand(targets, lockTimeout))
+		s := step.Step{Name: "apt packages", Functions: aptFunctions, Apply: apply.String()}
+		if hp.UpdateCache != nil && !*hp.UpdateCache {
+			// Without a cache refresh the candidates do not change: install
+			// only what is missing or not at its version.
+			s.Check = strings.Join(has, " &&\n  ")
+		}
+		steps = append(steps, s)
 	}
 
-	// 4. Install in one transaction
-	if out, err := conn.ExecuteCommand(InstallCommand(targets, lockTimeout)); err != nil {
-		return fmt.Errorf("apt-get install failed: %w (output: %s)", err, lastLines(out, 30))
-	}
-
-	// 5. Holds
-	var hold, unhold []string
+	var holds strings.Builder
 	for _, p := range sel.Packages {
 		if p.Hold {
-			hold = append(hold, connector.ShellQuote(p.Name))
+			fmt.Fprintf(&holds, "if ! is_held %[1]s; then\n  apt-mark hold %[1]s >/dev/null\n  log \"package %[2]s held\"\nfi\n", q(p.Name), p.Name)
 		} else {
-			unhold = append(unhold, connector.ShellQuote(p.Name))
+			// Release a hold that an earlier plan set.
+			fmt.Fprintf(&holds, "if is_held %[1]s; then\n  apt-mark unhold %[1]s >/dev/null\n  log \"package %[2]s released\"\nfi\n", q(p.Name), p.Name)
 		}
 	}
-	if len(hold) > 0 {
-		if out, err := conn.ExecuteCommand("apt-mark hold " + strings.Join(hold, " ")); err != nil {
-			return fmt.Errorf("apt-mark hold failed: %w (output: %s)", err, out)
-		}
-	}
-	if len(unhold) > 0 {
-		// Release holds that an earlier apply set and the plan no longer asks for.
-		_, _ = conn.ExecuteCommand("apt-mark unhold " + strings.Join(unhold, " ") + " >/dev/null")
-	}
-
-	// 6. Verify installed versions
-	names := make([]string, 0, len(sel.Packages))
-	for _, p := range sel.Packages {
-		names = append(names, connector.ShellQuote(p.Name))
-	}
-	out, err := conn.ExecuteCommand("dpkg-query -W -f='${Package} ${Version}\\n' " + strings.Join(names, " "))
-	if err != nil {
-		return fmt.Errorf("dpkg-query failed: %w (output: %s)", err, out)
-	}
-	installed := ParseDpkgQuery(out)
-	for _, p := range sel.Packages {
-		v, ok := installed[p.Name]
-		if !ok {
-			return fmt.Errorf("package %q is not installed after apt-get install", p.Name)
-		}
-		want := p.Version
-		if fv, ok := fileVersions[p.Name]; ok {
-			want = fv
-		}
-		if want != "" && v != want {
-			return fmt.Errorf("package %q: version %s installed, %s requested", p.Name, v, want)
-		}
-		fmt.Printf("    -> [%s] Package %s %s installed\n", host, p.Name, v)
-	}
-	return nil
+	steps = append(steps,
+		step.Step{Name: "apt holds", Functions: aptFunctions, Apply: holds.String()},
+		step.Step{Name: "apt versions", Functions: aptFunctions, Apply: strings.Join(expect, "\n")},
+	)
+	return steps, nil
 }
 
-func applyRepository(conn connector.Connector, plan *config.DeploymentPlan, repo *config.AptRepository, resolve Resolver) error {
-	key, err := plan.RepositoryKey(repo)
+// repositoryStep writes the files of a repository and removes those of the
+// settings the plan dropped.
+func repositoryStep(c Context, repo *config.AptRepository) (step.Step, error) {
+	key, err := c.Plan.RepositoryKey(repo)
 	if err != nil {
-		return err
+		return step.Step{}, err
 	}
 	armored := config.KeyIsArmored(key)
 	keyring := KeyringPath(repo, armored)
-	if err := conn.CopyFile(bytes.NewReader(key), keyring, 0644); err != nil {
-		return fmt.Errorf("repository %q: failed to write keyring: %w", repo.Name, err)
+	s := step.Step{
+		Name: "apt repository " + repo.Name,
+		Dirs: []step.Dir{{Path: KeyringsDir, Mode: 0o755}},
+		Files: []step.File{
+			{Path: keyring, Mode: 0o644, Content: key},
+			{Path: SourcePath(repo), Mode: 0o644, Content: []byte(RenderSource(repo, keyring))},
+		},
+		// The keyring of the other format an earlier key left.
+		Remove: []string{KeyringPath(repo, !armored)},
 	}
-	// Remove the keyring of the other format left by an earlier apply.
-	_, _ = conn.ExecuteCommand("rm -f " + connector.ShellQuote(KeyringPath(repo, !armored)))
-
-	if err := conn.CopyFile(bytes.NewReader([]byte(RenderSource(repo, keyring))), SourcePath(repo), 0644); err != nil {
-		return fmt.Errorf("repository %q: failed to write source: %w", repo.Name, err)
-	}
-
 	if repo.PinPriority != 0 {
-		if err := conn.MkdirAll(PreferencesDir, 0755); err != nil {
-			return err
-		}
-		if err := conn.CopyFile(bytes.NewReader([]byte(RenderPreferences(repo))), PreferencesPath(repo), 0644); err != nil {
-			return fmt.Errorf("repository %q: failed to write the pin: %w", repo.Name, err)
-		}
+		s.Dirs = append(s.Dirs, step.Dir{Path: PreferencesDir, Mode: 0o755})
+		s.Files = append(s.Files, step.File{Path: PreferencesPath(repo), Mode: 0o644, Content: []byte(RenderPreferences(repo))})
 	} else {
-		_, _ = conn.ExecuteCommand("rm -f " + connector.ShellQuote(PreferencesPath(repo)))
+		s.Remove = append(s.Remove, PreferencesPath(repo))
 	}
-
-	if repo.Auth != nil {
-		password := repo.Auth.Password
-		if resolve != nil {
-			if password, err = resolve(password); err != nil {
-				return fmt.Errorf("repository %q: auth.password: %w", repo.Name, err)
-			}
-		}
-		if err := conn.MkdirAll(AuthDir, 0755); err != nil {
-			return err
-		}
-		if err := conn.CopyFile(bytes.NewReader([]byte(RenderAuth(repo, password))), AuthPath(repo), 0600); err != nil {
-			return fmt.Errorf("repository %q: failed to write credentials: %w", repo.Name, err)
-		}
-	} else {
-		_, _ = conn.ExecuteCommand("rm -f " + connector.ShellQuote(AuthPath(repo)))
+	if repo.Auth == nil {
+		s.Remove = append(s.Remove, AuthPath(repo))
+		return s, nil
 	}
-	return nil
+	password := repo.Auth.Password
+	if c.Resolve != nil {
+		if password, err = c.Resolve(password); err != nil {
+			return step.Step{}, fmt.Errorf("repository %q: auth.password: %w", repo.Name, err)
+		}
+	}
+	s.Secret = true
+	s.Name = "apt repository " + repo.Name + " (with credentials)"
+	s.Dirs = append(s.Dirs, step.Dir{Path: AuthDir, Mode: 0o755})
+	s.Files = append(s.Files, step.File{Path: AuthPath(repo), Mode: 0o600, Content: []byte(RenderAuth(repo, password))})
+	return s, nil
 }
 
-// copyDeb copies a local .deb to the node unless the same file is already
-// there, and checks that it contains the declared package. It returns the
-// remote path and the version of the file.
-func copyDeb(conn connector.Connector, plan *config.DeploymentPlan, p *config.HostPackage, node *config.NodeConfig) (string, string, error) {
-	local := plan.DebFile(p, node.Arch)
-	sum, err := artifacts.FileSHA256(local)
-	if err != nil {
-		return "", "", fmt.Errorf("package %q: %w", p.Name, err)
-	}
-	if p.SHA256 != "" && !strings.EqualFold(sum, p.SHA256) {
-		return "", "", fmt.Errorf("package %q: %s has sha256 %s, expected %s", p.Name, local, sum, p.SHA256)
-	}
+// None is the driver of a node without a package manager (an immutable
+// system, or host_facts.package_manager none): it installs nothing.
+type None struct{}
 
-	remote := path.Join(DebDir, filepath.Base(local))
-	if err := conn.MkdirAll(DebDir, 0755); err != nil {
-		return "", "", err
-	}
-	if RemoteSHA256(conn, remote) != sum {
-		f, err := os.Open(local)
-		if err != nil {
-			return "", "", err
-		}
-		err = conn.CopyFile(f, remote, 0644)
-		_ = f.Close() // read only
-		if err != nil {
-			return "", "", fmt.Errorf("package %q: upload failed: %w", p.Name, err)
-		}
-		fmt.Printf("    -> [%s] Copied %s\n", node.Host, filepath.Base(local))
-	}
+var _ Manager = None{}
 
-	out, err := conn.ExecuteCommand("dpkg-deb -f " + connector.ShellQuote(remote) + " Package Version")
-	if err != nil {
-		return "", "", fmt.Errorf("package %q: %s is not a valid .deb: %w", p.Name, filepath.Base(local), err)
+// Name implements Manager.
+func (None) Name() string { return config.PackageManagerNone }
+
+// Arch implements Manager.
+func (None) Arch(goarch string) string { return goarch }
+
+// Steps implements Manager: a selection that is not empty is an error.
+func (None) Steps(sel *Selection, _ Context) ([]step.Step, error) {
+	if sel.Empty() {
+		return nil, nil
 	}
-	fields := map[string]string{}
-	for line := range strings.SplitSeq(out, "\n") {
-		if k, v, ok := strings.Cut(line, ":"); ok {
-			fields[strings.TrimSpace(k)] = strings.TrimSpace(v)
-		}
-	}
-	if fields["Package"] != p.Name {
-		return "", "", fmt.Errorf("package %q: %s contains package %q", p.Name, filepath.Base(local), fields["Package"])
-	}
-	if p.Version != "" && fields["Version"] != p.Version {
-		return "", "", fmt.Errorf("package %q: %s has version %s, expected %s", p.Name, filepath.Base(local), fields["Version"], p.Version)
-	}
-	return remote, fields["Version"], nil
+	return nil, fmt.Errorf("the node has no package manager, but host_packages selects packages for it")
 }
 
-// RemoteSHA256 returns the digest of a file on a Linux node, or "" if it
-// does not exist.
-func RemoteSHA256(conn connector.Connector, p string) string {
-	out, err := conn.ExecuteCommand("sha256sum " + connector.ShellQuote(p) + " 2>/dev/null")
-	if err != nil {
-		return ""
-	}
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
-		return ""
-	}
-	return fields[0]
-}
+// Unsupported is the driver of a package manager the deployer does not drive
+// yet (dnf, apk): a selection that is not empty is an error.
+type Unsupported struct{ Manager string }
 
-// ParseDpkgQuery parses "name version" lines.
-func ParseDpkgQuery(out string) map[string]string {
-	res := map[string]string{}
-	for line := range strings.SplitSeq(out, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 {
-			res[fields[0]] = fields[1]
-		}
-	}
-	return res
-}
+// Name implements Manager.
+func (u Unsupported) Name() string { return u.Manager }
 
-func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
+// Arch implements Manager.
+func (Unsupported) Arch(goarch string) string { return goarch }
+
+// Steps implements Manager.
+func (u Unsupported) Steps(sel *Selection, _ Context) ([]step.Step, error) {
+	if sel.Empty() {
+		return nil, nil
 	}
-	return strings.Join(lines, "\n")
+	return nil, fmt.Errorf("the package manager %s is not supported yet", u.Manager)
 }

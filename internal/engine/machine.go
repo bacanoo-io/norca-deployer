@@ -1,15 +1,11 @@
 package engine
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
-	"encoding/base64"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"text/template"
-	"unicode/utf8"
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
@@ -17,28 +13,32 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/tuning"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
-// The install script of a scaled machine: one bash script, generated from
-// the plan, that puts on a machine what the bootstrap of the node scaling
-// operator expects there: the norca binary, the CNI plugins, norca-join, the
-// directories and the systemd unit of the agent, and the host packages, the
-// sysctl tuning and the DNS forwarding of the consul domain of a client. It
-// runs when the image of the provider is built (node_scaling.machine.install
-// = image) or at the first boot, from the bootstrap (boot). It does what
-// prepareNode does on a client of the inventory, without the configuration,
-// the certificates and the firewall: the bootstrap writes the first two, the
-// cloud does the third.
+// The install script of a scaled machine: one POSIX sh script, generated
+// from the plan, that puts on a machine what the bootstrap of the node
+// scaling operator expects there: the norca binary, the CNI plugins,
+// norca-join, the directories and the systemd unit of the agent, and the
+// host packages, the sysctl tuning and the DNS forwarding of the consul
+// domain of a client. It runs when the image of the provider is built
+// (node_scaling.machine.install = image) or at the first boot, from the
+// bootstrap (boot). It renders the steps prepareNode runs on a client of
+// the inventory (the drivers of packages, service and tuning, the
+// directories, the DNS forwarding), without the configuration, the
+// certificates and the firewall: the bootstrap writes the first two, the
+// cloud does the third. The machine is a machine the deployer never sees,
+// so the script finds out its family at run time and runs the steps of
+// that family (Debian for now).
 
 //go:embed machine_install.sh.tmpl
 var machineScriptText string
 
 var machineScriptTemplate = template.Must(template.New("install").Option("missingkey=error").Funcs(template.FuncMap{
-	"q":    connector.ShellQuote,
-	"file": shellFile,
+	"q": connector.ShellQuote,
 }).Parse(machineScriptText))
 
 // InstallScriptItem is the item of the bootstrap Variable with the install
@@ -58,59 +58,21 @@ type MachineScriptOptions struct {
 	Vault *crypto.Vault
 }
 
-type machineDir struct {
-	Path string
-	Mode string
-}
-
-type machineDownload struct {
-	Source  string
-	Package string
-	URL     string
-	SHA256  string
-}
-
-type machineCNI struct {
-	Version string
-	Dir     string
-	Marker  string
-	Local   bool
-	URL     string
-	SHA256  string
-}
-
 type machineJoin struct {
 	Path   string
 	URL    string
 	SHA256 string
 }
 
-type machineSysctl struct {
-	ModulesPath string
-	Modules     string
-	SysctlPath  string
-	Sysctl      string
-}
-
 type machineScriptData struct {
 	Cluster, Region, Mode, Arch, Version string
-	StateDir                             string
-	Dirs                                 []machineDir
-	NorcaBinary                          string
-	Release                              machineDownload
-	CNI                                  *machineCNI
-	Join                                 machineJoin
-	Packages                             string
-	Sysctl                               *machineSysctl
-	ConsulDNS                            *machineConsulDNS
-	UnitPath, Unit, Service              string
-}
-
-// machineConsulDNS is consul.dns_forwarding: the functions of the script
-// the SSH path runs, and their parameters as shell assignments.
-type machineConsulDNS struct {
+	// Families are the families the script has steps of.
+	Families string
+	// Functions are the functions of the steps.
 	Functions string
-	Vars      string
+	// The rendered steps.
+	Packages, Tuning, DNS, Dirs, Binary, CNI, Service string
+	Join                                              machineJoin
 }
 
 // validMachineArch are the architectures of a scaled machine.
@@ -139,88 +101,82 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	if boot {
 		mode = config.MachineInstallBoot
 	}
+	renderOpts := step.RenderOptions{Boot: boot, BootHint: "use node_scaling.machine.install: image"}
 
 	node := &config.NodeConfig{Platform: "linux", Arch: arch}
 	paths := storage.ResolveNodePaths(node, plan)
 	data := &machineScriptData{
 		Cluster: plan.Metadata.Name, Region: plan.Metadata.Region, Mode: mode, Arch: arch,
 		Version:  plan.Release.Version,
-		StateDir: cliStateDir,
-		// The directories of a client, with the modes of prepareNode.
-		Dirs: []machineDir{
-			{paths.BinDir, "0755"}, {paths.ConfigDir, "0750"}, {paths.DataDir, "0750"},
-			{paths.LogDir, "0750"}, {paths.TLSDir, "0700"},
-			{paths.CNIBinDir, "0755"}, {paths.CNIConfigDir, "0755"},
-		},
-		NorcaBinary: paths.BinDir + "/norca",
-		Release:     machineDownload{Source: plan.Release.Source, Package: plan.Release.Package},
-		Join:        machineJoin{Path: machine.JoinBinaryPath()},
-		UnitPath:    service.UnitPath,
-		Unit:        service.LinuxUnit(paths, plan.Tuning.FileDescriptorLimit),
-		Service:     "norca",
+		Families: config.FamilyDebian,
+		Join:     machineJoin{Path: machine.JoinBinaryPath()},
+	}
+	var all []step.Step
+	render := func(steps []step.Step) (string, error) {
+		all = append(all, steps...)
+		return step.Render(steps, renderOpts)
 	}
 
-	switch plan.Release.Source {
-	case config.ReleaseOfficial, config.ReleaseCustomURL:
-		d, err := res.ReleaseDownload(ctx, "linux", arch)
+	// The host packages of a client, with apt (the Debian family).
+	sel := packages.Select(plan.AptPackages(), node, false)
+	pkgSteps, err := packages.Apt{}.Steps(sel, packages.Context{Plan: plan, Arch: arch, Script: true,
+		Resolve: func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) }})
+	if err != nil {
+		return "", err
+	}
+	if data.Packages, err = render(pkgSteps); err != nil {
+		return "", fmt.Errorf("host_packages: %w", err)
+	}
+
+	if plan.Tuning.ApplySysctl {
+		if data.Tuning, err = render(tuning.Linux{}.Steps()); err != nil {
+			return "", err
+		}
+	}
+	if plan.Consul.DNSForwardingEnabled() {
+		dnsSteps, err := dns.Steps(plan.Consul.DNSForwarding)
 		if err != nil {
-			return "", fmt.Errorf("norca release: %w", err)
+			return "", err
 		}
-		data.Release.URL, data.Release.SHA256 = d.URL, d.SHA256
-	case config.ReleaseLocalPath:
-		if boot {
-			return "", fmt.Errorf("install: boot needs a release the machine can download, not release.source local-path")
+		if data.DNS, err = render(dnsSteps); err != nil {
+			return "", err
 		}
-		data.Release.SHA256 = strings.ToLower(plan.Release.ChecksumSHA256)
+	}
+
+	// The directories of a client, with the modes of prepareNode, and the
+	// state directory of the script.
+	dirs := append(nodeDirs(node, paths, true), step.Dir{Path: cliStateDir, Mode: 0o700})
+	if data.Dirs, err = render([]step.Step{dirsStep(dirs)}); err != nil {
+		return "", err
+	}
+
+	bin, err := machineBinaryStep(ctx, plan, res, paths, arch, boot)
+	if err != nil {
+		return "", err
+	}
+	if data.Binary, err = render([]step.Step{bin}); err != nil {
+		return "", err
 	}
 
 	if c := plan.CNI; c != nil && c.Install != nil && *c.Install {
-		cni := &machineCNI{Version: c.Version, Dir: paths.CNIBinDir, Marker: paths.CNIBinDir + "/.norca-deployer-cni.sha256"}
-		if c.Source == config.ReleaseLocalPath {
-			if boot {
-				return "", fmt.Errorf("install: boot needs CNI plugins the machine can download, not cni.source local-path")
-			}
-			cni.Local = true
-			cni.SHA256 = strings.ToLower(c.ChecksumSHA256)
-		} else {
-			d, err := res.CNIDownload(ctx, arch)
-			if err != nil {
-				return "", fmt.Errorf("CNI plugins: %w", err)
-			}
-			cni.URL, cni.SHA256 = d.URL, d.SHA256
+		cni, err := machineCNIStep(ctx, plan, res, paths, arch, boot)
+		if err != nil {
+			return "", err
 		}
-		data.CNI = cni
+		if data.CNI, err = render([]step.Step{cni}); err != nil {
+			return "", err
+		}
+	}
+
+	if data.Service, err = render(service.Systemd{}.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)); err != nil {
+		return "", err
 	}
 
 	if machine != nil && machine.JoinDownload != nil {
 		data.Join.URL = machine.JoinDownload.URL
 		data.Join.SHA256 = strings.ToLower(machine.JoinDownload.ChecksumSHA256)
 	}
-
-	sel := packages.Select(plan.AptPackages(), node, false)
-	pkgs, err := machinePackages(plan, sel, arch, boot, func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) })
-	if err != nil {
-		return "", err
-	}
-	data.Packages = pkgs
-
-	if plan.Tuning.ApplySysctl {
-		data.Sysctl = &machineSysctl{
-			ModulesPath: tuning.ModulesConfigPath, Modules: tuning.RecommendedModules,
-			SysctlPath: tuning.SysctlConfigPath, Sysctl: tuning.RecommendedSysctl,
-		}
-	}
-
-	if plan.Consul.DNSForwardingEnabled() {
-		vs, err := dns.Vars(plan.Consul.DNSForwarding)
-		if err != nil {
-			return "", err
-		}
-		data.ConsulDNS = &machineConsulDNS{
-			Functions: strings.TrimSuffix(dns.Functions(), "\n"),
-			Vars:      dns.Assignments(vs, "\n"),
-		}
-	}
+	data.Functions = strings.TrimSuffix(step.Functions(all), "\n")
 
 	var b strings.Builder
 	if err := machineScriptTemplate.Execute(&b, data); err != nil {
@@ -229,129 +185,102 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	return b.String(), nil
 }
 
-// machinePackages renders what packages.Apply does for the host packages of
-// a client: the keyring, the source, the pin and the credentials of each
-// repository, apt-get install when a package is missing (or not at its
-// version), the holds and the check of the installed versions. A package of a
-// local .deb file cannot be downloaded by the machine: the script checks that
-// it is installed (in the image). The password of a repository would travel
-// in the user data at boot, so a repository with credentials needs install:
-// image.
-func machinePackages(plan *config.DeploymentPlan, sel *packages.Selection, arch string, boot bool, resolve func(string) (string, error)) (string, error) {
-	if sel.Empty() {
-		return "", nil
-	}
-	hp := plan.HostPackages
+// machineBinaryStep installs the norca binary on a machine: from the package
+// of release.source host-package (the step of the SSH path), from the file
+// the image build names (local-path), or from the release archive the
+// machine downloads and checks.
+func machineBinaryStep(ctx context.Context, plan *config.DeploymentPlan, res *artifacts.Resolver, paths *storage.ResolvedPaths,
+	arch string, boot bool) (step.Step, error) {
 	q := connector.ShellQuote
-	var b strings.Builder
-	b.WriteString("apt_changed=0\n")
-	if len(sel.Repositories) > 0 {
-		b.WriteString("ensure_dir " + q(packages.KeyringsDir) + " 0755\n")
-	}
-	for i := range sel.Repositories {
-		repo := &sel.Repositories[i]
-		key, err := plan.RepositoryKey(repo)
-		if err != nil {
-			return "", err
+	bin := paths.BinDir + "/norca"
+	switch plan.Release.Source {
+	case config.ReleaseHostPackage:
+		return hostPackageBinaryStep(bin, plan.Release.Package), nil
+	case config.ReleaseLocalPath:
+		if boot {
+			return step.Step{}, fmt.Errorf("install: boot needs a release the machine can download, not release.source local-path")
 		}
-		armored := config.KeyIsArmored(key)
-		keyring := packages.KeyringPath(repo, armored)
-		fmt.Fprintf(&b, "# APT repository %s (%s %s)\n", repo.Name, oneLine(repo.URI), oneLine(repo.Suite))
-		b.WriteString(shellFile(keyring, "0644", string(key)) + "\n")
-		b.WriteString("[ \"$wrote\" = 0 ] || apt_changed=1\n")
-		b.WriteString("remove_file " + q(packages.KeyringPath(repo, !armored)) + "\n")
-		b.WriteString(shellFile(packages.SourcePath(repo), "0644", packages.RenderSource(repo, keyring)) + "\n")
-		b.WriteString("[ \"$wrote\" = 0 ] || apt_changed=1\n")
-		if repo.PinPriority != 0 {
-			b.WriteString("ensure_dir " + q(packages.PreferencesDir) + " 0755\n")
-			b.WriteString(shellFile(packages.PreferencesPath(repo), "0644", packages.RenderPreferences(repo)) + "\n")
-			b.WriteString("[ \"$wrote\" = 0 ] || apt_changed=1\n")
-		} else {
-			b.WriteString("remove_file " + q(packages.PreferencesPath(repo)) + "\n")
+		var verify string
+		if sum := strings.ToLower(plan.Release.ChecksumSHA256); sum != "" {
+			verify = "verify \"$NORCA_BINARY\" " + q(sum) + "\n"
 		}
-		if repo.Auth != nil {
-			if boot {
-				return "", fmt.Errorf("host_packages: repository %q has credentials (auth): at boot its password would travel in the user data of the machine; use node_scaling.machine.install: image", repo.Name)
-			}
-			password, err := resolve(repo.Auth.Password)
-			if err != nil {
-				return "", fmt.Errorf("repository %q: auth.password: %w", repo.Name, err)
-			}
-			b.WriteString("ensure_dir " + q(packages.AuthDir) + " 0755\n")
-			b.WriteString(shellFile(packages.AuthPath(repo), "0600", packages.RenderAuth(repo, password)) + "\n")
-			b.WriteString("[ \"$wrote\" = 0 ] || apt_changed=1\n")
-		} else {
-			b.WriteString("remove_file " + q(packages.AuthPath(repo)) + "\n")
-		}
+		return step.Step{
+			Name: "norca binary",
+			Apply: `[ -n "${NORCA_BINARY:-}" ] || die "release.source is local-path: set NORCA_BINARY to the norca binary or release archive (.tar.gz) for linux/` + arch + `"` + "\n" +
+				`[ -f "$NORCA_BINARY" ] || die "NORCA_BINARY: $NORCA_BINARY is not a file"` + "\n" +
+				verify +
+				"case \"$NORCA_BINARY\" in\n" +
+				"*.tar.gz | *.tgz) norca_src=$(extract_binary \"$NORCA_BINARY\" norca) ;;\n" +
+				"*.zip) die \"NORCA_BINARY: a .zip release is for Windows\" ;;\n" +
+				"*) norca_src=$NORCA_BINARY ;;\n" +
+				"esac\n" +
+				"put_file " + q(bin) + " 0755 <\"$norca_src\"",
+		}, nil
 	}
-	if len(sel.Packages) == 0 {
-		return strings.TrimSuffix(b.String(), "\n"), nil
+	d, err := res.ReleaseDownload(ctx, "linux", arch)
+	if err != nil {
+		return step.Step{}, fmt.Errorf("norca release: %w", err)
 	}
-
-	lockTimeout := hp.LockTimeout
-	if lockTimeout <= 0 {
-		lockTimeout = packages.DefaultLockTimeout
-	}
-	b.WriteString("# Packages\n")
-	b.WriteString("need_install=$apt_changed\n")
-	var targets []string
-	for _, p := range sel.Packages {
-		if p.File != "" {
-			fmt.Fprintf(&b, "require_package %s %s %s\n", q(p.Name), q(p.Version), q(filepath.Base(plan.DebFile(&p, arch))))
-			continue
-		}
-		fmt.Fprintf(&b, "check_package %s %s\n", q(p.Name), q(p.Version))
-		spec := p.Name
-		if p.Version != "" {
-			spec += "=" + p.Version
-		}
-		targets = append(targets, spec)
-	}
-	if len(targets) > 0 {
-		b.WriteString("if [ \"$need_install\" = 1 ]; then\n")
-		if sel.NeedsIndex() && (hp.UpdateCache == nil || *hp.UpdateCache) {
-			fmt.Fprintf(&b, "  apt-get update -q -o DPkg::Lock::Timeout=%d\n", lockTimeout)
-		}
-		b.WriteString("  " + packages.InstallCommand(targets, lockTimeout) + "\n")
-		b.WriteString("  changed=1\nfi\n")
-	}
-	for _, p := range sel.Packages {
-		if p.Hold {
-			fmt.Fprintf(&b, "if ! is_held %[1]s; then\n  apt-mark hold %[1]s >/dev/null\n  changed=1\n  log \"package %[2]s held\"\nfi\n", q(p.Name), p.Name)
-		} else {
-			// Release a hold that an earlier plan set.
-			fmt.Fprintf(&b, "if is_held %[1]s; then\n  apt-mark unhold %[1]s >/dev/null\n  changed=1\n  log \"package %[2]s released\"\nfi\n", q(p.Name), p.Name)
-		}
-	}
-	for _, p := range sel.Packages {
-		fmt.Fprintf(&b, "expect_package %s %s\n", q(p.Name), q(p.Version))
-	}
-	return strings.TrimSuffix(b.String(), "\n"), nil
+	marker := cliStateDir + "/norca-release.sha256"
+	return step.Step{
+		Name: "norca binary",
+		// The marker names the release and the binary it gave.
+		Check: "[ -f " + q(marker) + " ] && [ -f " + q(bin) + " ] &&\n  [ \"$(cat " + q(marker) + ")\" = \"" + d.SHA256 + " $(sha256_of " + q(bin) + ")\" ]",
+		Apply: "fetch " + q(d.URL) + " \"$work/norca.tar.gz\"\n" +
+			"verify \"$work/norca.tar.gz\" " + q(d.SHA256) + "\n" +
+			"norca_src=$(extract_binary \"$work/norca.tar.gz\" norca)\n" +
+			"put_file " + q(bin) + " 0755 <\"$norca_src\"\n" +
+			"printf '%s %s\\n' " + q(d.SHA256) + " \"$(sha256_of " + q(bin) + ")\" >\"$work/norca-release\"\n" +
+			"put_file " + q(marker) + " 0600 <\"$work/norca-release\"",
+	}, nil
 }
 
-// shellFile renders a put_file call that writes content to path: a quoted
-// here-document for text, base64 for anything else (a binary key, a file
-// without a final newline), so that the file is written byte for byte.
-func shellFile(path, mode, s string) string {
-	content := []byte(s)
-	const eof = "NORCA_EOF"
-	text := utf8.Valid(content) && bytes.HasSuffix(content, []byte("\n")) &&
-		!bytes.ContainsAny(content, "\x00\r") && !bytes.Contains(append([]byte("\n"), content...), []byte("\n"+eof+"\n"))
-	if text {
-		return "put_file " + connector.ShellQuote(path) + " " + mode + " <<'" + eof + "'\n" + string(content) + eof
+// machineCNIStep unpacks the CNI plugins on a machine: the archive the
+// image build names (local-path) or the one the machine downloads and
+// checks, unless the marker names the same archive.
+func machineCNIStep(ctx context.Context, plan *config.DeploymentPlan, res *artifacts.Resolver, paths *storage.ResolvedPaths,
+	arch string, boot bool) (step.Step, error) {
+	q := connector.ShellQuote
+	c := plan.CNI
+	marker, dir := cniMarker(paths), paths.CNIBinDir
+	name := "CNI plugins " + c.Version
+	if c.Source == config.ReleaseLocalPath {
+		if boot {
+			return step.Step{}, fmt.Errorf("install: boot needs CNI plugins the machine can download, not cni.source local-path")
+		}
+		var verify string
+		if sum := strings.ToLower(c.ChecksumSHA256); sum != "" {
+			verify = "verify \"$NORCA_CNI_ARCHIVE\" " + q(sum) + "\n"
+		}
+		return step.Step{
+			Name: name,
+			Apply: `[ -n "${NORCA_CNI_ARCHIVE:-}" ] || die "cni.source is local-path: set NORCA_CNI_ARCHIVE to the CNI plugin archive (.tgz) for linux/` + arch + `"` + "\n" +
+				`[ -f "$NORCA_CNI_ARCHIVE" ] || die "NORCA_CNI_ARCHIVE: $NORCA_CNI_ARCHIVE is not a file"` + "\n" +
+				verify +
+				"cni_sha=$(sha256_of \"$NORCA_CNI_ARCHIVE\")\n" +
+				"if [ -f " + q(marker) + " ] && [ \"$(cat " + q(marker) + ")\" = \"$cni_sha\" ]; then\n" +
+				"  log \"CNI plugins unchanged\"\n" +
+				"else\n" +
+				"  tar -xzf \"$NORCA_CNI_ARCHIVE\" -C " + q(dir) + "\n" +
+				"  changed=1\n" +
+				"  log " + q("CNI plugins installed into "+dir) + "\n" +
+				"  printf '%s\\n' \"$cni_sha\" >\"$work/cni-marker\"\n" +
+				"  put_file " + q(marker) + " 0644 <\"$work/cni-marker\"\n" +
+				"fi",
+		}, nil
 	}
-	enc := base64.StdEncoding.EncodeToString(content)
-	var lines []string
-	for len(enc) > 76 {
-		lines = append(lines, enc[:76])
-		enc = enc[76:]
+	d, err := res.CNIDownload(ctx, arch)
+	if err != nil {
+		return step.Step{}, fmt.Errorf("CNI plugins: %w", err)
 	}
-	lines = append(lines, enc)
-	return "put_file " + connector.ShellQuote(path) + " " + mode + " < <(base64 -d <<'" + eof + "'\n" +
-		strings.Join(lines, "\n") + "\n" + eof + "\n)"
-}
-
-// oneLine keeps a value of the plan that goes into a comment on one line.
-func oneLine(s string) string {
-	return strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
+	return step.Step{
+		Name:  name,
+		Check: "[ -f " + q(marker) + " ] && [ \"$(cat " + q(marker) + ")\" = " + q(d.SHA256) + " ]",
+		Apply: "fetch " + q(d.URL) + " \"$work/cni.tgz\"\n" +
+			"verify \"$work/cni.tgz\" " + q(d.SHA256) + "\n" +
+			"tar -xzf \"$work/cni.tgz\" -C " + q(dir) + "\n" +
+			"log " + q("CNI plugins installed into "+dir) + "\n" +
+			"printf '%s\\n' " + q(d.SHA256) + " >\"$work/cni-marker\"\n" +
+			"put_file " + q(marker) + " 0644 <\"$work/cni-marker\"",
+	}, nil
 }

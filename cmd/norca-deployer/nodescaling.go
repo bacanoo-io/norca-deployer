@@ -20,11 +20,13 @@ func newNodeScalingCmd() *cobra.Command {
 	var arch string
 	scriptCmd := &cobra.Command{
 		Use:   "install-script",
-		Short: "Print the install script of a scaled machine (bash)",
-		Long: "Prints a bash script that installs what a machine of the node scaling operator needs before\n" +
+		Short: "Print the install script of a scaled machine (POSIX sh)",
+		Long: "Prints a POSIX sh script that installs what a machine of the node scaling operator needs before\n" +
 			"its bootstrap runs: the norca binary of the release, the CNI plugins, norca-join\n" +
 			"(node_scaling.machine.join_download), the directories, the systemd unit of the agent (enabled,\n" +
-			"not started), and the host packages and the sysctl tuning of a client. Run it when the image of\n" +
+			"not started), and the host packages, the sysctl tuning and the DNS forwarding of a client: the\n" +
+			"steps apply runs over SSH. It finds out the family of the machine (/etc/os-release) and stops on\n" +
+			"a family it has no steps of (it has those of Debian and Ubuntu). Run it when the image of\n" +
 			"the provider is built (node_scaling.machine.install: image); with install: boot, apply writes it\n" +
 			"into the bootstrap Variable and the bootstrap runs it at the first boot.\n" +
 			"The machine downloads the files itself; the deployer only resolves the URLs and the SHA-256\n" +

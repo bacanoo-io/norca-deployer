@@ -13,7 +13,6 @@ import (
 // running rendered steps.
 const helpers = `changed=0
 wrote=0
-removed=0
 log() { printf 'LOG %s\n' "$*"; }
 warn() { printf 'WARN %s\n' "$*"; }
 die() {
@@ -35,12 +34,9 @@ put_file() {
   changed=1
 }
 remove_file() {
-  removed=0
-  if [ -e "$1" ]; then
-    rm -f "$1"
-    removed=1
-    changed=1
-  fi
+  [ -e "$1" ] || return 1
+  rm -f "$1"
+  changed=1
 }
 ensure_dir() { mkdir -p "$1"; }
 step_lines() {

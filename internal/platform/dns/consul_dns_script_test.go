@@ -217,9 +217,10 @@ func (h *host) restarts() []string {
 
 func (h *host) handle(cmd string) (string, error, bool) {
 	switch {
-	case strings.HasPrefix(cmd, "if [ -e "):
+	case strings.HasPrefix(cmd, "# when: "+StepName+"\n"):
 		return h.run(cmd)
-	case strings.HasSuffix(cmd, " sh "+ScriptPath):
+	case strings.Contains(cmd, " sh "+ScriptPath):
+		prefix, rest, _ := strings.Cut(cmd, " sh "+ScriptPath)
 		script := string(h.conn.Files[ScriptPath])
 		if h.sh.machine {
 			script = "set -euo pipefail\n" + Functions() + "\nif norca_consul_dns; then exit 0; else exit 1; fi\n"
@@ -230,10 +231,12 @@ func (h *host) handle(cmd string) (string, error, bool) {
 		for _, a := range h.sh.argv {
 			argv = append(argv, connector.ShellQuote(a))
 		}
-		return h.run(strings.TrimSuffix(cmd, " sh "+ScriptPath) + " " + strings.Join(argv, " ") + " " + connector.ShellQuote(p))
-	case cmd == "rm -f "+ScriptPath:
-		delete(h.conn.Files, ScriptPath)
-		return "", nil, true
+		out, err, handled := h.run(prefix + " " + strings.Join(argv, " ") + " " + connector.ShellQuote(p))
+		if err == nil && strings.Contains(rest, "rm -f "+ScriptPath) {
+			delete(h.conn.Files, ScriptPath)
+		}
+		return out, err, handled
+
 	}
 	h.t.Errorf("unexpected command %q", cmd)
 	return "", errors.New("unexpected command"), true
@@ -248,7 +251,7 @@ func (h *host) run(cmd string) (string, error, bool) {
 
 func (h *host) apply(f *config.ConsulDNSForwarding) (*Result, error) {
 	h.t.Helper()
-	res, err := apply(h.conn, "10.0.0.1", f, h.root)
+	res, err := apply(h.t.Context(), h.conn, "10.0.0.1", f, h.root)
 	if res != nil {
 		for _, e := range res.Errors {
 			h.t.Logf("error line: %s", e)

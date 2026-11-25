@@ -19,28 +19,30 @@ type RenderOptions struct {
 	BootHint string
 }
 
-// Functions returns the functions of the steps, each set once, in the order
-// of the steps.
+// Functions returns the functions of the steps that their conditions and
+// changes call, each once, in the order of the steps.
 func Functions(steps []Step) string {
-	var b strings.Builder
+	var defs strings.Builder
+	var bodies []string
 	seen := map[string]bool{}
 	for _, s := range steps {
+		bodies = append(bodies, s.When, s.Check, s.Apply)
 		if s.Functions == "" || seen[s.Functions] {
 			continue
 		}
 		seen[s.Functions] = true
-		b.WriteString(strings.TrimRight(s.Functions, "\n") + "\n")
+		defs.WriteString(strings.TrimRight(s.Functions, "\n") + "\n")
 	}
-	return b.String()
+	return UsedFunctions(defs.String(), bodies...)
 }
 
 // Render renders steps into POSIX sh for the install script of a scaled
 // machine: a second run changes nothing. The script defines the functions
 // of the steps (Functions) and these helpers before, with the variables
-// changed, wrote and removed:
+// changed and wrote:
 //
 //	put_file PATH MODE [base64]  writes stdin (or its base64) unless PATH has it; wrote=1 when it changed
-//	remove_file PATH             removes a file an earlier plan wrote; removed=1 when it did
+//	remove_file PATH             removes a file an earlier plan wrote; true when it did
 //	ensure_dir PATH MODE         creates a directory or sets its mode
 //	step_lines NAME RC OUTPUT    reads the result lines of a step (Lines)
 //	log, warn, die               the console of the script
@@ -94,9 +96,10 @@ func renderStep(b *strings.Builder, s *Step, opts RenderOptions) error {
 		}
 	}
 	for _, p := range s.Remove {
-		fmt.Fprintf(b, "%sremove_file %s\n", indent, connector.ShellQuote(p))
 		if tracksFiles {
-			b.WriteString(indent + "[ \"$removed\" = 0 ] || step_changed=1\n")
+			fmt.Fprintf(b, "%sif remove_file %s; then step_changed=1; fi\n", indent, connector.ShellQuote(p))
+		} else {
+			fmt.Fprintf(b, "%sremove_file %s || true\n", indent, connector.ShellQuote(p))
 		}
 	}
 	apply := strings.TrimRight(s.Apply, "\n")

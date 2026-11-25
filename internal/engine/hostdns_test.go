@@ -18,8 +18,8 @@ func dnsNode(out string, err error) *connector.FakeConnector {
 		switch {
 		case strings.HasSuffix(cmd, " sh "+dns.ScriptPath):
 			return out, err, true
-		case strings.HasPrefix(cmd, "if [ -e "):
-			return "no\n", nil, true
+		case strings.HasPrefix(cmd, "# when: "+dns.StepName+"\n"):
+			return "norca-step no\n", nil, true
 		case strings.HasPrefix(cmd, "command -v ufw >/dev/null && ufw status"):
 			return "Status: active", nil, true
 		}
@@ -47,7 +47,7 @@ func TestConfigureHostDNS(t *testing.T) {
 	if tg.changed {
 		t.Fatal("the DNS step marked the agent for a restart")
 	}
-	if len(conn.CommandsWithPrefix("NCD_ENABLED='1' ")) != 1 {
+	if len(conn.CommandsWithPrefix("# apply: "+dns.StepName+"\n")) != 1 {
 		t.Fatalf("commands = %q, want one run of the script", conn.Commands)
 	}
 

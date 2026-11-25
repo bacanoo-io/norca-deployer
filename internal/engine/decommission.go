@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/platform"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
@@ -203,21 +205,27 @@ func (r *Runner) decommissionServer(cli *remoteCLI, d *config.DecommissionNode) 
 // and firewall settings stay. A node that cannot be reached (e.g. a deleted
 // machine) is only reported.
 func (r *Runner) uninstall(d *config.DecommissionNode) {
-	conn, _, err := r.openNode(&d.NodeConfig)
+	conn, facts, err := r.openNode(&d.NodeConfig)
 	if err != nil {
 		fmt.Printf("    [WARN] %s not reachable, Norca not uninstalled from it: %v\n", d.Host, err)
 		return
 	}
 	defer conn.Close()
-	paths := storage.ResolveNodePaths(&d.NodeConfig, r.plan)
-	var script string
-	if strings.EqualFold(d.Platform, "windows") {
-		script = windowsUninstallScript(paths, d.PurgeData)
-	} else {
-		script = linuxUninstallScript(paths, d.PurgeData)
+	drivers, err := platform.For(facts)
+	if err != nil {
+		fmt.Printf("    [WARN] %s: Norca not uninstalled: %v\n", d.Host, err)
+		return
 	}
-	if out, err := conn.ExecuteCommand(script); err != nil {
-		fmt.Printf("    [WARN] %s: uninstall incomplete: %v %s\n", d.Host, err, strings.TrimSpace(out))
+	paths := storage.ResolveNodePaths(&d.NodeConfig, r.plan)
+	steps := drivers.Service.RemoveSteps(paths)
+	if strings.EqualFold(d.Platform, "windows") {
+		steps = append(steps, step.Step{Name: "norca files removed", PowerShell: true, Apply: windowsUninstallScript(paths, d.PurgeData)})
+	} else {
+		steps = append(steps, step.Step{Name: "norca files removed", Apply: linuxUninstallScript(paths, d.PurgeData)})
+	}
+	ex := &step.Executor{Conn: conn, Host: d.Host, Windows: strings.EqualFold(d.Platform, "windows")}
+	if _, _, err := ex.RunAll(r.abortCtx(), steps); err != nil {
+		fmt.Printf("    [WARN] %s: uninstall incomplete: %v\n", d.Host, err)
 		return
 	}
 	what := "service, configuration, certificates and binary"
@@ -229,35 +237,35 @@ func (r *Runner) uninstall(d *config.DecommissionNode) {
 
 // linuxUninstallScript removes only the files the deployer wrote; the
 // directories are removed when they are empty afterwards. purge removes the
-// Norca data, log and application directories completely.
+// Norca data, log and application directories completely. The service is
+// gone before (the RemoveSteps of the init system). Every part is tried:
+// the script does not stop at a failed one.
 func linuxUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	q := connector.ShellQuote
 	var sb strings.Builder
-	sb.WriteString("systemctl disable --now norca >/dev/null 2>&1 || true\n")
-	sb.WriteString("rm -f /etc/systemd/system/norca.service && systemctl daemon-reload && systemctl reset-failed norca >/dev/null 2>&1 || true\n")
+	sb.WriteString("set +e\n")
 	// Containers the agent did not clean up (e.g. the GC could not reach it)
 	// would keep running without an agent.
 	sb.WriteString(`if command -v docker >/dev/null 2>&1; then ids=$(docker ps -aq --filter label=com.hashicorp.nomad.alloc_id); ` +
-		`if [ -n "$ids" ]; then docker rm -f $ids >/dev/null; fi; fi` + "\n")
+		`if [ -n "$ids" ]; then printf '%s\n' "$ids" | xargs docker rm -f >/dev/null; fi; fi` + "\n")
 	sb.WriteString("rm -f " + q(p.BinDir+"/norca") + " " + q(p.ConfigDir+"/norca.hcl"))
 	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem", distrustedCAFile} {
 		sb.WriteString(" " + q(p.TLSDir+"/"+f))
 	}
-	sb.WriteString("\nrmdir " + q(p.TLSDir) + " " + q(p.ConfigDir) + " 2>/dev/null || true\n")
+	sb.WriteString("\nrmdir " + q(p.TLSDir) + " " + q(p.ConfigDir) + " 2>/dev/null\n")
 	sb.WriteString("rm -rf /var/lib/norca-deployer\n")
 	if purge {
 		// Allocation directories can hold mounts (secrets, volumes).
-		sb.WriteString("awk -v d=" + q(p.DataDir+"/") + " 'index($2, d) == 1 {print $2}' /proc/mounts | sort -r | xargs -r -n1 umount -l 2>/dev/null || true\n")
+		sb.WriteString("awk -v d=" + q(p.DataDir+"/") + " 'index($2, d) == 1 {print $2}' /proc/mounts | sort -r | xargs -r -n1 umount -l 2>/dev/null\n")
 		sb.WriteString("rm -rf " + q(p.DataDir) + " " + q(p.LogDir) + " " + q(p.AppsDir) + "\n")
 	}
+	sb.WriteString("true")
 	return sb.String()
 }
 
 func windowsUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	q := connector.PSQuote
 	var sb strings.Builder
-	sb.WriteString("Stop-Service -Name norca -ErrorAction SilentlyContinue; ")
-	sb.WriteString("if (Get-Service -Name norca -ErrorAction SilentlyContinue) { sc.exe delete norca | Out-Null }; ")
 	files := []string{p.BinDir + `\norca.exe`, p.BinDir + `\norca.exe` + connector.PendingSuffix, p.ConfigDir + `\norca.hcl`}
 	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem", distrustedCAFile} {
 		files = append(files, p.TLSDir+`\`+f)

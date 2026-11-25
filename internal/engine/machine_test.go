@@ -16,6 +16,7 @@ import (
 
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
@@ -91,15 +92,18 @@ func TestInstallScriptOfficialRelease(t *testing.T) {
 	script := generate(t, plan, MachineScriptOptions{})
 	paths := storage.ResolveNodePaths(&config.NodeConfig{Platform: "linux"}, plan)
 	for _, want := range []string{
-		"#!/usr/bin/env bash\n", "set -euo pipefail\n", "# Mode image:", "# Architecture: amd64.",
+		"#!/bin/sh\n", "set -eu\n", "# Mode image:", "# Architecture: amd64.",
+		// The family of the machine at run time, and its steps.
+		"os_family=$(family_of \"$os_id\" \"$(os_release ID_LIKE)\")", "packages_debian() {\n", "service_debian() {\n",
+		"debian) packages_debian ;;", "debian) service_debian ;;",
 		// The release and the CNI plugins, with the URLs and the digests of
 		// the native install.
 		"fetch 'https://mirror.example/norca/v0.3.0/norca_0.3.0_linux_amd64.tar.gz' \"$work/norca.tar.gz\"",
 		"verify \"$work/norca.tar.gz\" '" + sumRelease + "'",
-		"norca_bin='/usr/local/bin/norca'",
+		"put_file '/usr/local/bin/norca' 0755 <\"$norca_src\"",
 		"fetch 'https://mirror.example/cni/v1.9.1/cni-plugins-linux-amd64-v1.9.1.tgz' \"$work/cni.tgz\"",
 		"tar -xzf \"$work/cni.tgz\" -C '/opt/cni/bin'",
-		"cni_marker='/opt/cni/bin/.norca-deployer-cni.sha256'",
+		"put_file '/opt/cni/bin/.norca-deployer-cni.sha256' 0644",
 		// norca-join from join_download.
 		"join_bin='/opt/norca/bin/norca-join'",
 		"fetch 'https://mirror.example/norca-join_linux_amd64' \"$work/norca-join\"",
@@ -115,7 +119,7 @@ func TestInstallScriptOfficialRelease(t *testing.T) {
 		"put_file '/etc/apt/keyrings/norca-docker.asc' 0644 <<'NORCA_EOF'\n-----BEGIN PGP PUBLIC KEY BLOCK-----\n",
 		"put_file '/etc/apt/sources.list.d/norca-docker.sources' 0644",
 		"put_file '/etc/apt/preferences.d/norca-docker.pref' 0644", "remove_file '/etc/apt/auth.conf.d/norca-docker.conf'",
-		"check_package 'docker-ce' '5:27.3.1-1~debian.12~bookworm'", "check_package 'jq' ''",
+		"expect_package 'docker-ce' '5:27.3.1-1~debian.12~bookworm'", "expect_package 'jq' ''",
 		"apt-get update -q -o DPkg::Lock::Timeout=300",
 		"DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends",
 		"'docker-ce=5:27.3.1-1~debian.12~bookworm' 'jq'",
@@ -134,6 +138,8 @@ func TestInstallScriptOfficialRelease(t *testing.T) {
 		"--now",
 		"iptables -", "nft ", "ufw ", // the firewall is the cloud's
 		"NORCA_BINARY",
+		// No bash features: the script is POSIX sh.
+		"pipefail", "[[", "<<<", "< <(", "\n  local ", "8#",
 	} {
 		if strings.Contains(script, unwanted) {
 			t.Errorf("the script has %q", unwanted)
@@ -208,14 +214,15 @@ func TestInstallScriptLocalPathAndHostPackage(t *testing.T) {
 	hp := loadPlan(t, strings.Replace(machinePlan(`release: {version: v0.3.0, source: host-package}`, ""),
 		"      - {name: jq}", "      - {name: jq}\n      - {name: norca}", 1))
 	script = generate(t, hp, MachineScriptOptions{})
-	for _, want := range []string{"check_package 'norca' ''", "found=$(command -v norca || true)",
+	for _, want := range []string{"expect_package 'norca' ''", "found=$(command -v norca || true)",
 		"package norca did not install an executable norca binary"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("host-package: the script has no %q", want)
 		}
 	}
 	// The packages come before the binary they provide.
-	if strings.Index(script, "check_package 'norca'") > strings.Index(script, "command -v norca") {
+	if strings.Index(script, "debian) packages_debian ;;") > strings.Index(script, "found=$(command -v norca") ||
+		!strings.Contains(script, "expect_package 'norca'") {
 		t.Error("host-package: the binary is checked before the packages are installed")
 	}
 
@@ -270,13 +277,13 @@ func consulDNSMachinePlan() string {
 		"consul:\n  dns_forwarding: {enabled: true, docker: true}\nnode_scaling:", 1)
 }
 
-// consul.dns_forwarding: the machine runs the functions the SSH path
-// uploads, with the parameters of the plan, after the sysctl tuning and
+// consul.dns_forwarding: the machine writes and runs the script the SSH
+// path runs, with the parameters of the plan, after the sysctl tuning and
 // before the directories (the order of prepareNode).
 func TestInstallScriptConsulDNS(t *testing.T) {
 	plain := generate(t, loadPlan(t, machinePlan(officialRelease, "")), MachineScriptOptions{})
-	if strings.Contains(plain, "norca_consul_dns") {
-		t.Fatal("a plan without consul.dns_forwarding has the DNS functions")
+	if strings.Contains(plain, dns.ScriptPath) {
+		t.Fatal("a plan without consul.dns_forwarding has the DNS script")
 	}
 
 	script := generate(t, loadPlan(t, consulDNSMachinePlan()), MachineScriptOptions{})
@@ -285,17 +292,17 @@ func TestInstallScriptConsulDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	sysctl := strings.Index(script, "# Host tuning: kernel modules and sysctl")
-	functions := strings.Index(script, dns.Functions())
-	vars := strings.Index(script, dns.Assignments(vs, "\n")+"\n")
-	call := strings.Index(script, "if consul_dns_out=$(norca_consul_dns); then")
-	dirs := strings.Index(script, "# Directories")
-	if sysctl < 0 || functions < 0 || vars < 0 || call < 0 || dirs < 0 ||
-		!(sysctl < functions && functions < vars && vars < call && call < dirs) {
-		t.Fatalf("sysctl %d, functions %d, vars %d, call %d, directories %d:\n%s", sysctl, functions, vars, call, dirs, script)
+	file := strings.Index(script, "put_file '"+dns.ScriptPath+"' 0700 <<'NORCA_EOF'\n"+dns.Script())
+	run := strings.Index(script, dns.Assignments(vs, " ")+" sh "+dns.ScriptPath+"\n")
+	lines := strings.Index(script, "step_lines 'consul.dns_forwarding' \"$step_rc\" \"$step_out\"")
+	dirs := strings.Index(script, "# directories")
+	if sysctl < 0 || file < 0 || run < 0 || lines < 0 || dirs < 0 ||
+		!(sysctl < file && file < run && run < lines && lines < dirs) {
+		t.Fatalf("sysctl %d, file %d, run %d, lines %d, directories %d:\n%s", sysctl, file, run, lines, dirs, script)
 	}
 	for _, want := range []string{
-		"die \"consul.dns_forwarding: this machine ${consul_dns_error",
-		"warn \"consul.dns_forwarding: ${consul_dns_line#warn }\"",
+		`die "$1: this machine ${step_errors:-could not be configured}"`,
+		`warn "$1: ${step_line#warn }"`,
 		"the DNS forwarding of the consul domain",
 	} {
 		if !strings.Contains(script, want) {
@@ -318,101 +325,117 @@ restart) exit 0 ;;
 esac
 `
 
-// The DNS part of the machine script, run by bash as the script runs: the
-// result lines of the functions become log lines and changed, an error
-// line the message of die.
-func TestInstallScriptConsulDNSRun(t *testing.T) {
+// machineShells are the POSIX shells of this machine for running parts of
+// the install script: dash, bash and busybox sh (NORCA_TEST_BUSYBOX).
+func machineShells(t *testing.T) map[string][]string {
+	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the script runs on Linux")
 	}
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skip("bash is not installed")
+	res := map[string][]string{}
+	for _, name := range []string{"dash", "bash"} {
+		if p, err := exec.LookPath(name); err == nil {
+			res[name] = []string{p}
+		}
 	}
+	if bb := os.Getenv("NORCA_TEST_BUSYBOX"); bb != "" {
+		res["busybox"] = []string{bb, "sh"}
+	}
+	if len(res) == 0 {
+		t.Skip("no POSIX shell")
+	}
+	return res
+}
+
+// scriptHelpers returns the helpers of a generated install script: its
+// part before the family of the machine, without the check for root.
+func scriptHelpers(t *testing.T, script string) string {
+	t.Helper()
+	helpers, _, found := strings.Cut(script, "\n# The family of this machine")
+	if !found {
+		t.Fatal("no family part in the script")
+	}
+	return strings.Replace(helpers, `[ "$(id -u)" -eq 0 ] || die "run this script as root"`, "", 1)
+}
+
+// The DNS part of the machine script, run as the script runs it in each
+// shell: the result lines of the script become log lines and changed, an
+// error line the message of die.
+func TestInstallScriptConsulDNSRun(t *testing.T) {
 	script := generate(t, loadPlan(t, strings.Replace(consulDNSMachinePlan(), "docker: true", "docker: false", 1)), MachineScriptOptions{})
-	start, end := strings.Index(script, "# DNS of the host:"), strings.Index(script, "\n# Directories")
+	start, end := strings.Index(script, "# DNS of the host:"), strings.Index(script, "\n# directories")
 	if start < 0 || end < start {
 		t.Fatal("no DNS part in the script")
 	}
 	block := script[start:end]
+	helpers := scriptHelpers(t, script)
 
-	run := func(t *testing.T, root, active string) (string, error) {
-		t.Helper()
-		bin := t.TempDir()
-		if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(machineSystemctlStub), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		prog := "set -euo pipefail\nchanged=0\n" +
-			"log() { printf 'LOG %s\\n' \"$*\"; }\nwarn() { printf 'WARN %s\\n' \"$*\"; }\n" +
-			"die() {\n  printf 'ERROR: %s\\n' \"$*\"\n  exit 1\n}\n" +
-			strings.Replace(block, "NCD_ROOT=''", "NCD_ROOT="+connector.ShellQuote(root), 1) +
-			"\necho \"changed=$changed\"\n"
-		c := exec.Command(bash, "-c", prog)
-		c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ACTIVE=" + active, "TMPDIR=" + t.TempDir(), "LC_ALL=C"}
-		out, err := c.CombinedOutput()
-		return string(out), err
-	}
-	host := func(t *testing.T, resolvConf string) string {
-		t.Helper()
-		root := t.TempDir()
-		for _, d := range []string{"run/systemd/system", "etc", "usr/lib/systemd"} {
-			if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
-				t.Fatal(err)
+	for name, argv := range machineShells(t) {
+		t.Run(name, func(t *testing.T) {
+			run := func(t *testing.T, root, active string) (string, error) {
+				t.Helper()
+				bin := t.TempDir()
+				if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(machineSystemctlStub), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				// The script goes below the root of the test too.
+				b := strings.ReplaceAll(block, dns.ScriptPath, root+dns.ScriptPath)
+				b = strings.Replace(b, "NCD_ROOT=''", "NCD_ROOT="+connector.ShellQuote(root), 1)
+				prog := helpers + "\n" + b + "\necho \"changed=$changed\"\n"
+				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+				c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ACTIVE=" + active, "TMPDIR=" + t.TempDir(), "LC_ALL=C"}
+				out, err := c.CombinedOutput()
+				return string(out), err
 			}
-		}
-		if err := os.WriteFile(filepath.Join(root, "etc/resolv.conf"), []byte(resolvConf), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(root, "usr/lib/systemd/systemd-resolved"), nil, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		return root
-	}
-
-	t.Run("no resolver", func(t *testing.T) {
-		out, err := run(t, host(t, "nameserver 10.0.0.2\n"), "")
-		want := "ERROR: consul.dns_forwarding: this machine has no local resolver the deployer can forward the consul domain from: " +
-			"systemd-resolved inactive, dnsmasq not installed, /etc/resolv.conf names 10.0.0.2."
-		if err == nil || !strings.Contains(out, want) {
-			t.Fatalf("err %v, output:\n%s", err, out)
-		}
-	})
-	t.Run("systemd-resolved", func(t *testing.T) {
-		root := host(t, "nameserver 127.0.0.53\n")
-		out, err := run(t, root, "systemd-resolved")
-		if err != nil {
-			t.Fatalf("%v:\n%s", err, out)
-		}
-		for _, want := range []string{
-			"LOG consul DNS forwarding\n", "LOG consul DNS: method systemd-resolved\n",
-			"LOG consul DNS: changed " + dns.ResolvedDropIn + "\n", "LOG consul DNS: restarted systemd-resolved\n", "changed=1\n",
-		} {
-			if !strings.Contains(out, want) {
-				t.Errorf("no %q in:\n%s", want, out)
+			host := func(t *testing.T, resolvConf string) string {
+				t.Helper()
+				root := t.TempDir()
+				for _, d := range []string{"run/systemd/system", "etc", "usr/lib/systemd"} {
+					if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if err := os.WriteFile(filepath.Join(root, "etc/resolv.conf"), []byte(resolvConf), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, "usr/lib/systemd/systemd-resolved"), nil, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return root
 			}
-		}
-		if _, err := os.Stat(filepath.Join(root, dns.ResolvedDropIn)); err != nil {
-			t.Fatal(err)
-		}
-		// A second run changes nothing.
-		out, err = run(t, root, "systemd-resolved")
-		if err != nil || !strings.HasSuffix(out, "changed=0\n") || strings.Contains(out, "restarted") {
-			t.Fatalf("second run: %v:\n%s", err, out)
-		}
-	})
-}
 
-// A file that is not text with a final newline is written from base64, byte
-// for byte.
-func TestShellFile(t *testing.T) {
-	if got := shellFile("/a", "0644", "x\ny\n"); got != "put_file '/a' 0644 <<'NORCA_EOF'\nx\ny\nNORCA_EOF" {
-		t.Fatalf("text: %q", got)
-	}
-	for _, content := range [][]byte{[]byte("no newline"), {0x99, 0x01, 0x0d, 0x04}, []byte("a\nNORCA_EOF\nb\n"), []byte("dos\r\n")} {
-		got := shellFile("/a", "0644", string(content))
-		if !strings.HasPrefix(got, "put_file '/a' 0644 < <(base64 -d <<'NORCA_EOF'\n") {
-			t.Errorf("%q: %q", content, got)
-		}
+			t.Run("no resolver", func(t *testing.T) {
+				out, err := run(t, host(t, "nameserver 10.0.0.2\n"), "")
+				want := "ERROR: consul.dns_forwarding: this machine has no local resolver the deployer can forward the consul domain from: " +
+					"systemd-resolved inactive, dnsmasq not installed, /etc/resolv.conf names 10.0.0.2."
+				if err == nil || !strings.Contains(out, want) {
+					t.Fatalf("err %v, output:\n%s", err, out)
+				}
+			})
+			t.Run("systemd-resolved", func(t *testing.T) {
+				root := host(t, "nameserver 127.0.0.53\n")
+				out, err := run(t, root, "systemd-resolved")
+				if err != nil {
+					t.Fatalf("%v:\n%s", err, out)
+				}
+				for _, want := range []string{
+					"consul DNS forwarding\n", "consul.dns_forwarding: method systemd-resolved\n",
+					"consul.dns_forwarding: changed " + dns.ResolvedDropIn + "\n", "consul.dns_forwarding: restarted systemd-resolved\n", "changed=1\n",
+				} {
+					if !strings.Contains(out, want) {
+						t.Errorf("no %q in:\n%s", want, out)
+					}
+				}
+				if _, err := os.Stat(filepath.Join(root, dns.ResolvedDropIn)); err != nil {
+					t.Fatal(err)
+				}
+				// A second run changes nothing.
+				out, err = run(t, root, "systemd-resolved")
+				if err != nil || !strings.HasSuffix(out, "changed=0\n") || strings.Contains(out, "restarted") {
+					t.Fatalf("second run: %v:\n%s", err, out)
+				}
+			})
+		})
 	}
 }
 
@@ -468,14 +491,10 @@ func TestNodeScalingBootstrapMachineItems(t *testing.T) {
 	}
 }
 
-// The generated scripts of the tests above, for shellcheck and the end to
-// end run: NORCA_MACHINE_SCRIPTS=<dir> writes them there.
-func TestWriteInstallScripts(t *testing.T) {
-	dir := os.Getenv("NORCA_MACHINE_SCRIPTS")
-	if dir == "" {
-		t.Skip("NORCA_MACHINE_SCRIPTS is not set")
-	}
-	plans := map[string]string{
+// machineScriptPlans are the plans of the install scripts of the tests
+// above.
+func machineScriptPlans() map[string]string {
+	return map[string]string{
 		"official": machinePlan(officialRelease, joinMachine),
 		"boot":     machinePlan(officialRelease, "  machine: {install: boot}"),
 		"local":    machinePlan(`release: {version: v0.3.0, source: local-path, local_binary_path: ./norca}`, ""),
@@ -485,10 +504,55 @@ func TestWriteInstallScripts(t *testing.T) {
 			"        pin_priority: 600\n        auth: {username: u, password: p}", 1),
 		"consul-dns": consulDNSMachinePlan(),
 	}
-	for name, yaml := range plans {
+}
+
+// The generated scripts of the tests above, for shellcheck and the end to
+// end run: NORCA_MACHINE_SCRIPTS=<dir> writes them there.
+func TestWriteInstallScripts(t *testing.T) {
+	dir := os.Getenv("NORCA_MACHINE_SCRIPTS")
+	if dir == "" {
+		t.Skip("NORCA_MACHINE_SCRIPTS is not set")
+	}
+	for name, yaml := range machineScriptPlans() {
 		script := generate(t, loadPlan(t, yaml), MachineScriptOptions{})
 		if err := os.WriteFile(filepath.Join(dir, name+".sh"), []byte(script), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// The install script finds out the family of its machine as the deployer
+// does over SSH: the same os-release files give the same family, in every
+// shell.
+func TestInstallScriptFamilyOf(t *testing.T) {
+	helpers := scriptHelpers(t, generate(t, loadPlan(t, machinePlan(officialRelease, "")), MachineScriptOptions{}))
+	samples, err := filepath.Glob(filepath.Join("..", "host", "testdata", "os-release", "*"))
+	if err != nil || len(samples) < 5 {
+		t.Fatalf("os-release samples: %v %v", samples, err)
+	}
+	for name, argv := range machineShells(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, sample := range samples {
+				data, err := os.ReadFile(sample)
+				if err != nil {
+					t.Fatal(err)
+				}
+				facts, err := host.Parse(string(data) + "--\nx86_64\n--\nsystemd\n--\n--\n--\n--\n0\n")
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := string(facts.Family)
+				if want == "" {
+					want = "unknown"
+				}
+				prog := helpers + "\nfamily_of \"$(os_release ID)\" \"$(os_release ID_LIKE)\"\n"
+				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+				c.Env = []string{"PATH=/usr/bin:/bin", "NORCA_OS_RELEASE=" + sample, "TMPDIR=" + t.TempDir()}
+				out, err := c.CombinedOutput()
+				if err != nil || strings.TrimSpace(string(out)) != want {
+					t.Errorf("%s: family %q (%v), the deployer says %q", filepath.Base(sample), out, err, want)
+				}
+			}
+		})
 	}
 }

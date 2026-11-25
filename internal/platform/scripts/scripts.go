@@ -83,7 +83,7 @@ func Command(p *Prepared, envFile string) string {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	return fmt.Sprintf("set -a; . %s; set +a; timeout -k 10 %d %s %s",
+	return fmt.Sprintf("set -a\n# shellcheck source=/dev/null\n. %s\nset +a\ntimeout -k 10 %d %s %s",
 		connector.ShellQuote(envFile), timeout, config.ScriptInterpreter(p.Config), connector.ShellQuote(ScriptPath(p.Config.Name)))
 }
 

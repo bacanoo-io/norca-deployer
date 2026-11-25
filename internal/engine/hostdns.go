@@ -23,12 +23,10 @@ func (r *Runner) configureHostDNS(t *target) error {
 		}
 		return nil
 	}
-	res, err := dns.Apply(t.conn, t.node.Host, fwd)
+	// The steps print the warnings.
+	res, err := dns.Apply(r.abortCtx(), t.conn, t.node.Host, fwd)
 	if err != nil {
 		return err
-	}
-	for _, w := range res.Warnings {
-		fmt.Printf("    [WARN] [%s] consul.dns_forwarding: %s\n", t.node.Host, w)
 	}
 	if res.Bridge.IsValid() {
 		t.hostDNSSources = []string{res.Bridge.Masked().String()}
