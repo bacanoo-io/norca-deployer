@@ -10,8 +10,8 @@ import (
 // The files of the Linux tuning.
 const (
 	SysctlConfigPath = "/etc/sysctl.d/99-norca-production.conf"
-	// ModulesConfigPath persists the kernel modules: systemd-modules-load
-	// loads them at boot.
+	// ModulesConfigPath persists the kernel modules: systemd-modules-load,
+	// or the modules service of OpenRC (Alpine), loads them at boot.
 	ModulesConfigPath = "/etc/modules-load.d/norca-bridge.conf"
 )
 
@@ -76,6 +76,71 @@ func (Linux) Steps() []step.Step {
 				"  warn \"sysctl --system failed: the settings apply at the next boot\"\nfi",
 		},
 	}
+}
+
+// OpenRC tunes a Linux node whose init system is OpenRC (Alpine). The
+// files are those of Linux: the modules and sysctl services of OpenRC read
+// /etc/modules-load.d and /etc/sysctl.d at boot. The settings are applied
+// now with sysctl -p (busybox has no sysctl --system, and its sysctl ends
+// with 0 after an error, so its output is read). The modules and sysctl
+// services are put into the boot runlevel when they are in none, and the
+// cgroups service into sysinit when no cgroup file system is mounted (the
+// task drivers of the agent need one; cgroup v1 and v2 both serve).
+type OpenRC struct{}
+
+var _ Tuner = OpenRC{}
+
+// openrcFunctions are the shell functions of the OpenRC tuning.
+const openrcFunctions = `# openrc_enabled SERVICE is true when a runlevel of OpenRC has the service.
+openrc_enabled() {
+  for openrc_l in /etc/runlevels/*/"$1"; do
+    [ -e "$openrc_l" ] && return 0
+  done
+  return 1
+}
+
+# openrc_cgroups is true when a cgroup file system is mounted (cgroup2fs:
+# v2; tmpfs: the hierarchies of v1).
+openrc_cgroups() {
+  case $(stat -fc %T /sys/fs/cgroup 2>/dev/null) in
+  cgroup2fs | tmpfs) return 0 ;;
+  esac
+  return 1
+}
+`
+
+// Steps implements Tuner.
+func (OpenRC) Steps() []step.Step {
+	linux := Linux{}.Steps()
+	modules, sysctl := linux[0], linux[1]
+	sysctl.Apply = "if ! sysctl_out=$(sysctl -p " + SysctlConfigPath + " 2>&1) || printf '%s\\n' \"$sysctl_out\" | grep -qi -e error -e cannot; then\n" +
+		"  if [ -w /proc/sys/net/ipv4/ip_forward ]; then\n" +
+		"    die \"sysctl -p " + SysctlConfigPath + " failed: $(printf '%s\\n' \"$sysctl_out\" | tail -n 3 | tr '\\n' ' ')\"\n" +
+		"  fi\n" +
+		"  warn \"sysctl -p failed: the settings apply at the next boot\"\nfi"
+	services := step.Step{
+		Name:      "openrc services",
+		Functions: openrcFunctions,
+		Check: "{ [ ! -e /etc/init.d/modules ] || openrc_enabled modules; } &&\n" +
+			"  { [ ! -e /etc/init.d/sysctl ] || openrc_enabled sysctl; } &&\n" +
+			"  { [ ! -e /etc/init.d/cgroups ] || openrc_enabled cgroups || openrc_cgroups; }",
+		Apply: "for openrc_svc in modules sysctl; do\n" +
+			"  if [ -e \"/etc/init.d/$openrc_svc\" ] && ! openrc_enabled \"$openrc_svc\"; then\n" +
+			"    rc-update add \"$openrc_svc\" boot >/dev/null\n" +
+			"    log \"$openrc_svc added to the boot runlevel\"\n" +
+			"  fi\n" +
+			"done\n" +
+			"if [ -e /etc/init.d/cgroups ] && ! openrc_enabled cgroups && ! openrc_cgroups; then\n" +
+			"  rc-update add cgroups sysinit >/dev/null\n" +
+			"  log \"cgroups added to the sysinit runlevel\"\n" +
+			"  if [ -d /run/openrc ] && rc-service cgroups start >/dev/null 2>&1; then\n" +
+			"    log \"cgroups mounted\"\n" +
+			"  else\n" +
+			"    warn \"the cgroups are mounted at the next boot: the task drivers of the agent need them\"\n" +
+			"  fi\n" +
+			"fi",
+	}
+	return []step.Step{modules, sysctl, services}
 }
 
 // Windows tunes a Windows node: long paths and the execution policy of
