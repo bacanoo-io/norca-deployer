@@ -28,10 +28,11 @@ func TestValidateBecomeMethodAndHostFacts(t *testing.T) {
 		{"rhel family", func(n *NodeConfig) { n.HostFacts = &HostFacts{Family: FamilyRHEL} }, ""},
 		{"unknown family", func(n *NodeConfig) { n.HostFacts = &HostFacts{Family: "arch"} }, "must be debian, rhel or alpine"},
 		{"dnf", func(n *NodeConfig) { n.HostFacts = &HostFacts{Family: FamilyRHEL, PackageManager: PackageManagerDnf} }, ""},
-		{"apk follows", func(n *NodeConfig) { n.HostFacts = &HostFacts{PackageManager: PackageManagerApk} }, "not supported yet"},
-		{"unknown package manager", func(n *NodeConfig) { n.HostFacts = &HostFacts{PackageManager: "pacman"} }, "must be apt, dnf or none"},
-		{"openrc follows", func(n *NodeConfig) { n.HostFacts = &HostFacts{Init: InitOpenRC} }, "not supported yet"},
-		{"unknown init", func(n *NodeConfig) { n.HostFacts = &HostFacts{Init: "runit"} }, "must be systemd"},
+		{"apk and openrc", func(n *NodeConfig) {
+			n.HostFacts = &HostFacts{Family: FamilyAlpine, PackageManager: PackageManagerApk, Init: InitOpenRC}
+		}, ""},
+		{"unknown package manager", func(n *NodeConfig) { n.HostFacts = &HostFacts{PackageManager: "pacman"} }, "must be apt, dnf, apk or none"},
+		{"unknown init", func(n *NodeConfig) { n.HostFacts = &HostFacts{Init: "runit"} }, "must be systemd or openrc"},
 		{"windows", func(n *NodeConfig) { n.Platform, n.HostFacts = "windows", &HostFacts{Family: FamilyDebian} }, "for Linux nodes"},
 	}
 	for _, tt := range tests {

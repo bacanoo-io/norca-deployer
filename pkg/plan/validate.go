@@ -133,7 +133,7 @@ func (p *DeploymentPlan) validateCluster() error {
 		// for the node is checked with the facts of the nodes, before the
 		// first change.
 		if !p.hostPackageListed(r.Package) {
-			return fmt.Errorf("release.source host-package: host_packages must install %q (in the block of the package manager of the nodes: host_packages.apt.install, host_packages.dnf.install)", r.Package)
+			return fmt.Errorf("release.source host-package: host_packages must install %q (in the block of the package manager of the nodes: host_packages.apt.install, host_packages.dnf.install, host_packages.apk.install)", r.Package)
 		}
 	default:
 		return fmt.Errorf("release.source %q must be official, custom-url, local-path or host-package", r.Source)
@@ -252,6 +252,9 @@ func (p *DeploymentPlan) hostPackageListed(name string) bool {
 	if dnf := p.DnfPackages(); dnf != nil {
 		lists = append(lists, dnf.Install)
 	}
+	if apk := p.ApkPackages(); apk != nil {
+		lists = append(lists, apk.Install)
+	}
 	for _, list := range lists {
 		for _, hp := range list {
 			if hp.Name == name {
@@ -300,18 +303,14 @@ func validateHostFacts(n *NodeConfig) error {
 		return fmt.Errorf("host_facts.family %q must be debian, rhel or alpine", hf.Family)
 	}
 	switch hf.PackageManager {
-	case "", PackageManagerApt, PackageManagerDnf, PackageManagerNone:
-	case PackageManagerApk:
-		return fmt.Errorf("host_facts.package_manager apk is not supported yet (the deployer drives apt and dnf; apk is planned)")
+	case "", PackageManagerApt, PackageManagerDnf, PackageManagerApk, PackageManagerNone:
 	default:
-		return fmt.Errorf("host_facts.package_manager %q must be apt, dnf or none", hf.PackageManager)
+		return fmt.Errorf("host_facts.package_manager %q must be apt, dnf, apk or none", hf.PackageManager)
 	}
 	switch hf.Init {
-	case "", InitSystemd:
-	case InitOpenRC:
-		return fmt.Errorf("host_facts.init openrc is not supported yet (the deployer drives systemd; OpenRC is planned)")
+	case "", InitSystemd, InitOpenRC:
 	default:
-		return fmt.Errorf("host_facts.init %q must be systemd", hf.Init)
+		return fmt.Errorf("host_facts.init %q must be systemd or openrc", hf.Init)
 	}
 	return nil
 }

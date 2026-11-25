@@ -2,6 +2,9 @@ package plan
 
 import (
 	"bytes"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/url"
 	"os"
@@ -35,6 +38,17 @@ var (
 	rpmVersionRe = regexp.MustCompile(`^([0-9]+:)?[A-Za-z0-9._+~^]+-[A-Za-z0-9._+~^]+$`)
 	// includepkgs and excludepkgs entries: names and globs.
 	rpmPatternRe = regexp.MustCompile(`^[A-Za-z0-9._+*?\[\]-]+$`)
+
+	// apk package names: letters, digits and . _ + -, not starting with a
+	// punctuation character (no @, =, < or >: they are the syntax of a
+	// world entry).
+	apkPackageNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	// The versions of apk: numbers, an optional letter, suffixes
+	// (_alpha1, _rc2, _git20240101, _p3), and the release -rN.
+	apkVersionRe = regexp.MustCompile(`^[0-9]+(\.[0-9]+)*[a-z]?(_(alpha|beta|pre|rc|cvs|svn|git|hg|p)[0-9]*)*-r[0-9]+$`)
+	// The file name of an apk key in /etc/apk/keys, by which apk finds the
+	// key of a signature (e.g. alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub).
+	apkKeyNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9@._+-]*\.pub$`)
 )
 
 // BaseDir is the directory of the configuration file the plan was loaded from.
@@ -120,6 +134,59 @@ func (p *DeploymentPlan) DnfRepositoryKey(r *DnfRepository) ([]byte, error) {
 		return nil, fmt.Errorf("repository %q: failed to read key file: %w", r.Name, err)
 	}
 	return data, nil
+}
+
+// ApkRepositoryKey returns the RSA key of an apk repository and the name it
+// is installed under in /etc/apk/keys (the base name of key_file, or
+// key_name); no key and "" for a repository signed by a key apk has.
+func (p *DeploymentPlan) ApkRepositoryKey(r *ApkRepository) ([]byte, string, error) {
+	switch {
+	case r.Key != "":
+		return []byte(r.Key), r.KeyName, nil
+	case r.KeyFile == "":
+		return nil, "", nil
+	}
+	data, err := os.ReadFile(p.ResolveLocalPath(r.KeyFile))
+	if err != nil {
+		return nil, "", fmt.Errorf("repository %q: failed to read key file: %w", r.Name, err)
+	}
+	return data, filepath.Base(r.KeyFile), nil
+}
+
+// isRSAPublicKey reports whether a key is an RSA public key in PEM, the
+// form of the keys of apk.
+func isRSAPublicKey(key []byte) bool {
+	block, _ := pem.Decode(key)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return false
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return false
+	}
+	_, ok := pub.(*rsa.PublicKey)
+	return ok
+}
+
+// ApkFile resolves the local .apk of a package for a node architecture.
+func (p *DeploymentPlan) ApkFile(pkg *HostPackage, arch string) string {
+	return p.ResolveLocalPath(strings.ReplaceAll(pkg.File, "{arch}", ApkArch(arch)))
+}
+
+// ApkArch maps a Go architecture to the architecture name of Alpine.
+func ApkArch(goArch string) string {
+	switch goArch {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	case "arm":
+		return "armv7"
+	case "386":
+		return "x86"
+	default:
+		return goArch
+	}
 }
 
 // DebFile resolves the local .deb of a package for a node architecture.
@@ -216,11 +283,26 @@ func (p *DeploymentPlan) DnfPackages() *DnfPackages {
 	return p.HostPackages.Dnf
 }
 
-// The keys of the repositories of each block, for the error of a key that
-// belongs to another package manager (suite in dnf, baseurl in apt).
+// ApkPackages returns the apk block of host_packages, or nil.
+func (p *DeploymentPlan) ApkPackages() *ApkPackages {
+	if p.HostPackages == nil {
+		return nil
+	}
+	return p.HostPackages.Apk
+}
+
+// repositoryKeys are the YAML keys of the repositories of a block, for the
+// error of a key that belongs to another package manager (suite in dnf,
+// baseurl in apt, tagged in apt).
+type repositoryKeys struct {
+	manager string
+	keys    map[string]bool
+}
+
 var (
-	aptRepositoryKeys = yamlKeys(reflect.TypeFor[AptRepository]())
-	dnfRepositoryKeys = yamlKeys(reflect.TypeFor[DnfRepository]())
+	aptRepositoryKeys = repositoryKeys{"apt", yamlKeys(reflect.TypeFor[AptRepository]())}
+	dnfRepositoryKeys = repositoryKeys{"dnf", yamlKeys(reflect.TypeFor[DnfRepository]())}
+	apkRepositoryKeys = repositoryKeys{"apk", yamlKeys(reflect.TypeFor[ApkRepository]())}
 )
 
 // yamlKeys returns the YAML keys of the fields of a struct.
@@ -235,20 +317,22 @@ func yamlKeys(t reflect.Type) map[string]bool {
 }
 
 // checkKeys refuses the keys of a mapping that the type of what does not
-// have; a key of the repositories of the other manager is named as such.
-func checkKeys(node *yaml.Node, what string, own map[string]bool, other string, otherKeys map[string]bool) error {
+// have; a key of the repositories of another manager is named as such.
+func checkKeys(node *yaml.Node, what string, own repositoryKeys, others ...repositoryKeys) error {
 	if node.Kind != yaml.MappingNode {
 		return nil
 	}
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		k := node.Content[i]
-		switch {
-		case own[k.Value]:
-		case otherKeys[k.Value]:
-			return fmt.Errorf("line %d: %s is a key of the repositories of %s, not of %s", k.Line, k.Value, other, what)
-		default:
-			return fmt.Errorf("line %d: unknown key %q in %s", k.Line, k.Value, what)
+		if own.keys[k.Value] {
+			continue
 		}
+		for _, o := range others {
+			if o.keys[k.Value] {
+				return fmt.Errorf("line %d: %s is a key of the repositories of %s, not of %s", k.Line, k.Value, o.manager, what)
+			}
+		}
+		return fmt.Errorf("line %d: unknown key %q in %s", k.Line, k.Value, what)
 	}
 	return nil
 }
@@ -257,7 +341,7 @@ func checkKeys(node *yaml.Node, what string, own map[string]bool, other string, 
 // have: a dnf key in the apt block is an error of the plan, not a key that
 // is dropped.
 func (r *AptRepository) UnmarshalYAML(node *yaml.Node) error {
-	if err := checkKeys(node, "an apt repository (host_packages.apt)", aptRepositoryKeys, "dnf", dnfRepositoryKeys); err != nil {
+	if err := checkKeys(node, "an apt repository (host_packages.apt)", aptRepositoryKeys, dnfRepositoryKeys, apkRepositoryKeys); err != nil {
 		return err
 	}
 	type plain AptRepository
@@ -266,10 +350,19 @@ func (r *AptRepository) UnmarshalYAML(node *yaml.Node) error {
 
 // UnmarshalYAML reads a dnf repository and refuses a key it does not have.
 func (r *DnfRepository) UnmarshalYAML(node *yaml.Node) error {
-	if err := checkKeys(node, "a dnf repository (host_packages.dnf)", dnfRepositoryKeys, "apt", aptRepositoryKeys); err != nil {
+	if err := checkKeys(node, "a dnf repository (host_packages.dnf)", dnfRepositoryKeys, aptRepositoryKeys, apkRepositoryKeys); err != nil {
 		return err
 	}
 	type plain DnfRepository
+	return node.Decode((*plain)(r))
+}
+
+// UnmarshalYAML reads an apk repository and refuses a key it does not have.
+func (r *ApkRepository) UnmarshalYAML(node *yaml.Node) error {
+	if err := checkKeys(node, "an apk repository (host_packages.apk)", apkRepositoryKeys, aptRepositoryKeys, dnfRepositoryKeys); err != nil {
+		return err
+	}
+	type plain ApkRepository
 	return node.Decode((*plain)(r))
 }
 
@@ -283,9 +376,6 @@ func (p *DeploymentPlan) validateHostPackages() error {
 			"the packages of the nodes whose package manager is apt (Debian, Ubuntu) are written as " +
 			"host_packages: {apt: {repositories: [...], install: [...]}}")
 	}
-	if hp.Apk != nil {
-		return fmt.Errorf("host_packages.apk is not supported yet: the packages of Alpine nodes (apk) follow in a later phase (F3) of the host platform work")
-	}
 	if hp.LockTimeout < 0 {
 		return fmt.Errorf("host_packages.lock_timeout must not be negative")
 	}
@@ -295,7 +385,12 @@ func (p *DeploymentPlan) validateHostPackages() error {
 		}
 	}
 	if hp.Dnf != nil {
-		return p.validateDnfPackages(hp.Dnf)
+		if err := p.validateDnfPackages(hp.Dnf); err != nil {
+			return err
+		}
+	}
+	if hp.Apk != nil {
+		return p.validateApkPackages(hp.Apk)
 	}
 	return nil
 }
@@ -388,8 +483,8 @@ func (p *DeploymentPlan) validateAptPackages(apt *AptPackages) error {
 
 // packageRules are the rules of the packages of one block.
 type packageRules struct {
-	block     string // apt, dnf
-	kind      string // Debian, RPM: in the errors
+	block     string // apt, dnf, apk
+	kind      string // Debian, RPM, apk: in the errors
 	nameRe    *regexp.Regexp
 	versionRe *regexp.Regexp
 	version   string // the form of a version, for the error
@@ -411,6 +506,9 @@ func (p *DeploymentPlan) validatePackageList(list []HostPackage, rules packageRu
 			return fmt.Errorf("%s: package %q is listed more than once", what, pkg.Name)
 		}
 		pkgNames[pkg.Name] = true
+		if pkg.Repository != "" && rules.block != "apk" {
+			return fmt.Errorf("%s: repository names a tagged repository of apk; the packages of %s are taken from its repositories by name", what, rules.block)
+		}
 		if pkg.Version != "" && !rules.versionRe.MatchString(pkg.Version) {
 			return fmt.Errorf("%s: invalid %s version %q%s", what, rules.kind, pkg.Version, rules.version)
 		}
@@ -515,6 +613,89 @@ func (p *DeploymentPlan) validateDnfPackages(dnf *DnfPackages) error {
 	return p.validatePackageList(dnf.Install, packageRules{
 		block: "dnf", kind: "RPM", nameRe: rpmPackageNameRe, versionRe: rpmVersionRe,
 		version: " (want [epoch:]version-release, e.g. 1.7.27-3.1.el9)", ext: ".rpm", file: p.RPMFile,
+	})
+}
+
+// validateApkPackages checks the apk block with the rules of apk: package
+// names, version-rN, repositories with an RSA key installed under its own
+// name (or none: a key apk has) and without credentials, tagged
+// repositories for the packages that name them, and .apk files.
+func (p *DeploymentPlan) validateApkPackages(apk *ApkPackages) error {
+	repoNames := map[string]bool{}
+	tagged := map[string]bool{}
+	keys := map[string][]byte{}
+	for i := range apk.Repositories {
+		r := &apk.Repositories[i]
+		what := fmt.Sprintf("host_packages.apk.repositories[%d]", i)
+		if !repoNameRe.MatchString(r.Name) {
+			return fmt.Errorf("%s: name %q must be lower case letters, digits and '-'", what, r.Name)
+		}
+		if repoNames[r.Name] {
+			return fmt.Errorf("%s: duplicate repository name %q", what, r.Name)
+		}
+		repoNames[r.Name] = true
+		tagged[r.Name] = r.Tagged
+
+		// Credentials are refused (decision Q5 of the host platform plan).
+		const private = "a private repository is reached through local .apk files (file) or a proxy that adds the credentials"
+		if r.Auth != nil {
+			return fmt.Errorf("%s: apk repositories take no credentials: apk keeps them in /etc/apk/repositories, which every user can read; %s", what, private)
+		}
+		u, err := url.Parse(r.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("%s: url %q must be an http(s) URL", what, r.URL)
+		}
+		if u.User != nil {
+			return fmt.Errorf("%s: the url takes no credentials: apk keeps them in /etc/apk/repositories, which every user can read; %s", what, private)
+		}
+		if strings.ContainsAny(r.URL, " \t\r\n") {
+			return fmt.Errorf("%s: url must not contain whitespace", what)
+		}
+		if r.Key != "" && r.KeyFile != "" {
+			return fmt.Errorf("%s: at most one of key or key_file (none: a repository signed by a key apk has)", what)
+		}
+		if r.Key != "" && r.KeyName == "" {
+			return fmt.Errorf("%s: key needs key_name, the file name apk finds it by (the name of the key that signs the index, e.g. packager-6165ee59.rsa.pub)", what)
+		}
+		if r.Key == "" && r.KeyName != "" {
+			return fmt.Errorf("%s: key_name needs key (a key_file is installed under its own file name)", what)
+		}
+		key, name, err := p.ApkRepositoryKey(r)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			if !apkKeyNameRe.MatchString(name) {
+				return fmt.Errorf("%s: invalid key name %q: it is the file name in /etc/apk/keys (letters, digits, @ . _ + -, ending in .pub)", what, name)
+			}
+			if !isRSAPublicKey(key) {
+				return fmt.Errorf("%s: the key must be an RSA public key in PEM (BEGIN PUBLIC KEY), as apk keys are", what)
+			}
+			if other, ok := keys[name]; ok && !bytes.Equal(other, key) {
+				return fmt.Errorf("%s: two different keys named %s: apk finds a key by its name", what, name)
+			}
+			keys[name] = key
+		}
+		if err := validateRoles(what, r.Roles); err != nil {
+			return err
+		}
+	}
+	for i := range apk.Install {
+		pkg := &apk.Install[i]
+		what := fmt.Sprintf("host_packages.apk.install[%d]", i)
+		switch {
+		case pkg.Repository == "":
+		case pkg.File != "":
+			return fmt.Errorf("%s: a package of a local file has no repository", what)
+		case !repoNames[pkg.Repository]:
+			return fmt.Errorf("%s: repository %q is no repository of host_packages.apk", what, pkg.Repository)
+		case !tagged[pkg.Repository]:
+			return fmt.Errorf("%s: repository %s is not tagged: apk takes the packages of an untagged repository by their name, without repository", what, pkg.Repository)
+		}
+	}
+	return p.validatePackageList(apk.Install, packageRules{
+		block: "apk", kind: "apk", nameRe: apkPackageNameRe, versionRe: apkVersionRe,
+		version: " (want version-rN, e.g. 1.7.27-r0)", ext: ".apk", file: p.ApkFile,
 	})
 }
 

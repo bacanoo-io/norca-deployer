@@ -95,14 +95,15 @@ type HostPackages struct {
 	// Dnf are the packages of the nodes whose package manager is dnf
 	// (RHEL, Rocky Linux, AlmaLinux).
 	Dnf *DnfPackages `yaml:"dnf,omitempty" json:"dnf,omitempty"`
+	// Apk are the packages of the nodes whose package manager is apk
+	// (Alpine).
+	Apk *ApkPackages `yaml:"apk,omitempty" json:"apk,omitempty"`
 
 	// The keys below are refused by Validate, with the reason: the lists
-	// of earlier plans moved into apt, and the block of apk is not
-	// supported yet. They are fields so that YAML and HCL do not drop them
-	// silently.
+	// of earlier plans moved into apt. They are fields so that YAML and HCL
+	// do not drop them silently.
 	MovedRepositories []any `yaml:"repositories,omitempty" json:"repositories,omitempty"`
 	MovedInstall      []any `yaml:"install,omitempty" json:"install,omitempty"`
-	Apk               any   `yaml:"apk,omitempty" json:"apk,omitempty"`
 }
 
 // AptPackages are the APT repositories and the packages of the nodes whose
@@ -180,24 +181,63 @@ type DnfRepository struct {
 	Auth *RepositoryAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
+// ApkPackages are the apk repositories and the packages of the nodes whose
+// package manager is apk.
+type ApkPackages struct {
+	Repositories []ApkRepository `yaml:"repositories,omitempty" json:"repositories,omitempty"`
+	Install      []HostPackage   `yaml:"install,omitempty" json:"install,omitempty"`
+}
+
+// ApkRepository is a line of /etc/apk/repositories.d/norca.list, the file of
+// the deployer's repositories (written whole); its key goes into
+// /etc/apk/keys under its own name, by which apk finds the key of a
+// signature.
+type ApkRepository struct {
+	Name string `yaml:"name" json:"name"`
+	// URL is the repository: the directory above <arch>/APKINDEX.tar.gz,
+	// e.g. https://dl-cdn.alpinelinux.org/alpine/v3.22/community.
+	URL string `yaml:"url" json:"url"`
+	// KeyFile is the RSA public key (PEM) that signs the index, on the
+	// deployer machine; it is installed under its file name (e.g.
+	// packager-6165ee59.rsa.pub). Key is such a key inline, named by
+	// KeyName. Neither: the repository is signed by a key apk has already
+	// (the keys of Alpine).
+	KeyFile string `yaml:"key_file,omitempty" json:"key_file,omitempty"`
+	Key     string `yaml:"key,omitempty" json:"key,omitempty"`
+	KeyName string `yaml:"key_name,omitempty" json:"key_name,omitempty"`
+	// Tagged writes the repository as @norca-<name>: apk takes a package
+	// from it only when the package names it (repository of the package).
+	Tagged bool     `yaml:"tagged,omitempty" json:"tagged,omitempty"`
+	Roles  []string `yaml:"roles,omitempty" json:"roles,omitempty"` // "master", "client"; empty = all nodes
+
+	// Auth is refused by Validate, with the reason: apk reads credentials
+	// only from the URL in its repositories files, which every user can
+	// read. It is a field so that YAML and HCL do not drop it silently.
+	Auth *RepositoryAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+}
+
 // HostPackage is installed from the repositories of its block, or from a
 // local package file that the deployer copies to the node (File).
 type HostPackage struct {
 	Name string `yaml:"name" json:"name"`
-	// File is a local .deb (apt) or .rpm (dnf) on the deployer machine;
-	// {arch} is replaced by the architecture name of the block's manager
-	// (amd64 / x86_64).
+	// File is a local .deb (apt), .rpm (dnf) or .apk (apk) on the deployer
+	// machine; {arch} is replaced by the architecture name of the block's
+	// manager (amd64 / x86_64).
 	File   string `yaml:"file,omitempty" json:"file,omitempty"`
 	SHA256 string `yaml:"sha256,omitempty" json:"sha256,omitempty"` // expected digest of File
 	// Version is the exact version: a Debian version for apt (empty = the
-	// candidate version), [epoch:]version-release for dnf (empty = the
-	// version dnf finds when the package is missing).
+	// candidate version), [epoch:]version-release for dnf, version-rN for
+	// apk (empty = the version the manager finds when the package is
+	// missing).
 	Version string `yaml:"version,omitempty" json:"version,omitempty"`
 	// Hold keeps the package at its version: apt-mark hold for apt, a
-	// versionlock entry for dnf.
-	Hold  bool     `yaml:"hold,omitempty" json:"hold,omitempty"`
-	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty"` // "master", "client"; empty = all nodes
-	Hosts []string `yaml:"hosts,omitempty" json:"hosts,omitempty"` // host or hostname; empty = all nodes of the roles
+	// versionlock entry for dnf, the version in /etc/apk/world for apk.
+	Hold bool `yaml:"hold,omitempty" json:"hold,omitempty"`
+	// Repository (apk only) is the tagged repository of the block the
+	// package is taken from (name@norca-<repository>).
+	Repository string   `yaml:"repository,omitempty" json:"repository,omitempty"`
+	Roles      []string `yaml:"roles,omitempty" json:"roles,omitempty"` // "master", "client"; empty = all nodes
+	Hosts      []string `yaml:"hosts,omitempty" json:"hosts,omitempty"` // host or hostname; empty = all nodes of the roles
 }
 
 // ScriptConfig is a script run on the Linux nodes at a given phase.
@@ -834,8 +874,8 @@ type NodeConfig struct {
 // detection: every key is optional.
 type HostFacts struct {
 	Family         string `yaml:"family,omitempty" json:"family,omitempty"`                   // debian, rhel, alpine
-	PackageManager string `yaml:"package_manager,omitempty" json:"package_manager,omitempty"` // apt, dnf, none (apk follows)
-	Init           string `yaml:"init,omitempty" json:"init,omitempty"`                       // systemd (openrc follows)
+	PackageManager string `yaml:"package_manager,omitempty" json:"package_manager,omitempty"` // apt, dnf, apk, none
+	Init           string `yaml:"init,omitempty" json:"init,omitempty"`                       // systemd, openrc
 }
 
 // The values of host_facts.

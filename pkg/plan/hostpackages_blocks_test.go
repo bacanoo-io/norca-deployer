@@ -15,6 +15,9 @@ func loadBody(t *testing.T, name, body string) (*DeploymentPlan, error) {
 	if err := os.WriteFile(filepath.Join(dir, "repo.asc"), []byte(testKey), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, testApkKeyName), []byte(testApkKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
@@ -30,6 +33,7 @@ func TestHostPackagesBlocks(t *testing.T) {
 	const inventoryYAML = "inventory:\n  masters:\n    - host: 10.0.0.1\n"
 	const inventoryHCL = "inventory {\n  masters {\n    host = \"10.0.0.1\"\n  }\n}\n"
 	const dnfRepoYAML = "      - {name: docker, baseurl: 'https://download.docker.com/linux/rhel/$releasever/$basearch/stable', key_file: repo.asc}\n"
+	const apkRepoYAML = "      - {name: community, url: https://dl-cdn.alpinelinux.org/alpine/v3.22/community, key_file: " + testApkKeyName + ", tagged: true}\n"
 	tests := []struct {
 		name  string
 		file  string
@@ -45,7 +49,17 @@ func TestHostPackagesBlocks(t *testing.T) {
 		{"old install in hcl", "p.hcl", "host_packages {\n  install {\n    name = \"jq\"\n  }\n}\n", "moved into host_packages.apt", ""},
 		{"dnf block", "p.yaml", "host_packages:\n  dnf:\n    repositories:\n" + dnfRepoYAML + "    install:\n      - {name: containerd.io, version: 1.7.27-3.1.el9, hold: true}\n", "", "dnf"},
 		{"dnf block in hcl", "p.hcl", "host_packages {\n  dnf {\n    repositories {\n      name = \"docker\"\n      baseurl = \"https://download.docker.com/linux/rhel/$releasever/$basearch/stable\"\n      key_file = \"repo.asc\"\n      priority = 10\n      include = [\"containerd.io\"]\n    }\n    install {\n      name = \"containerd.io\"\n    }\n  }\n}\n", "", "dnf"},
-		{"apk in hcl", "p.hcl", "host_packages {\n  apk {\n    install {\n      name = \"jq\"\n    }\n  }\n}\n", "host_packages.apk is not supported yet", ""},
+		{"apk block", "p.yaml", "host_packages:\n  apk:\n    repositories:\n" + apkRepoYAML + "    install:\n      - {name: containerd, version: 1.7.27-r0, hold: true}\n", "", "apk"},
+		{"apk block in hcl", "p.hcl", "host_packages {\n  apk {\n    install {\n      name = \"jq\"\n    }\n  }\n}\n", "", "apk"},
+		{"credentials of apk", "p.yaml", "host_packages:\n  apk:\n    repositories:\n      - {name: private, url: https://apk.example.com/v3.22/main, auth: {username: u, password: p}}\n",
+			"apk keeps them in /etc/apk/repositories, which every user can read", ""},
+		{"suite is no key of apk", "p.yaml", "host_packages:\n  apk:\n    repositories:\n      - {name: x, url: https://apk.example.com/v3.22/main, suite: bookworm}\n",
+			"suite is a key of the repositories of apt, not of an apk repository", ""},
+		{"tagged is no key of apt", "p.yaml", "host_packages:\n  apt:\n    repositories:\n      - {name: internal, uri: https://apt.example.com/debian, suite: bookworm, components: [main], key_file: repo.asc, tagged: true}\n",
+			"tagged is a key of the repositories of apk, not of an apt repository", ""},
+		{"repository of a package of apt", "p.yaml", "host_packages:\n  apt:\n    install:\n      - {name: jq, repository: mine}\n",
+			"host_packages.apt.install[0]: repository names a tagged repository of apk", ""},
+		{"rules of apk in the apk block", "p.yaml", "host_packages:\n  apk:\n    install:\n      - {name: jq, version: 1.7.1-1}\n", "host_packages.apk.install[0]: invalid apk version \"1.7.1-1\"", ""},
 		{"rules of debian in the apt block", "p.yaml", "host_packages:\n  apt:\n    install:\n      - {name: Not_Debian}\n", "host_packages.apt.install[0]: invalid Debian package name", ""},
 		{"rules of rpm in the dnf block", "p.yaml", "host_packages:\n  dnf:\n    install:\n      - {name: jq, version: '1:1.6'}\n", "host_packages.dnf.install[0]: invalid RPM version \"1:1.6\"", ""},
 		{"baseurl is no key of apt", "p.yaml", "host_packages:\n  apt:\n    repositories:\n      - {name: internal, baseurl: https://x.example.com, key_file: repo.asc}\n", "baseurl is a key of the repositories of dnf, not of an apt repository", ""},
@@ -78,6 +92,10 @@ func TestHostPackagesBlocks(t *testing.T) {
 			case "dnf":
 				if plan.DnfPackages() != nil {
 					n = len(plan.DnfPackages().Install)
+				}
+			case "apk":
+				if plan.ApkPackages() != nil {
+					n = len(plan.ApkPackages().Install)
 				}
 			}
 			if n != 1 {
@@ -302,5 +320,237 @@ func TestScriptInterpreterAndFamilies(t *testing.T) {
 	}
 	if got := ScriptInterpreter(&ScriptConfig{}); got != InterpreterBash {
 		t.Fatalf("the default interpreter is %q", got)
+	}
+}
+
+// testApkKeyName and testApkKey are a signing key of Alpine (from
+// /etc/apk/keys of alpine:3.22).
+const (
+	testApkKeyName = "alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+	testApkKey     = `-----BEGIN PUBLIC KEY-----
+MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAutQkua2CAig4VFSJ7v54
+ALyu/J1WB3oni7qwCZD3veURw7HxpNAj9hR+S5N/pNeZgubQvJWyaPuQDm7PTs1+
+tFGiYNfAsiibX6Rv0wci3M+z2XEVAeR9Vzg6v4qoofDyoTbovn2LztaNEjTkB+oK
+tlvpNhg1zhou0jDVYFniEXvzjckxswHVb8cT0OMTKHALyLPrPOJzVtM9C1ew2Nnc
+3848xLiApMu3NBk0JqfcS3Bo5Y2b1FRVBvdt+2gFoKZix1MnZdAEZ8xQzL/a0YS5
+Hd0wj5+EEKHfOd3A75uPa/WQmA+o0cBFfrzm69QDcSJSwGpzWrD1ScH3AK8nWvoj
+v7e9gukK/9yl1b4fQQ00vttwJPSgm9EnfPHLAtgXkRloI27H6/PuLoNvSAMQwuCD
+hQRlyGLPBETKkHeodfLoULjhDi1K2gKJTMhtbnUcAA7nEphkMhPWkBpgFdrH+5z4
+Lxy+3ek0cqcI7K68EtrffU8jtUj9LFTUC8dERaIBs7NgQ/LfDbDfGh9g6qVj1hZl
+k9aaIPTm/xsi8v3u+0qaq7KzIBc9s59JOoA8TlpOaYdVgSQhHHLBaahOuAigH+VI
+isbC9vmqsThF2QdDtQt37keuqoda2E6sL7PUvIyVXDRfwX7uMDjlzTxHTymvq2Ck
+htBqojBnThmjJQFgZXocHG8CAwEAAQ==
+-----END PUBLIC KEY-----
+`
+)
+
+// The same apk block in YAML and in HCL loads to the same plan; {arch} of
+// an .apk file is the name of Alpine (x86_64, aarch64), and a key file is
+// installed under its own name.
+func TestApkBlockYAMLHCLParity(t *testing.T) {
+	dir := t.TempDir()
+	for f, content := range map[string]string{"keys/" + testApkKeyName: testApkKey, "apks/norca-x86_64.apk": "x"} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, f)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	yamlBody := `host_packages:
+  lock_timeout: 60
+  apk:
+    repositories:
+      - name: community
+        url: https://dl-cdn.alpinelinux.org/alpine/v3.22/community
+        roles: [client]
+      - name: mine
+        url: https://apk.example.com/v3.22/main
+        key_file: keys/` + testApkKeyName + `
+        tagged: true
+    install:
+      - {name: containerd, version: "1.7.27-r0", hold: true, roles: [client]}
+      - {name: norca-agent, repository: mine}
+      - {name: norca, file: "apks/norca-{arch}.apk"}
+inventory:
+  masters:
+    - {host: 10.0.0.1, arch: amd64}
+`
+	hclBody := `host_packages {
+  lock_timeout = 60
+  apk {
+    repositories {
+      name  = "community"
+      url   = "https://dl-cdn.alpinelinux.org/alpine/v3.22/community"
+      roles = ["client"]
+    }
+    repositories {
+      name     = "mine"
+      url      = "https://apk.example.com/v3.22/main"
+      key_file = "keys/` + testApkKeyName + `"
+      tagged   = true
+    }
+    install {
+      name    = "containerd"
+      version = "1.7.27-r0"
+      hold    = true
+      roles   = ["client"]
+    }
+    install {
+      name       = "norca-agent"
+      repository = "mine"
+    }
+    install {
+      name = "norca"
+      file = "apks/norca-{arch}.apk"
+    }
+  }
+}
+inventory {
+  masters {
+    host = "10.0.0.1"
+    arch = "amd64"
+  }
+}
+`
+	fromYAML, err := Parse([]byte(yamlBody), FormatYAML, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromHCL, err := Parse([]byte(hclBody), FormatHCL, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromYAML.HostPackages, fromHCL.HostPackages) {
+		t.Fatalf("yaml %+v != hcl %+v", fromYAML.HostPackages.Apk, fromHCL.HostPackages.Apk)
+	}
+	apk := fromYAML.HostPackages.Apk
+	if !apk.Repositories[1].Tagged || apk.Install[1].Repository != "mine" {
+		t.Fatalf("apk block %+v", apk)
+	}
+	if got := fromYAML.ApkFile(&apk.Install[2], "arm64"); !strings.HasSuffix(got, filepath.Join("apks", "norca-aarch64.apk")) {
+		t.Fatalf("ApkFile arm64 = %s", got)
+	}
+	key, name, err := fromYAML.ApkRepositoryKey(&apk.Repositories[1])
+	if err != nil || name != testApkKeyName || string(key) != testApkKey {
+		t.Fatalf("ApkRepositoryKey = %q, %v", name, err)
+	}
+	if _, name, _ := fromYAML.ApkRepositoryKey(&apk.Repositories[0]); name != "" {
+		t.Fatalf("a repository without a key has the key %q", name)
+	}
+}
+
+// The rules of apk in the apk block: repositories with an RSA key under its
+// own name (or none), no credentials, tagged repositories for the packages
+// that name them, versions as version-rN.
+func TestValidateApkPackages(t *testing.T) {
+	valid := func() *DeploymentPlan {
+		p := validPlan()
+		p.HostPackages.Apk = &ApkPackages{
+			Repositories: []ApkRepository{
+				{Name: "community", URL: "https://dl-cdn.alpinelinux.org/alpine/v3.22/community"},
+				{Name: "mine", URL: "https://apk.example.com/v3.22/main", Key: testApkKey, KeyName: "packager-6b0763be.rsa.pub", Tagged: true},
+			},
+			Install: []HostPackage{
+				{Name: "containerd", Version: "1.7.27-r0", Hold: true},
+				{Name: "norca-agent", Version: "0.3.0_rc1-r2", Repository: "mine"},
+				{Name: "py3-yaml", Version: "6.0.2_git20240101-r1"},
+			},
+		}
+		return p
+	}
+	if err := valid().Validate(); err != nil {
+		t.Fatalf("valid plan rejected: %v", err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(a *ApkPackages)
+		err    string
+	}{
+		{"version with a letter", func(a *ApkPackages) { a.Install[0].Version = "1.1.1w-r0" }, ""},
+		{"http url", func(a *ApkPackages) { a.Repositories[0].URL = "http://mirror.example.com/alpine/v3.22/main" }, ""},
+		{"no url", func(a *ApkPackages) { a.Repositories[0].URL = "" }, `url "" must be an http(s) URL`},
+		{"file url", func(a *ApkPackages) { a.Repositories[0].URL = "/srv/repo" }, "must be an http(s) URL"},
+		{"credentials in the url", func(a *ApkPackages) { a.Repositories[0].URL = "https://u:p@apk.example.com/main" },
+			"no credentials: apk keeps them in /etc/apk/repositories"},
+		{"auth", func(a *ApkPackages) { a.Repositories[0].Auth = &RepositoryAuth{Username: "u", Password: "p"} },
+			"a private repository is reached through local .apk files (file) or a proxy"},
+		{"key without a name", func(a *ApkPackages) { a.Repositories[1].KeyName = "" }, "key needs key_name"},
+		{"key name without a key", func(a *ApkPackages) { a.Repositories[0].KeyName = "x.rsa.pub" }, "key_name needs key"},
+		{"key and key file", func(a *ApkPackages) { a.Repositories[1].KeyFile = "x.rsa.pub" }, "at most one of key or key_file"},
+		{"key name with a slash", func(a *ApkPackages) { a.Repositories[1].KeyName = "../x.rsa.pub" }, "invalid key name"},
+		{"key name without .pub", func(a *ApkPackages) { a.Repositories[1].KeyName = "packager.rsa" }, "invalid key name"},
+		{"openpgp key", func(a *ApkPackages) { a.Repositories[1].Key = testKey }, "an RSA public key in PEM"},
+		{"repository name", func(a *ApkPackages) { a.Repositories[0].Name = "Community" }, "must be lower case letters"},
+		{"duplicate repository", func(a *ApkPackages) { a.Repositories = append(a.Repositories, a.Repositories[0]) }, "duplicate repository name"},
+		{"repository role", func(a *ApkPackages) { a.Repositories[0].Roles = []string{"worker"} }, "unknown role"},
+		{"package name", func(a *ApkPackages) { a.Install[0].Name = "jq@edge" }, "invalid apk package name"},
+		{"version without the release", func(a *ApkPackages) { a.Install[0].Version = "1.7.27" }, "invalid apk version"},
+		{"debian version", func(a *ApkPackages) { a.Install[0].Version = "1.7.27-1" }, "invalid apk version"},
+		{"unknown repository", func(a *ApkPackages) { a.Install[1].Repository = "other" }, `repository "other" is no repository of host_packages.apk`},
+		{"untagged repository", func(a *ApkPackages) { a.Install[1].Repository = "community" }, "repository community is not tagged"},
+		{"repository of a file", func(a *ApkPackages) { a.Install[1].File = "x.apk" }, "a package of a local file has no repository"},
+		{"rpm file", func(a *ApkPackages) { a.Install[0].File = "x.rpm" }, "must be a .apk"},
+		{"duplicate package", func(a *ApkPackages) { a.Install = append(a.Install, a.Install[0]) }, "more than once"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := valid()
+			tt.mutate(p.HostPackages.Apk)
+			err := p.Validate()
+			if tt.err == "" {
+				if err != nil {
+					t.Fatalf("valid plan rejected: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.err) {
+				t.Fatalf("got %v, want an error with %q", err, tt.err)
+			}
+		})
+	}
+}
+
+// Two repositories may name the same key (the keys of Alpine sign main and
+// community), but not two different keys under one name.
+func TestApkKeysOfOneName(t *testing.T) {
+	dir := t.TempDir()
+	other := strings.Replace(testApkKey, "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAutQkua2CAig4VFSJ7v54",
+		"MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAutQkua2CAig4VFSJ7v55", 1)
+	for name, content := range map[string]string{"a/" + testApkKeyName: testApkKey, "b/" + testApkKeyName: testApkKey, "c/" + testApkKeyName: other} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := func(second string) *DeploymentPlan {
+		p := validPlan()
+		p.baseDir = dir
+		p.HostPackages.Apk = &ApkPackages{Repositories: []ApkRepository{
+			{Name: "main", URL: "https://dl-cdn.alpinelinux.org/alpine/v3.22/main", KeyFile: "a/" + testApkKeyName},
+			{Name: "community", URL: "https://dl-cdn.alpinelinux.org/alpine/v3.22/community", KeyFile: second + "/" + testApkKeyName},
+		}}
+		return p
+	}
+	if err := plan("b").Validate(); err != nil {
+		t.Fatalf("the same key twice: %v", err)
+	}
+	if err := plan("c").Validate(); err == nil || !strings.Contains(err.Error(), "two different keys named "+testApkKeyName) {
+		t.Fatalf("got %v, want the two keys of one name refused", err)
+	}
+}
+
+// release.source host-package: the package may be listed in the apk block.
+func TestHostPackageListedInApk(t *testing.T) {
+	p := validPlan()
+	p.Release = ReleaseConfig{Source: ReleaseHostPackage, Package: "norca"}
+	if err := p.Validate(); err == nil || !strings.Contains(err.Error(), "host_packages.apk.install") {
+		t.Fatalf("got %v, want the blocks named", err)
+	}
+	p.HostPackages.Apk = &ApkPackages{Install: []HostPackage{{Name: "norca", Version: "0.3.0-r0"}}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("the package of the apk block is not found: %v", err)
 	}
 }
