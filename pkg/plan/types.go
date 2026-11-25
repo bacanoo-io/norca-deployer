@@ -92,14 +92,16 @@ type HostPackages struct {
 	// Apt are the packages of the nodes whose package manager is apt
 	// (Debian, Ubuntu).
 	Apt *AptPackages `yaml:"apt,omitempty" json:"apt,omitempty"`
+	// Dnf are the packages of the nodes whose package manager is dnf
+	// (RHEL, Rocky Linux, AlmaLinux).
+	Dnf *DnfPackages `yaml:"dnf,omitempty" json:"dnf,omitempty"`
 
 	// The keys below are refused by Validate, with the reason: the lists
-	// of earlier plans moved into apt, and the blocks of dnf and apk are
-	// not supported yet. They are fields so that YAML and HCL do not drop
-	// them silently.
+	// of earlier plans moved into apt, and the block of apk is not
+	// supported yet. They are fields so that YAML and HCL do not drop them
+	// silently.
 	MovedRepositories []any `yaml:"repositories,omitempty" json:"repositories,omitempty"`
 	MovedInstall      []any `yaml:"install,omitempty" json:"install,omitempty"`
-	Dnf               any   `yaml:"dnf,omitempty" json:"dnf,omitempty"`
 	Apk               any   `yaml:"apk,omitempty" json:"apk,omitempty"`
 }
 
@@ -134,24 +136,68 @@ type AptRepository struct {
 	PinRelease string `yaml:"pin_release,omitempty" json:"pin_release,omitempty"`
 
 	// Auth is written to /etc/apt/auth.conf.d/norca-<name>.conf (0600).
-	Auth *AptAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
+	Auth *RepositoryAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
-type AptAuth struct {
+// RepositoryAuth are the credentials of a repository.
+type RepositoryAuth struct {
 	Username string `yaml:"username" json:"username"`
 	Password string `yaml:"password" json:"password"` // may be an !enc:v1 secret
+}
+
+// DnfPackages are the dnf repositories and the packages of the nodes whose
+// package manager is dnf.
+type DnfPackages struct {
+	Repositories []DnfRepository `yaml:"repositories,omitempty" json:"repositories,omitempty"`
+	Install      []HostPackage   `yaml:"install,omitempty" json:"install,omitempty"`
+}
+
+// DnfRepository is written as a repository file with its own key
+// (/etc/yum.repos.d/norca-<name>.repo with gpgcheck=1,
+// /etc/pki/rpm-gpg/norca-<name>.asc).
+type DnfRepository struct {
+	Name string `yaml:"name" json:"name"`
+	// BaseURL or Metalink locate the repository; the dnf variables
+	// $releasever and $basearch may be used.
+	BaseURL  string   `yaml:"baseurl,omitempty" json:"baseurl,omitempty"`
+	Metalink string   `yaml:"metalink,omitempty" json:"metalink,omitempty"`
+	Key      string   `yaml:"key,omitempty" json:"key,omitempty"`           // ASCII-armored OpenPGP public key (inline)
+	KeyFile  string   `yaml:"key_file,omitempty" json:"key_file,omitempty"` // ASCII-armored OpenPGP public key on the deployer machine
+	Roles    []string `yaml:"roles,omitempty" json:"roles,omitempty"`       // "master", "client"; empty = all nodes
+
+	// Priority is the priority= of the repository, 1 to 99: a lower number
+	// wins over the repositories with a higher one (dnf's default is 99);
+	// 0 = not set.
+	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
+	// Include limits the packages taken from the repository
+	// (includepkgs=); Exclude hides packages of it (excludepkgs=). Names
+	// and globs.
+	Include []string `yaml:"include,omitempty" json:"include,omitempty"`
+	Exclude []string `yaml:"exclude,omitempty" json:"exclude,omitempty"`
+
+	// Auth is written into the repository file (username=, password=),
+	// which is then readable by root only (0600).
+	Auth *RepositoryAuth `yaml:"auth,omitempty" json:"auth,omitempty"`
 }
 
 // HostPackage is installed from the repositories of its block, or from a
 // local package file that the deployer copies to the node (File).
 type HostPackage struct {
-	Name    string   `yaml:"name" json:"name"`
-	File    string   `yaml:"file,omitempty" json:"file,omitempty"`       // local .deb on the deployer machine ({arch} is replaced by the name of the manager)
-	SHA256  string   `yaml:"sha256,omitempty" json:"sha256,omitempty"`   // expected digest of File
-	Version string   `yaml:"version,omitempty" json:"version,omitempty"` // exact Debian version; empty = candidate version
-	Hold    bool     `yaml:"hold,omitempty" json:"hold,omitempty"`       // apt-mark hold after install
-	Roles   []string `yaml:"roles,omitempty" json:"roles,omitempty"`     // "master", "client"; empty = all nodes
-	Hosts   []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`     // host or hostname; empty = all nodes of the roles
+	Name string `yaml:"name" json:"name"`
+	// File is a local .deb (apt) or .rpm (dnf) on the deployer machine;
+	// {arch} is replaced by the architecture name of the block's manager
+	// (amd64 / x86_64).
+	File   string `yaml:"file,omitempty" json:"file,omitempty"`
+	SHA256 string `yaml:"sha256,omitempty" json:"sha256,omitempty"` // expected digest of File
+	// Version is the exact version: a Debian version for apt (empty = the
+	// candidate version), [epoch:]version-release for dnf (empty = the
+	// version dnf finds when the package is missing).
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	// Hold keeps the package at its version: apt-mark hold for apt, a
+	// versionlock entry for dnf.
+	Hold  bool     `yaml:"hold,omitempty" json:"hold,omitempty"`
+	Roles []string `yaml:"roles,omitempty" json:"roles,omitempty"` // "master", "client"; empty = all nodes
+	Hosts []string `yaml:"hosts,omitempty" json:"hosts,omitempty"` // host or hostname; empty = all nodes of the roles
 }
 
 // ScriptConfig is a script run on the Linux nodes at a given phase.
@@ -788,7 +834,7 @@ type NodeConfig struct {
 // detection: every key is optional.
 type HostFacts struct {
 	Family         string `yaml:"family,omitempty" json:"family,omitempty"`                   // debian, rhel, alpine
-	PackageManager string `yaml:"package_manager,omitempty" json:"package_manager,omitempty"` // apt, none (dnf and apk follow)
+	PackageManager string `yaml:"package_manager,omitempty" json:"package_manager,omitempty"` // apt, dnf, none (apk follows)
 	Init           string `yaml:"init,omitempty" json:"init,omitempty"`                       // systemd (openrc follows)
 }
 

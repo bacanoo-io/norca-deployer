@@ -135,7 +135,7 @@ func TestScriptsAndPackages(t *testing.T) {
 			Name: "backports", URI: "https://deb.debian.org/debian", Suite: "bookworm-backports",
 			Components: []string{"main"}, KeyFile: keyFile,
 			PinPriority: 200, PinPackages: []string{"jq"}, PinRelease: "n=bookworm-backports",
-			Auth: &config.AptAuth{Username: "nobody", Password: "unused"},
+			Auth: &config.RepositoryAuth{Username: "nobody", Password: "unused"},
 		}},
 		Install: []config.HostPackage{
 			{Name: "jq"},

@@ -56,7 +56,7 @@ func TestRenderPreferencesAndAuth(t *testing.T) {
 	repo := &config.AptRepository{
 		Name: "vendor", URI: "https://user@pkgs.example.com/debian/", PinPriority: 1001,
 		PinPackages: []string{"redis*", "norca-redis"},
-		Auth:        &config.AptAuth{Username: "deploy", Password: "!enc:x"},
+		Auth:        &config.RepositoryAuth{Username: "deploy", Password: "!enc:x"},
 	}
 	pref := RenderPreferences(repo)
 	for _, want := range []string{"Package: redis* norca-redis\n", `Pin: origin "pkgs.example.com"`, "Pin-Priority: 1001\n"} {
@@ -136,7 +136,7 @@ func fileOf(s *step.Step, path string) *step.File {
 func TestSteps(t *testing.T) {
 	hp := testHostPackages()
 	hp.Apt.Repositories[0].PinPriority = 900
-	hp.Apt.Repositories[0].Auth = &config.AptAuth{Username: "u", Password: "!enc:secret"}
+	hp.Apt.Repositories[0].Auth = &config.RepositoryAuth{Username: "u", Password: "!enc:secret"}
 	plan := &config.DeploymentPlan{HostPackages: hp}
 	resolve := func(v string) (string, error) { return strings.TrimPrefix(v, "!enc:"), nil }
 

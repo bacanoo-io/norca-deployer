@@ -133,7 +133,7 @@ func (p *DeploymentPlan) validateCluster() error {
 		// for the node is checked with the facts of the nodes, before the
 		// first change.
 		if !p.hostPackageListed(r.Package) {
-			return fmt.Errorf("release.source host-package: host_packages must install %q (in the block of the package manager of the nodes, e.g. host_packages.apt.install)", r.Package)
+			return fmt.Errorf("release.source host-package: host_packages must install %q (in the block of the package manager of the nodes: host_packages.apt.install, host_packages.dnf.install)", r.Package)
 		}
 	default:
 		return fmt.Errorf("release.source %q must be official, custom-url, local-path or host-package", r.Source)
@@ -245,13 +245,18 @@ func (p *DeploymentPlan) NodeDatacenter(n *NodeConfig) string {
 // hostPackageListed reports whether a block of host_packages has the
 // package.
 func (p *DeploymentPlan) hostPackageListed(name string) bool {
-	apt := p.AptPackages()
-	if apt == nil {
-		return false
+	var lists [][]HostPackage
+	if apt := p.AptPackages(); apt != nil {
+		lists = append(lists, apt.Install)
 	}
-	for _, hp := range apt.Install {
-		if hp.Name == name {
-			return true
+	if dnf := p.DnfPackages(); dnf != nil {
+		lists = append(lists, dnf.Install)
+	}
+	for _, list := range lists {
+		for _, hp := range list {
+			if hp.Name == name {
+				return true
+			}
 		}
 	}
 	return false
@@ -295,11 +300,11 @@ func validateHostFacts(n *NodeConfig) error {
 		return fmt.Errorf("host_facts.family %q must be debian, rhel or alpine", hf.Family)
 	}
 	switch hf.PackageManager {
-	case "", PackageManagerApt, PackageManagerNone:
-	case PackageManagerDnf, PackageManagerApk:
-		return fmt.Errorf("host_facts.package_manager %s is not supported yet (the deployer drives apt; dnf and apk are planned)", hf.PackageManager)
+	case "", PackageManagerApt, PackageManagerDnf, PackageManagerNone:
+	case PackageManagerApk:
+		return fmt.Errorf("host_facts.package_manager apk is not supported yet (the deployer drives apt and dnf; apk is planned)")
 	default:
-		return fmt.Errorf("host_facts.package_manager %q must be apt or none", hf.PackageManager)
+		return fmt.Errorf("host_facts.package_manager %q must be apt, dnf or none", hf.PackageManager)
 	}
 	switch hf.Init {
 	case "", InitSystemd:
