@@ -19,7 +19,7 @@ A scaled node is a Linux client of the plan. Before its bootstrap runs, the mach
 | `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download` |
 | The directories: bin `0755`, config `0750`, data `0750`, log `0750`, tls `0700`, CNI bin and config `0755` | `paths.linux` | the same modes as `apply` |
 | The systemd unit of the agent, enabled but not started | `/etc/systemd/system/norca.service` | the unit `apply` writes, with `tuning.file_descriptor_limit` |
-| The host packages of a client (Docker, for example) | APT | `host_packages.apt` with the role `client` (or no role) |
+| The host packages of a client (Docker, for example) | APT (Debian, Ubuntu) or dnf (RHEL, Rocky Linux, AlmaLinux) | `host_packages.apt` and `host_packages.dnf` with the role `client` (or no role) |
 | The sysctl tuning and the kernel modules | `/etc/sysctl.d/99-norca-production.conf`, `/etc/modules-load.d/norca-bridge.conf` | `tuning.apply_sysctl` |
 | A TPM 2.0, only for keys in the TPM (`join_key_store` of the operator `tpm` or `auto`) | `/dev/tpmrm0` | the machine: a virtual TPM on clouds (Google Shielded VM, Azure Trusted Launch, AWS NitroTPM), the firmware TPM on hardware |
 
@@ -68,14 +68,15 @@ The keys are in the [configuration reference](configuration.md#node_scaling).
 - The release and the CNI plugins must be downloadable: `release.source` `official`,
   `custom-url` or `host-package`, and `cni.source` not `local-path`. The plan check refuses
   `local-path` with `boot`.
-- An APT repository with `auth` is refused: its password would travel in the user data of every
-  machine (`... has credentials: at boot they would travel in the user data of the machine; use
-  node_scaling.machine.install: image`).
+- An APT or dnf repository with `auth` is refused: its password would travel in the user data of
+  every machine (`... has credentials: at boot they would travel in the user data of the machine;
+  use node_scaling.machine.install: image`).
 - One region has one bootstrap Variable, so the script is for one architecture
   (`node_scaling.machine.arch`). Machines of another architecture need an image built with
   `install-script --arch`.
-- The script travels in the user data, base64 encoded. A plan with APT repositories and their
-  keys makes it larger: a cloud with a small user data limit (16 KB on some) may need `image`.
+- The script travels in the user data, base64 encoded. A plan with repositories and their keys,
+  and with both `apt` and `dnf` blocks, makes it larger: a cloud with a small user data limit
+  (16 KB on some) may need `image`.
 
 ### Generate the script
 
@@ -111,16 +112,26 @@ The script runs as root under `set -eu` in `sh` (dash, bash or busybox ash), and
 it writes a file only when its content or mode differs, and a second run changes nothing (it ends
 with `done: nothing to change`). It first finds out the family of the machine from
 `/etc/os-release` (its `ID`, then `ID_LIKE`, as `apply` does over SSH) and runs the packages and
-the service of that family. It has the steps of the Debian family (Debian, Ubuntu); on another
-family it stops before it changes anything: `this script has no install for rocky (family rhel);
-it installs on the families: debian`. In order:
+the service of that family. It has the steps of the families a client of `apply` would be
+installed on: the Debian family (Debian, Ubuntu; `host_packages.apt`) and the RHEL family (RHEL,
+Rocky Linux, AlmaLinux; `host_packages.dnf`). A family whose block is missing while the other
+block has packages for the clients is left out, as `apply` refuses such a node; on a machine of a
+family it has no steps of, the script stops before it changes anything: `this script has no
+install for rocky (family rhel); it installs on the families: debian`. In order:
 
-1. **Host packages** of a client (`host_packages.apt`): the keyring, the deb822 source, the pin
-   and the credentials of each repository, `apt-get update` and `apt-get install` (on every run
-   while `update_cache` is on, as `apply` does; otherwise only when a package is missing or not at
-   its version), `apt-mark hold`/`unhold`, and a check of the installed versions. It writes the
-   same files as `apply`. A package from a local `.deb` file cannot be downloaded: the script
-   checks that it is installed and says to install it into the image first.
+1. **Host packages** of a client, with the manager of the family:
+   - `host_packages.apt`: the keyring, the deb822 source, the pin and the credentials of each
+     repository, `apt-get update` and `apt-get install` (on every run while `update_cache` is on,
+     as `apply` does; otherwise only when a package is missing or not at its version),
+     `apt-mark hold`/`unhold`, and a check of the installed versions.
+   - `host_packages.dnf`: the key and the repository file of each repository (with `dnf makecache`
+     of it when they changed), `dnf install` of the packages that are missing or not at their
+     version, the versionlock command (installed when a package is held) and the holds, and a
+     check of the installed versions.
+
+   It writes the same files as `apply`. A package from a local `.deb` or `.rpm` file cannot be
+   downloaded: the script checks that it is installed and says to install it into the image
+   first.
 2. **sysctl tuning**: the modules file (`/etc/modules-load.d/norca-bridge.conf`, so the modules
    load at boot) and the sysctl file, `modprobe` and `sysctl --system`. A module that cannot be
    loaded now is a warning; a failed `sysctl --system` is a warning where `/proc/sys` cannot be
@@ -155,10 +166,14 @@ it installs on the families: debian`. In order:
    built in a container) the script enables the unit with the link
    `/etc/systemd/system/multi-user.target.wants/norca.service`, which is what `systemctl enable`
    creates, and says so.
+8. **On RHEL, the SELinux labels**: when the run changed something and `getenforce` says
+   SELinux is not disabled, `restorecon` restores the labels of what the script wrote, as `apply`
+   does (see [SELinux](host-packages-and-scripts.md#selinux)). Under SELinux enforcing the script
+   warns once at its start: Norca under SELinux enforcing is not verified yet.
 
 The downloads use `curl`, or `wget` when there is no `curl`. The script needs `sha256sum`, `tar`,
-`base64`, `cmp`, `stat` and `mktemp` (GNU coreutils or busybox), and `apt-get` only with host
-packages. It needs no `bash`.
+`install`, `base64`, `find`, `stat` and `mktemp` (GNU coreutils or busybox; a minimal RHEL image
+has them all), and `apt-get` or `dnf` only with host packages. It needs no `bash` and no `cmp`.
 
 An excerpt of a generated script (defaults of the plan, `install: image`):
 
@@ -175,8 +190,8 @@ umask 022
 os_id=$(os_release ID)
 os_family=$(family_of "$os_id" "$(os_release ID_LIKE)")
 case $os_family in
-debian) log "family $os_family (${os_id})" ;;
-*) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: debian" ;;
+debian | rhel) log "family $os_family (${os_id})" ;;
+*) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: debian, rhel" ;;
 esac
 ...
 # directories
@@ -201,6 +216,7 @@ fi
 ...
 case $os_family in
 debian) service_debian ;;
+rhel) service_rhel ;;
 esac
 ```
 

@@ -15,9 +15,15 @@ Before it changes anything, `apply` finds out what every node is (`/etc/os-relea
 | Family | Systems | Package manager | Status |
 | --- | --- | --- | --- |
 | Debian | Debian 11+, Ubuntu 20.04+ (and systems with `ID_LIKE=debian`) | `apt` (`host_packages.apt`) | supported |
-| RHEL | RHEL 9+, Rocky Linux 9+, AlmaLinux 9+ | `dnf` | planned: a node without `host_packages` works with systemd, `host_packages.dnf` is not accepted yet |
+| RHEL | RHEL 9+, Rocky Linux 9+, AlmaLinux 9+ (RHEL 10 included; Fedora is detected as this family but not tested) | `dnf` (`host_packages.dnf`) | supported; SELinux enforcing: see below |
 | Alpine | Alpine with a musl build of Norca | `apk` | planned |
 | Windows | Windows Server with OpenSSH | none | supported (no `host_packages`) |
+
+RHEL 8 and its rebuilds are refused before anything is changed: the Norca binary needs glibc 2.34, which RHEL 8 (glibc 2.28) does not have.
+
+**SELinux (RHEL):** the deployer restores the SELinux labels of what it writes (`restorecon`) when SELinux is enforcing or permissive. Norca under SELinux enforcing is not verified yet: `apply` prints one warning per node under enforcing and goes on; set SELinux to permissive if the agent or its drivers are denied.
+
+**Firewall:** `apply_firewall_rules` uses an active ufw, a running firewalld (the default on RHEL), else nftables (a table of the deployer), else iptables; see [Networking and tuning](networking-and-tuning.md#firewall).
 
 When the detection is wrong, set the right values in [`host_facts`](configuration.md#host_facts) of the node.
 

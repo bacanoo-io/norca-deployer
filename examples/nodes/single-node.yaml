@@ -43,7 +43,7 @@ upgrade:
 
 tuning:
   apply_sysctl: true                # Write /etc/sysctl.d/99-norca-production.conf and load bridge/br_netfilter.
-  apply_firewall_rules: true        # Open the Norca ports in ufw/firewalld (or iptables as a fallback).
+  apply_firewall_rules: true        # Open the Norca ports in ufw/firewalld/nftables (or iptables as a fallback).
   open_ephemeral_ports: true        # Also open 20000-32000, the dynamic ports of the allocations.
   setup_logrotate: true             # Let the agent log to /var/log/norca/norca.log with size-based rotation.
   file_descriptor_limit: 65536      # LimitNOFILE of the systemd unit.
@@ -51,8 +51,8 @@ tuning:
     api_cidrs: [192.168.1.0/24]     # Only the local network may use the API and UI (4646).
     ephemeral_cidrs: [192.168.1.0/24]   # ...and the allocation ports 20000-32000 (host mode;
                                         # allocations in bridge mode are not limited).
-    # default_deny: true            # Enable ufw and deny everything else (SSH stays open);
-                                    # needs the ufw package (add it to host_packages).
+    # default_deny: true            # Deny everything else (SSH stays open): the nftables table
+                                    # of the deployer (nft), or ufw when nft is missing.
 
 network:
   bind_address: 0.0.0.0             # Address the agent listens on.

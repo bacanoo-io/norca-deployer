@@ -60,7 +60,7 @@ The body of the block is taken as it is written, one level of indentation less: 
 | `bus` | | Settings of the system bus of the servers |
 | `federation` | | Multi-region settings |
 | `consul` | | A Consul agent on every node; without it the agents do not use Consul |
-| `host_packages` | | Packages of the Linux nodes, one block per package manager (`apt`) |
+| `host_packages` | | Packages of the Linux nodes, one block per package manager (`apt`, `dnf`) |
 | `scripts` | | Bash scripts |
 | `client_defaults` | | Client settings merged into every node that runs a client |
 | `node_pools` | | Node pool descriptions |
@@ -84,7 +84,7 @@ The body of the block is taken as it is written, one level of indentation less: 
 | Key | Default | Description |
 | --- | --- | --- |
 | `version` | `v0.1.0` | Release tag (`v1.2.3`) for `official` and `custom-url` |
-| `source` | `official` | `official`: GitHub release archive verified with `SHA256SUMS`. `custom-url`: same layout under `download_base_url`. `local-path`: binary or archive from the operator machine. `host-package`: the binary comes from a Debian package installed by `host_packages` |
+| `source` | `official` | `official`: GitHub release archive verified with `SHA256SUMS`. `custom-url`: same layout under `download_base_url`. `local-path`: binary or archive from the operator machine. `host-package`: the binary comes from a package installed by `host_packages` (apt or dnf) |
 | `download_base_url` | GitHub releases of Norca | Base URL for `official` / `custom-url` |
 | `local_binary_path` | | File for `local-path`: a binary or a `.tar.gz` / `.zip` archive; `{os}` and `{arch}` are replaced |
 | `checksum_sha256` | | Optional digest the artifact must match |
@@ -123,7 +123,7 @@ The body of the block is taken as it is written, one level of indentation less: 
 | `firewall.api_cidrs` | any | Sources for the HTTP API and UI |
 | `firewall.leafnode_cidrs` | `api_cidrs` | Sources of the leaf nodes of the system bus (with `bus.leafnodes`) |
 | `firewall.ephemeral_cidrs` | `cluster_cidrs` | Sources for the allocation ports |
-| `firewall.default_deny` | `false` | Turn ufw on and deny other incoming traffic; SSH stays open |
+| `firewall.default_deny` | `false` | Deny other incoming traffic (the nftables table of the deployer, or ufw turned on); SSH stays open |
 | `firewall.extra_ports[]` | | Static workload ports: `port`, `proto`, `cidrs`, `roles` |
 | `setup_logrotate` | `false` | Agent log file in `log_dir` with rotation |
 | `windows_long_paths` | `false` | `LongPathsEnabled` and execution policy on Windows |
@@ -272,13 +272,15 @@ See [DNS of the hosts: the consul domain](networking-and-tuning.md#dns-of-the-ho
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `update_cache` | `true` | Refresh the package index before installing (`apt-get update`) |
-| `lock_timeout` | `300` | Wait for the lock of the package manager in seconds |
+| `update_cache` | `true` | Refresh the package index before installing (`apt-get update`; `dnf install --refresh`) |
+| `lock_timeout` | `300` | Wait for the lock of the package manager (apt) or for the other dnf, yum and rpm processes (dnf) in seconds |
 | `apt.repositories[]` | | `name`, `uri`, `suite`, `components`, `architectures`, `key` or `key_file`, `roles`, `pin_priority`, `pin_packages`, `pin_release`, `auth.username`, `auth.password` |
-| `apt.install[]` | | `name`, `version`, `hold`, `file`, `sha256`, `roles`, `hosts` |
-| `dnf`, `apk` | | Planned (RHEL, Alpine); refused for now |
+| `apt.install[]` | | `name`, `version` (Debian version), `hold`, `file` (`.deb`), `sha256`, `roles`, `hosts` |
+| `dnf.repositories[]` | | `name`, `baseurl` or `metalink`, `key` or `key_file` (ASCII-armored), `priority` (1-99), `include`, `exclude`, `auth.username`, `auth.password`, `roles` |
+| `dnf.install[]` | | `name`, `version` (`[epoch:]version-release`), `hold` (versionlock), `file` (`.rpm`), `sha256`, `roles`, `hosts` |
+| `apk` | | Planned (Alpine); refused for now |
 
-A node takes only the block of its package manager (`apt` on Debian and Ubuntu). The lists `repositories` and `install` directly under `host_packages` are refused: they belong into `apt`.
+A node takes only the block of its package manager (`apt` on Debian and Ubuntu, `dnf` on RHEL, Rocky Linux and AlmaLinux). A key of the other block's repositories (`suite` in `dnf`, `baseurl` in `apt`) is an error. The lists `repositories` and `install` directly under `host_packages` are refused: they belong into `apt`.
 
 See [Host packages and scripts](host-packages-and-scripts.md).
 
@@ -456,7 +458,7 @@ Set a key of `host_facts` only when the detection is wrong; the value is taken a
 | Key | Values | Description |
 | --- | --- | --- |
 | `family` | `debian`, `rhel`, `alpine` | The family of the operating system (Ubuntu is `debian`) |
-| `package_manager` | `apt`, `none` | `none`: a system without a package manager; `host_packages` for the node are an error |
+| `package_manager` | `apt`, `dnf`, `none` | `none`: a system without a package manager; `host_packages` for the node are an error |
 | `init` | `systemd` | The init system that runs the agent |
 
 ### decommission

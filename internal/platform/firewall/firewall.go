@@ -612,7 +612,7 @@ func configureIPTables(conn connector.Connector, s Spec) (*Result, error) {
 
 	if out, _ := conn.ExecuteCommand("iptables -S INPUT | head -1"); strings.Contains(out, "-P INPUT ACCEPT") {
 		res.Warnings = append(res.Warnings, "the iptables INPUT policy is ACCEPT, so these rules restrict nothing; "+
-			"install ufw and set tuning.firewall.default_deny to filter traffic")
+			"install nftables (nft) or ufw and set tuning.firewall.default_deny to filter traffic")
 	}
 	return res, nil
 }

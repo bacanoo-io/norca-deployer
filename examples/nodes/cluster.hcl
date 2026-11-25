@@ -72,7 +72,7 @@ tuning {
       cidrs = ["10.8.0.0/24"]
       roles = ["client"]
     }
-    default_deny  = true               # ufw on, everything else denied; SSH stays open.
+    default_deny  = true               # Everything else denied (nftables or ufw); SSH stays open.
   }
 }
 
@@ -198,7 +198,35 @@ host_packages {
       name = "chrony"                    # Time sync on every node.
     }
     install {
-      name = "ufw"                       # Firewall for default_deny.
+      name = "nftables"                  # nft, for the firewall of default_deny.
+    }
+  }
+
+  dnf {                                # Nodes whose package manager is dnf (RHEL, Rocky Linux, AlmaLinux 9+).
+    repositories {
+      name     = "docker"                # -> /etc/yum.repos.d/norca-docker.repo (gpgcheck=1)
+      baseurl  = "https://download.docker.com/linux/rhel/$releasever/$basearch/stable"
+      key_file = "keys/docker.asc"       # ASCII-armored.
+      priority = 10                      # Lower wins; dnf's default is 99.
+      include  = ["containerd.io", "docker-ce", "docker-ce-cli"]
+      roles    = ["client"]
+    }
+    install {
+      name  = "docker-ce"
+      roles = ["client"]
+    }
+    install {
+      name  = "docker-ce-cli"
+      roles = ["client"]
+    }
+    install {
+      name    = "containerd.io"
+      version = "1.7.27-3.1.el9"         # [epoch:]version-release; held with versionlock.
+      hold    = true
+      roles   = ["client"]
+    }
+    install {
+      name = "chrony"
     }
   }
 }

@@ -58,7 +58,7 @@ paths:
 
 tuning:
   apply_sysctl: true                # Kernel parameters and bridge modules for container networking.
-  apply_firewall_rules: true        # Open 4646-4648 in ufw/firewalld/iptables (Windows Firewall on Windows).
+  apply_firewall_rules: true        # Open 4646-4648 in ufw/firewalld/nftables/iptables (not on Windows).
   open_ephemeral_ports: true        # Open 20000-32000 on the clients for the allocations.
   setup_logrotate: true             # Agent log file with size-based rotation.
   windows_long_paths: true          # Enable LongPathsEnabled on Windows nodes.
@@ -76,9 +76,10 @@ tuning:
       - port: "4222"                # NATS clients (nats module); 6222 routes and 8222 monitoring
         cidrs: [10.8.0.0/24]        # only matter between the NATS servers / for operators.
         roles: [client]             # Default: the nodes that run a client; proto tcp (udp, both).
-    default_deny: true              # Enable ufw and deny all other incoming traffic. The SSH
-                                    # port the deployer uses (and every port sshd listens on)
-                                    # stays open. Needs ufw (installed below) or firewalld.
+    default_deny: true              # Deny all other incoming traffic (the nftables table of the
+                                    # deployer, or ufw). The SSH port the deployer uses (and
+                                    # every port sshd listens on) stays open. Needs nft
+                                    # (nftables, installed below), ufw or firewalld.
 
 network:
   bind_address: 0.0.0.0             # Listen on all addresses.
@@ -156,9 +157,9 @@ bus:                                # The same bus block on every server (the sy
                                     # a write beyond it fails. Its values are encrypted with the keyring.
 
 host_packages:
-  update_cache: true                # apt-get update before installing (skipped on offline nodes).
-  lock_timeout: 300                 # Seconds to wait for the dpkg lock.
-  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); dnf and apk follow.
+  update_cache: true                # apt-get update / dnf --refresh before installing (skipped on offline nodes).
+  lock_timeout: 300                 # Seconds to wait for the dpkg lock / for other dnf and rpm processes.
+  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); apk follows.
     repositories:
       - name: docker                  # -> /etc/apt/sources.list.d/norca-docker.sources
         uri: https://download.docker.com/linux/debian
@@ -194,11 +195,30 @@ host_packages:
       - name: containerd.io
         roles: [client]
       - name: chrony                  # Time sync on every node (Raft and TLS need correct clocks).
-      - name: ufw                     # Firewall for tuning.firewall.default_deny.
+      - name: nftables                # nft, for the firewall of tuning.firewall.default_deny.
       # - name: mycorp-agent
       #   version: "2.4.1-1"          # Exact Debian version; empty = candidate version.
       #   hold: true
       #   hosts: [norca-worker-01]    # Only on these nodes (host or hostname).
+  dnf:                              # Nodes whose package manager is dnf (RHEL, Rocky Linux, AlmaLinux 9+).
+    repositories:
+      - name: docker                  # -> /etc/yum.repos.d/norca-docker.repo (gpgcheck=1)
+        baseurl: https://download.docker.com/linux/rhel/$releasever/$basearch/stable
+        key_file: keys/docker.asc     # Uploaded as /etc/pki/rpm-gpg/norca-docker.asc (ASCII-armored).
+        priority: 10                  # Lower wins; dnf's default is 99.
+        include: [containerd.io, docker-ce, docker-ce-cli]   # includepkgs
+        roles: [client]
+    install:
+      - name: docker-ce
+        roles: [client]
+      - name: docker-ce-cli
+        roles: [client]
+      - name: containerd.io
+        version: "1.7.27-3.1.el9"     # [epoch:]version-release; without a version a package is
+        hold: true                    # installed once (dnf install does not upgrade). versionlock.
+        roles: [client]
+      - name: chrony
+      # The firewall of RHEL is firewalld, which runs by default.
 
 scripts:
   - name: prepare-data-disk
