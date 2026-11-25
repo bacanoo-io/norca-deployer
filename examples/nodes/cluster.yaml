@@ -29,7 +29,7 @@ release:
   # repository or a local .deb). The package installs norca; the
   # deployer only checks the binary:
   # source: host-package
-  # package: norca                  # The package name (default norca); add it to host_packages.install.
+  # package: norca                  # The package name (default norca); add it to host_packages.apt.install.
 
 cni:
   install: true                     # CNI plugins on the Linux clients (bridge networking).

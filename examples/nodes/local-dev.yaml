@@ -32,7 +32,7 @@ release:
   # apt from a local file:
   # source: host-package
   # package: norca
-  # (and under host_packages.install:  - {name: norca, file: ../norca/dist/norca_0.2.0-1_amd64.deb})
+  # (and under host_packages.apt.install:  - {name: norca, file: ../norca/dist/norca_0.2.0-1_amd64.deb})
 
 cni:
   install: true                     # CNI plugins for bridge networking (network { mode = "bridge" }).
@@ -63,8 +63,9 @@ security:
 # Docker for the docker driver, from the Debian/Ubuntu archive. Uncomment on a
 # Debian-based machine without Docker; skip it if Docker is already installed.
 # host_packages:
-#   install:
-#     - name: docker.io
+#   apt:
+#     install:
+#       - name: docker.io
 
 inventory:
   masters:
