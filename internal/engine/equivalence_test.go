@@ -1,3 +1,5 @@
+//go:build equivalence
+
 package engine
 
 import (
@@ -28,6 +30,12 @@ import (
 // separator of the OS), NORCA_EQUIV_OUT the directory of the transcripts:
 // <plan>.txt with every node of the plan, provisioned twice on the same fake
 // host (a fresh node, then the same node again).
+//
+// The test is behind the build tag equivalence: its plans come from the
+// environment, which the taint analysis of gosec follows into the file
+// paths of the plans that prepareNode opens.
+//
+//	NORCA_EQUIV_OUT=<dir> NORCA_EQUIV_PLANS=<plans> go test -tags equivalence -run TestRecordPrepareNode ./internal/engine/
 //
 // The fake host keeps the files written to it, answers sha256sum, mv and
 // rm on them, answers the package queries with the versions of the plan and
