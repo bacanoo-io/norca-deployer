@@ -28,6 +28,7 @@ func (r *Runner) configureHostDNS(t *target) error {
 	if err != nil {
 		return err
 	}
+	t.wrote = t.wrote || len(res.Changed) > 0
 	if res.Bridge.IsValid() {
 		t.hostDNSSources = []string{res.Bridge.Masked().String()}
 	}

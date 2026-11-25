@@ -236,6 +236,13 @@ func recordPlan(t *testing.T, file string) (string, []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return recordPlanWith(t, plan, equivProbe)
+}
+
+// recordPlanWith is recordPlan for a loaded plan on nodes that answer the
+// probe of the facts with probe.
+func recordPlanWith(t *testing.T, plan *config.DeploymentPlan, probe string) (string, []string) {
+	t.Helper()
 	equivArtifacts(t, plan)
 	r := NewRunner(plan, nil)
 	r.artifacts = artifacts.NewResolver(plan, t.TempDir())
@@ -246,7 +253,7 @@ func recordPlan(t *testing.T, file string) (string, []string) {
 	for _, tg := range nodes {
 		debs, versions := equivPackages(plan, tg.node.Arch)
 		h := &equivHost{files: map[string][]byte{}, modes: map[string]os.FileMode{}, debs: debs, versions: versions,
-			probe: equivProbe}
+			probe: probe}
 		r.connect = func(*config.NodeConfig) (connector.Connector, error) { return h, nil }
 		for run := 1; run <= 2; run++ {
 			h.fresh = run == 1

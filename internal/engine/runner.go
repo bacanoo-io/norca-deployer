@@ -117,7 +117,10 @@ type target struct {
 	facts   *host.Facts
 	drivers *platform.Drivers
 
-	changed    bool // binary, certificates, configuration or service changed
+	changed bool // binary, certificates, configuration or service changed
+	// wrote: a step of the apply changed something on the node (a file,
+	// a directory, a package), for the SELinux labels.
+	wrote      bool
 	wasRunning bool
 	err        error
 
@@ -380,6 +383,7 @@ func (r *Runner) prepareNode(t *target) error {
 	if err != nil {
 		return fmt.Errorf("norca binary: %w", err)
 	}
+	t.wrote = t.wrote || res.Changed
 	if res.Changed && len(bin.Files) > 0 {
 		fmt.Printf("    -> [%s] norca binary %s installed\n", node.Host, r.plan.Release.Version)
 	}
@@ -430,6 +434,11 @@ func (r *Runner) prepareNode(t *target) error {
 	// 8. Register the service (started by the rolling restart)
 	svc := t.serviceManager()
 	if err := r.runSteps(t, "service installation error", svc.InstallSteps(paths, r.plan.Tuning.FileDescriptorLimit)); err != nil {
+		return err
+	}
+	// 9. The SELinux labels of what was written (RHEL), before the
+	// rolling restart starts the agent.
+	if err := r.restoreSELinuxLabels(t); err != nil {
 		return err
 	}
 	t.wasRunning = svc.IsRunning(conn)

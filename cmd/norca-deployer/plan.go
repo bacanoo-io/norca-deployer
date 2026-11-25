@@ -96,6 +96,24 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(out, "  - %s=%s hold=%t %s\n", p.Name, version, p.Hold, rolesLabel(p.Roles, p.Hosts))
 				}
 			}
+			if hp := plan.DnfPackages(); hp != nil {
+				fmt.Fprintf(out, "dnf Repositories (%d):\n", len(hp.Repositories))
+				for _, r := range hp.Repositories {
+					location := r.BaseURL
+					if location == "" {
+						location = "metalink " + r.Metalink
+					}
+					fmt.Fprintf(out, "  - %s: %s priority=%d %s\n", r.Name, location, r.Priority, rolesLabel(r.Roles, nil))
+				}
+				fmt.Fprintf(out, "Host Packages of dnf (%d):\n", len(hp.Install))
+				for _, p := range hp.Install {
+					version := p.Version
+					if version == "" {
+						version = "any"
+					}
+					fmt.Fprintf(out, "  - %s-%s hold=%t %s\n", p.Name, version, p.Hold, rolesLabel(p.Roles, p.Hosts))
+				}
+			}
 			if len(plan.Scripts) > 0 {
 				fmt.Fprintf(out, "Scripts (%d):\n", len(plan.Scripts))
 				for _, s := range plan.Scripts {

@@ -4,8 +4,10 @@ import (
 	"fmt"
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/selinux"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
@@ -122,13 +124,15 @@ func (r *Runner) cniStep(t *target) (step.Step, error) {
 }
 
 // packageSelection is what the block of the node's package manager selects
-// for it: the apt block for apt (or a node without facts), nothing for
-// another manager (checkFacts refused a plan that gives it packages).
+// for it (apt for a node without facts); nothing for a manager without a
+// block (checkFacts refused a plan that gives it packages in another one).
 func packageSelection(plan *config.DeploymentPlan, t *target) *packages.Selection {
-	if t.facts != nil && t.facts.PackageManager != config.PackageManagerApt {
-		return &packages.Selection{}
+	manager := config.PackageManagerApt
+	if t.facts != nil {
+		manager = t.facts.PackageManager
 	}
-	return packages.Select(plan.AptPackages(), t.node, t.isMaster)
+	sel, _ := packages.Block(plan.HostPackages, manager, t.node, t.isMaster)
+	return sel
 }
 
 // defaultDrivers are the drivers of a node without facts: apt and systemd
@@ -153,10 +157,22 @@ func (t *target) serviceManager() service.Manager {
 // needs the agent restarted; what names the steps in the error.
 func (r *Runner) runSteps(t *target, what string, steps []step.Step) error {
 	ex := &step.Executor{Conn: t.conn, Host: t.node.Host, Windows: t.isWindows()}
-	_, restart, err := ex.RunAll(r.abortCtx(), steps)
+	changed, restart, err := ex.RunAll(r.abortCtx(), steps)
+	t.wrote = t.wrote || changed
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	t.changed = t.changed || restart
 	return nil
+}
+
+// restoreSELinuxLabels restores the SELinux labels of what the deployer
+// wrote on a RHEL node whose SELinux labels files, when the apply changed
+// something there.
+func (r *Runner) restoreSELinuxLabels(t *target) error {
+	f := t.facts
+	if f == nil || f.Family != host.FamilyRHEL || !f.SELinuxActive() || !(t.wrote || t.changed) {
+		return nil
+	}
+	return r.runSteps(t, "SELinux labels", []step.Step{selinux.RestoreStep(selinux.NodePaths(t.paths), false)})
 }

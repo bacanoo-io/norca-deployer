@@ -21,13 +21,15 @@ type Drivers struct {
 }
 
 // For returns the drivers of a node. A package manager the deployer does
-// not drive yet (dnf, apk) gets a driver that refuses packages; an init
-// system without a driver (OpenRC) is an error.
+// not drive yet (apk) gets a driver that refuses packages; an init system
+// without a driver (OpenRC) is an error.
 func For(f *host.Facts) (*Drivers, error) {
 	d := &Drivers{}
 	switch f.PackageManager {
 	case config.PackageManagerApt:
 		d.Packages = packages.Apt{}
+	case config.PackageManagerDnf:
+		d.Packages = packages.Dnf{}
 	case config.PackageManagerNone:
 		d.Packages = packages.None{}
 	default:

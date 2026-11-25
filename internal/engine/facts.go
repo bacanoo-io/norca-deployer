@@ -42,6 +42,9 @@ func (r *Runner) openNode(node *config.NodeConfig) (connector.Connector, *host.F
 	for _, l := range overrides {
 		fmt.Printf("    -> [%s] %s\n", node.Host, l)
 	}
+	for _, w := range facts.Warnings() {
+		fmt.Printf("    [WARN] [%s] %s\n", node.Host, w)
+	}
 	if facts.Arch != "" && node.Arch != "" && facts.Arch != node.Arch {
 		fmt.Printf("    [WARN] [%s] the node is %s, the plan says arch %s (the plan is used)\n", node.Host, facts.Arch, node.Arch)
 	}
@@ -128,12 +131,17 @@ func (r *Runner) checkNodeFacts(t *target) error {
 	// The node takes only the block of its package manager. A block of
 	// another manager that selects packages for it, while its own manager
 	// has no block, is a block the plan forgot.
-	own := packages.Select(r.plan.AptPackages(), t.node, t.isMaster)
-	if f.PackageManager != config.PackageManagerApt {
-		own = &packages.Selection{}
-		if apt := packages.Select(r.plan.AptPackages(), t.node, t.isMaster); !apt.Empty() {
-			errs = append(errs, fmt.Errorf("the node uses %s, but host_packages has packages for its roles only in apt",
-				f.PackageManager))
+	own, hasOwn := packages.Block(r.plan.HostPackages, f.PackageManager, t.node, t.isMaster)
+	if !hasOwn {
+		var others []string
+		for _, m := range packages.BlockManagers {
+			if sel, _ := packages.Block(r.plan.HostPackages, m, t.node, t.isMaster); m != f.PackageManager && !sel.Empty() {
+				others = append(others, m)
+			}
+		}
+		if len(others) > 0 {
+			errs = append(errs, fmt.Errorf("the node uses %s, but host_packages has packages for its roles only in %s",
+				f.PackageManager, strings.Join(others, ", ")))
 		}
 	}
 	if r.plan.Release.Source == config.ReleaseHostPackage && !own.Installs(r.plan.Release.Package) {
