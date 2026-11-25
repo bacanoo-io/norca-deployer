@@ -114,6 +114,10 @@ type target struct {
 	changed    bool // binary, certificates, configuration or service changed
 	wasRunning bool
 	err        error
+
+	// hostDNSSources is the docker0 subnet whose containers ask the DNS
+	// stub of the node (consul.dns_forwarding.docker), for the firewall.
+	hostDNSSources []string
 }
 
 func (t *target) isWindows() bool { return strings.ToLower(t.node.Platform) == "windows" }
@@ -311,6 +315,12 @@ func (r *Runner) prepareNode(t *target) error {
 		if err := tuning.ApplyWindowsTuning(conn); err != nil {
 			return fmt.Errorf("Windows environment tuning error: %w", err)
 		}
+	}
+
+	// 1b. DNS of the host: the Consul domain to the local Consul agent
+	// (consul.dns_forwarding; Linux only)
+	if err := r.configureHostDNS(t); err != nil {
+		return err
 	}
 
 	// 2. Directory structure preparation

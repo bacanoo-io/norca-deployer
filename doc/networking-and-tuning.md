@@ -49,6 +49,7 @@ tuning:
 | TCP/UDP 20000-32000 (allocations) | Nodes running a client, with `open_ephemeral_ports` | `ephemeral_cidrs`, default `cluster_cidrs`; **host network mode only**, see below |
 | SSH | All, with `default_deny` | Any source |
 | `extra_ports` | Nodes of their `roles` (default: nodes running a client) | Their `cidrs`, default `cluster_cidrs` |
+| TCP/UDP 53 (DNS stub of the host on docker0) | Linux nodes with `consul.dns_forwarding.docker` | The subnet of `docker0` (see [DNS of the hosts](#dns-of-the-hosts-the-consul-domain)) |
 
 `extra_ports` opens static ports of workloads, which are outside the allocation range, e.g. the client port 4222 of the `nats` module:
 
@@ -111,6 +112,70 @@ Other tuning keys:
 - `file_descriptor_limit` (default 65536): `LimitNOFILE` of the agent service.
 - `setup_logrotate`: the agent writes `log_dir/norca.log` and rotates it itself (100 MB, 10 files).
 - `windows_long_paths`: see [Windows nodes](windows.md).
+
+## DNS of the hosts: the consul domain
+
+With a Consul agent on every node (for example the `consul` module), `consul.dns_forwarding` makes the Linux nodes resolve `*.consul` through the DNS interface of the local agent (`127.0.0.1:8600` by default):
+
+```yaml
+consul:
+  address: 127.0.0.1:8500
+  dns_forwarding:
+    enabled: true            # false or missing: the files written earlier are removed
+    address: 127.0.0.1:8600  # the DNS interface of the Consul agent
+    domain: consul
+    method: auto             # auto, systemd-resolved, dnsmasq
+    docker: false            # containers on docker0 resolve the domain too (systemd-resolved only)
+```
+
+This is **conditional forwarding**: only the `consul` domain goes to Consul; every other name keeps going to the resolver the host already has. The deployer does not send all lookups to Consul and sets no recursors in Consul.
+
+**The deployer never installs a resolver.** It configures the one the node has, before the directories of the agent are made (after the host packages and the tuning):
+
+- **`systemd-resolved`**, when it runs and the lookups of the host go through it: `127.0.0.53` (or `127.0.0.54`) in `/etc/resolv.conf`, or `resolve` in the `hosts` line of `/etc/nsswitch.conf`. It needs systemd 246 or newer for a port other than 53 in `DNS=`.
+- **`dnsmasq`**, when it runs, `/etc/resolv.conf` names `127.0.0.1` (or `::1`), and it reads `/etc/dnsmasq.d` (the unit of Debian passes it; elsewhere `conf-dir=/etc/dnsmasq.d/,*.conf` in `/etc/dnsmasq.conf`).
+
+`auto` takes the first that applies; an explicit `method` checks the same conditions for that one. A node where neither applies is an error of that node, found before anything is changed on it, with what was found:
+
+```text
+consul.dns_forwarding: 10.77.0.10 has no local resolver the deployer can forward the consul domain
+from: systemd-resolved not installed, dnsmasq not installed, /etc/resolv.conf names 10.0.0.2.
+Install systemd-resolved or dnsmasq with host_packages, or set consul.dns_forwarding.enabled = false
+```
+
+Debian 12 has neither. Install one with [host packages](host-packages-and-scripts.md), which run earlier in the same `apply`:
+
+```yaml
+host_packages:
+  install:
+    - name: systemd-resolved   # takes over /etc/resolv.conf (127.0.0.53)
+```
+
+**What it writes** (each file starts with `# Managed by norca-deployer. Do not edit.`, or `;` in the trust anchor):
+
+| Method | File | Content |
+| --- | --- | --- |
+| systemd-resolved | `/etc/systemd/resolved.conf.d/norca-consul.conf` | `[Resolve]`, `DNS=127.0.0.1:8600`, `Domains=~consul` (and `DNSStubListenerExtra=` with `docker`) |
+| systemd-resolved | `/etc/dnssec-trust-anchors.d/norca-consul.negative` | `consul`: a negative trust anchor, so that DNSSEC validation (when it is on) skips the domain, whose answers Consul does not sign; DNSSEC stays as it is for every other name |
+| dnsmasq | `/etc/dnsmasq.d/norca-consul.conf` | `server=/consul/127.0.0.1#8600` |
+
+A file is written only when its content differs, and the resolver is restarted (`systemctl restart systemd-resolved` or `dnsmasq`) only when a file changed or was removed; a second `apply` restarts nothing. The agent is not restarted for it. The work is done by a POSIX `sh` script that the deployer uploads to `/var/lib/norca-deployer/consul-dns.sh` and runs; the install script of [scaled machines](node-scaling-machines.md) runs the same functions.
+
+**Docker containers** (`docker: true`, systemd-resolved only, systemd 247 or newer): containers do not use the stub on `127.0.0.53`, so systemd-resolved also listens on the address of `docker0` (`DNSStubListenerExtra=`, read from `ip -4 addr show dev docker0`, never assumed to be `172.17.0.1`), and the Docker daemon gives that address to its containers: `"dns": ["<docker0 address>"]` is merged into `/etc/docker/daemon.json` (every other key kept; the file is made when it is missing; a file that does not parse is refused; the merge uses `jq` or `python3`). Every name of a container then goes through systemd-resolved, so other names resolve as on the host. When `daemon.json` changed, the deployer restarts Docker and warns: **running containers are restarted unless `live-restore` is on**. A node without `docker0` is an error. With `tuning.apply_firewall_rules` the deployer allows TCP and UDP 53 from the `docker0` subnet (rule `norca:53/udp:<subnet>`), which `default_deny` would drop. This covers the default bridge; containers on other Docker networks come from other subnets.
+
+**Turning it off** (`enabled: false` or no block) removes the files above and restarts the resolver when it removed one. The `dns` key of `daemon.json` stays; the deployer warns, because containers then ask an address nobody answers on: remove the key and restart Docker. Decommissioning a node leaves the files, as it leaves the other host settings.
+
+**How to check** on a node:
+
+```bash
+resolvectl query consul.service.consul        # systemd-resolved: answered by the Consul agent
+getent hosts consul.service.consul            # the resolver of the host (NSS)
+dig @127.0.0.1 -p 8600 consul.service.consul  # Consul itself
+getent hosts deb.debian.org                   # other names still resolve
+docker run --rm busybox nslookup consul.service.consul   # with docker: true
+```
+
+Consul answers DNS queries with the rights of its DNS token: with ACLs that deny by default (the `consul` module) the answers stay empty until the agents have a token that may read nodes and services (`consul acl set-agent-token dns <token>` on every agent).
 
 ## CNI plugins
 

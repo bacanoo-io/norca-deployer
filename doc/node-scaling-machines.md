@@ -116,6 +116,14 @@ its content or mode differs, and a second run changes nothing (it ends with
 2. **sysctl tuning**: the modules file and the sysctl file, `modprobe` and `sysctl --system`. A
    failure to apply them now (in a container, for example) is a warning: systemd applies the
    files at the next boot.
+   - With `consul.dns_forwarding` enabled, **the DNS forwarding of the consul domain**: the same
+     POSIX `sh` functions `apply` runs on the nodes of the inventory (see
+     [DNS of the hosts](networking-and-tuning.md#dns-of-the-hosts-the-consul-domain)), embedded
+     in the script. A machine without systemd-resolved or dnsmasq stops the script with the
+     error `apply` gives. When systemd does not run (an image built in a container), the
+     resolver is chosen by its enabled unit, `/etc/resolv.conf` is not checked, nothing is
+     restarted, and with `docker: true` the containers are left out when `docker0` is missing
+     (a warning).
 3. **Directories** with the modes above, and `/var/lib/norca-deployer` (`0700`).
 4. **The norca binary**: download the release archive, check its SHA-256, extract `norca` and
    install it. A marker with the digests of the archive and of the binary skips the download on

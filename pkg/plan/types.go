@@ -199,7 +199,45 @@ type ConsulConfig struct {
 	// TokenFile is a local file with the Consul ACL token of the agents
 	// (relative to the plan); needed when Consul's ACLs deny by default.
 	TokenFile string `yaml:"token_file,omitempty" json:"token_file,omitempty"`
+	// DNSForwarding makes the Linux nodes resolve the Consul domain
+	// through the DNS interface of the local Consul agent.
+	DNSForwarding *ConsulDNSForwarding `yaml:"dns_forwarding,omitempty" json:"dns_forwarding,omitempty"`
 }
+
+// ConsulDNSForwarding is conditional DNS forwarding on the Linux nodes: only
+// the Consul domain goes to the local Consul agent, every other name keeps
+// going to the resolver the host has. The deployer configures a local
+// resolver that is there already (systemd-resolved or dnsmasq); it never
+// installs one.
+type ConsulDNSForwarding struct {
+	// Enabled writes the configuration; false (or no block) removes what an
+	// earlier apply wrote.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+	// Address is the DNS interface of the Consul agent, host:port with an IP
+	// host (default 127.0.0.1:8600).
+	Address string `yaml:"address,omitempty" json:"address,omitempty"`
+	// Domain is the domain that is forwarded (default consul).
+	Domain string `yaml:"domain,omitempty" json:"domain,omitempty"`
+	// Method is the resolver: auto (default), systemd-resolved or dnsmasq.
+	Method string `yaml:"method,omitempty" json:"method,omitempty"`
+	// Docker lets containers on the docker bridge resolve the domain too
+	// (systemd-resolved only): resolved listens on the docker0 address and
+	// the Docker daemon gives that address to its containers.
+	Docker bool `yaml:"docker,omitempty" json:"docker,omitempty"`
+}
+
+// Resolvers of consul.dns_forwarding.method.
+const (
+	DNSMethodAuto     = "auto"
+	DNSMethodResolved = "systemd-resolved"
+	DNSMethodDnsmasq  = "dnsmasq"
+)
+
+// Defaults of consul.dns_forwarding.
+const (
+	DefaultConsulDNSAddress = "127.0.0.1:8600"
+	DefaultConsulDNSDomain  = "consul"
+)
 
 type Federation struct {
 	AuthoritativeRegion string `yaml:"authoritative_region" json:"authoritative_region"`

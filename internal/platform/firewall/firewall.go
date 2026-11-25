@@ -83,6 +83,11 @@ type Spec struct {
 
 	// Extra are further ports of the node (static workload ports).
 	Extra []Extra
+
+	// HostDNSSources may ask the DNS stub of the host on port 53 (UDP and
+	// TCP): the docker0 subnet when systemd-resolved listens there for the
+	// containers (consul.dns_forwarding.docker). Empty opens nothing.
+	HostDNSSources []string
 }
 
 // Extra is a static port or range ("4222" or "4222:4223") of one protocol.
@@ -186,6 +191,10 @@ func (s Spec) Rules() []Rule {
 	}
 	for _, e := range s.Extra {
 		add(e.Port, e.Proto, e.Sources, false)
+	}
+	if len(s.HostDNSSources) > 0 {
+		add("53", "udp", s.HostDNSSources, false)
+		add("53", "tcp", s.HostDNSSources, false)
 	}
 	return rules
 }

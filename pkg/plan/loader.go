@@ -178,6 +178,8 @@ func (p *DeploymentPlan) SetDefaults() {
 		}
 	}
 
+	p.setConsulDefaults()
+
 	// Rolling restart defaults
 	if p.Upgrade.MaxParallelClients <= 0 {
 		p.Upgrade.MaxParallelClients = 1
@@ -438,6 +440,9 @@ func (p *DeploymentPlan) Validate() error {
 		return err
 	}
 	if err := p.validateBus(); err != nil {
+		return err
+	}
+	if err := p.validateConsul(); err != nil {
 		return err
 	}
 	if err := p.validateHostPackages(); err != nil {

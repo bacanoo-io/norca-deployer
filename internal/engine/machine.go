@@ -14,6 +14,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/service"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
@@ -24,12 +25,13 @@ import (
 // The install script of a scaled machine: one bash script, generated from
 // the plan, that puts on a machine what the bootstrap of the node scaling
 // operator expects there: the norca binary, the CNI plugins, norca-join, the
-// directories and the systemd unit of the agent, and the host packages and
-// the sysctl tuning of a client. It runs when the image of the provider is
-// built (node_scaling.machine.install = image) or at the first boot, from
-// the bootstrap (boot). It does what prepareNode does on a client of the
-// inventory, without the configuration, the certificates and the firewall:
-// the bootstrap writes the first two, the cloud does the third.
+// directories and the systemd unit of the agent, and the host packages, the
+// sysctl tuning and the DNS forwarding of the consul domain of a client. It
+// runs when the image of the provider is built (node_scaling.machine.install
+// = image) or at the first boot, from the bootstrap (boot). It does what
+// prepareNode does on a client of the inventory, without the configuration,
+// the certificates and the firewall: the bootstrap writes the first two, the
+// cloud does the third.
 
 //go:embed machine_install.sh.tmpl
 var machineScriptText string
@@ -100,7 +102,15 @@ type machineScriptData struct {
 	Join                                 machineJoin
 	Packages                             string
 	Sysctl                               *machineSysctl
+	ConsulDNS                            *machineConsulDNS
 	UnitPath, Unit, Service              string
+}
+
+// machineConsulDNS is consul.dns_forwarding: the functions of the script
+// the SSH path runs, and their parameters as shell assignments.
+type machineConsulDNS struct {
+	Functions string
+	Vars      string
 }
 
 // validMachineArch are the architectures of a scaled machine.
@@ -198,6 +208,17 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		data.Sysctl = &machineSysctl{
 			ModulesPath: tuning.ModulesConfigPath, Modules: tuning.RecommendedModules,
 			SysctlPath: tuning.SysctlConfigPath, Sysctl: tuning.RecommendedSysctl,
+		}
+	}
+
+	if plan.Consul.DNSForwardingEnabled() {
+		vs, err := dns.Vars(plan.Consul.DNSForwarding)
+		if err != nil {
+			return "", err
+		}
+		data.ConsulDNS = &machineConsulDNS{
+			Functions: strings.TrimSuffix(dns.Functions(), "\n"),
+			Vars:      dns.Assignments(vs, "\n"),
 		}
 	}
 

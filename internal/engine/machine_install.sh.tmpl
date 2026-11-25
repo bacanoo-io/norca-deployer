@@ -8,7 +8,7 @@
 # by hand); the machines of the image then need no download at boot.{{end}}
 # Architecture: {{.Arch}}.
 #
-# It installs {{if .Packages}}the host packages, {{end}}{{if .Sysctl}}the sysctl tuning, {{end}}the directories, the norca binary,
+# It installs {{if .Packages}}the host packages, {{end}}{{if .Sysctl}}the sysctl tuning, {{end}}{{if .ConsulDNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
 # {{if .CNI}}the CNI plugins, {{end}}norca-join and the systemd unit of the agent, which it enables but
 # does not start: the bootstrap (or norca-join) starts it once the configuration
 # and the certificate are there. It does not open the firewall: that is the
@@ -196,6 +196,37 @@ fi
 if [ "$wrote" = 1 ] || [ "$modules_changed" = 1 ]; then
   sysctl --system >/dev/null 2>&1 || warn "sysctl --system failed: the settings apply at the next boot"
 fi
+{{- end}}
+{{- if .ConsulDNS}}
+
+# DNS of the host: the consul domain goes to the local Consul agent
+# (consul.dns_forwarding). The functions are those the deployer runs on the
+# nodes of its inventory; they print one line per event.
+log "consul DNS forwarding"
+{{.ConsulDNS.Functions}}
+
+{{.ConsulDNS.Vars}}
+if consul_dns_out=$(norca_consul_dns); then
+  consul_dns_rc=0
+else
+  consul_dns_rc=1
+fi
+consul_dns_error=
+while IFS= read -r consul_dns_line; do
+  case $consul_dns_line in
+  changed\ * | removed\ * | restarted\ *)
+    changed=1
+    log "consul DNS: $consul_dns_line"
+    ;;
+  warn\ *) warn "consul.dns_forwarding: ${consul_dns_line#warn }" ;;
+  error\ *) consul_dns_error="${consul_dns_error:+$consul_dns_error; }${consul_dns_line#error }" ;;
+  unchanged\ * | '') ;;
+  *) log "consul DNS: $consul_dns_line" ;;
+  esac
+done <<CONSUL_DNS_EOF
+$consul_dns_out
+CONSUL_DNS_EOF
+[ "$consul_dns_rc" = 0 ] || die "consul.dns_forwarding: this machine ${consul_dns_error:-could not be configured}"
 {{- end}}
 
 # Directories

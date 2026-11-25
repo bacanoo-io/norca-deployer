@@ -321,6 +321,42 @@ func TestExtraPorts(t *testing.T) {
 	}
 }
 
+// Containers on docker0 ask the DNS stub of the host (consul.dns_forwarding
+// with docker): 53 over UDP and TCP from the docker0 subnet only.
+func TestHostDNSRules(t *testing.T) {
+	s := Spec{Ports: ports, HostDNSSources: []string{"172.17.0.0/16"}}
+	var ids []string
+	for _, r := range s.Rules() {
+		ids = append(ids, r.ID())
+	}
+	if got := strings.Join(ids, " "); got != "norca:53/udp:172.17.0.0/16 norca:53/tcp:172.17.0.0/16" {
+		t.Fatalf("rules: %s", got)
+	}
+	// Never from any source.
+	if r := (Spec{Ports: ports}).Rules(); len(r) != 0 {
+		t.Fatalf("rules without sources: %v", r)
+	}
+
+	// ufw: added with their identifiers; a rule of an earlier docker0
+	// subnet goes.
+	added := `Added user rules (see 'ufw status' for running firewall):
+ufw allow from 172.18.0.0/16 to any port 53 proto udp comment 'norca:53/udp:172.18.0.0/16'`
+	c := ufwFake(true, added)
+	if _, err := Configure(c, s); err != nil {
+		t.Fatal(err)
+	}
+	cmds := strings.Join(c.Commands, "\n")
+	for _, want := range []string{
+		"ufw allow from 172.17.0.0/16 to any port 53 proto udp comment 'norca:53/udp:172.17.0.0/16'",
+		"ufw allow from 172.17.0.0/16 to any port 53 proto tcp comment 'norca:53/tcp:172.17.0.0/16'",
+		"ufw delete allow from 172.18.0.0/16 to any port 53 proto udp",
+	} {
+		if !strings.Contains(cmds, want) {
+			t.Errorf("missing %q:\n%s", want, cmds)
+		}
+	}
+}
+
 func TestCustomDynamicRange(t *testing.T) {
 	s := Spec{Ports: ports, Client: true, OpenEphemeral: true, DynamicMin: 21000, DynamicMax: 29000}
 	if r := s.Rules(); r[0].ID() != "norca:21000:29000/tcp:any" {

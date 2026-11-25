@@ -34,6 +34,7 @@ func (r *Runner) configureFirewall(t *target) error {
 		LeafNodes:      r.plan.Bus != nil && r.plan.Bus.LeafNodes,
 		EphemeralCIDRs: fw.EphemeralCIDRs,
 		DefaultDeny:    fw.DefaultDeny,
+		HostDNSSources: t.hostDNSSources,
 	}
 	spec.DynamicMin, spec.DynamicMax = r.plan.DynamicPortRange()
 	role := config.RoleClient
