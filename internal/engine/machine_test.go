@@ -378,8 +378,10 @@ func TestInstallScriptConsulDNSRun(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(bin, "systemctl"), []byte(machineSystemctlStub), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				// The script goes below the root of the test too.
-				b := strings.ReplaceAll(block, dns.ScriptPath, root+dns.ScriptPath)
+				// The script and its directory, which the step makes, go
+				// below the root of the test too.
+				scriptDir := filepath.ToSlash(filepath.Dir(dns.ScriptPath))
+				b := strings.ReplaceAll(block, scriptDir, root+scriptDir)
 				b = strings.Replace(b, "NCD_ROOT=''", "NCD_ROOT="+connector.ShellQuote(root), 1)
 				prog := helpers + "\n" + b + "\necho \"changed=$changed\"\n"
 				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
