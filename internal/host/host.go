@@ -145,8 +145,9 @@ func (f *Facts) Override(hf *config.HostFacts) []string {
 
 // Check returns the error of a node the deployer cannot drive: a family
 // outside Debian, RHEL and Alpine, no package manager, an init system that
-// is neither systemd nor OpenRC, or a RHEL older than MinRHELMajor. It
-// lists what the probe found.
+// is neither systemd nor OpenRC, a RHEL older than MinRHELMajor, or a
+// Debian, Ubuntu or Alpine older than its minimum (minimums). It lists
+// what the probe found.
 func (f *Facts) Check() error {
 	if f.Platform == "windows" {
 		return nil
@@ -164,6 +165,9 @@ func (f *Facts) Check() error {
 	if major, ok := majorVersion(f.OSVersion); ok && f.Family == FamilyRHEL && major < MinRHELMajor {
 		problems = append(problems, fmt.Sprintf("it runs %s %s, but RHEL and its rebuilds are supported from version %d: "+
 			"the Norca binary needs glibc 2.34, and version %d has glibc 2.28 or older", f.OSID, f.OSVersion, MinRHELMajor, major))
+	}
+	if p := f.tooOld(); p != "" {
+		problems = append(problems, p)
 	}
 	if len(problems) == 0 {
 		return nil
@@ -201,11 +205,69 @@ func (f *Facts) Warnings() []string {
 // glibc 2.34, which RHEL 9 has and RHEL 8 (glibc 2.28) has not.
 const MinRHELMajor = 9
 
+// minimum is the first version of a distribution the deployer installs on,
+// and why the versions before it are refused.
+type minimum struct {
+	name         string // the distribution in the message
+	major, minor int
+	version      string // the first version, as the distribution writes it
+	reason       string
+}
+
+// The first versions of Debian, Ubuntu and Alpine (RHEL: MinRHELMajor).
+// Debian and Ubuntu: the Linux release of Norca needs glibc 2.31, and the
+// deployer writes deb822 sources with Signed-By. Alpine: the musl build of
+// Norca runs on older branches too, but the deployer installs on the
+// branches Alpine supports (3.21 reached its end of support on 2026-11-01).
+var minimums = map[string]minimum{
+	"debian": {name: "Debian", major: 11, version: "11",
+		reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Debian 10 has glibc 2.28"},
+	"ubuntu": {name: "Ubuntu", major: 20, minor: 4, version: "20.04",
+		reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Ubuntu 18.04 has glibc 2.27"},
+	"alpine": {name: "Alpine", major: 3, minor: 22, version: "3.22",
+		reason: "older branches are no longer supported by Alpine (end of support), and the deployer installs on the supported ones"},
+}
+
+// tooOld returns the problem of a Debian, Ubuntu or Alpine older than its
+// minimum; "" when it is not older or its version is not known (Debian
+// testing has no VERSION_ID).
+func (f *Facts) tooOld() string {
+	m, ok := minimums[f.OSID]
+	if !ok {
+		return ""
+	}
+	major, minor, ok := majorMinor(f.OSVersion)
+	if !ok || major > m.major || (major == m.major && minor >= m.minor) {
+		return ""
+	}
+	return fmt.Sprintf("it runs %s %s, but %s is supported from version %s: %s", f.OSID, f.OSVersion, m.name, m.version, m.reason)
+}
+
 // majorVersion reads the major version of a VERSION_ID ("8.10" is 8).
 func majorVersion(v string) (int, bool) {
 	major, _, _ := strings.Cut(v, ".")
 	n, err := strconv.Atoi(major)
 	return n, err == nil
+}
+
+// majorMinor reads the major and minor version of a VERSION_ID: "20.04" is
+// 20 and 4, "3.25.0_alpha20260805" (Alpine edge) is 3 and 25, "11" is 11
+// and 0.
+func majorMinor(v string) (int, int, bool) {
+	major, ok := majorVersion(v)
+	if !ok {
+		return 0, 0, false
+	}
+	_, rest, found := strings.Cut(v, ".")
+	if !found {
+		return major, 0, true
+	}
+	end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
+	if end >= 0 {
+		rest = rest[:end]
+	}
+	minor, err := strconv.Atoi(rest)
+	return major, minor, err == nil
 }
 
 // found describes what the probe saw, for an error.

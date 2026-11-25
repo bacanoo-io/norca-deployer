@@ -111,9 +111,17 @@ func TestCheck(t *testing.T) {
 			t.Errorf("%s: %v", sample, err)
 		}
 	}
-	ok, _ := Parse(probeOutput(t, "debian-12", "x86_64", "systemd", debianTools, "1000"))
-	if err := ok.Check(); err != nil {
-		t.Fatalf("debian 12: %v", err)
+	for _, sample := range []string{"debian-11", "debian-12", "ubuntu-20.04", "ubuntu-24.04"} {
+		f, _ := Parse(probeOutput(t, sample, "x86_64", "systemd", debianTools, "1000"))
+		if err := f.Check(); err != nil {
+			t.Errorf("%s: %v", sample, err)
+		}
+	}
+	for _, sample := range []string{"alpine-3.22", "alpine-3.24", "alpine-edge"} {
+		f, _ := Parse(probeOutput(t, sample, "x86_64", "init\n/run/openrc", alpineTools, "1000"))
+		if err := f.Check(); err != nil {
+			t.Errorf("%s: %v", sample, err)
+		}
 	}
 	if err := Windows("amd64").Check(); err != nil {
 		t.Fatalf("windows: %v", err)
@@ -133,6 +141,12 @@ func TestCheck(t *testing.T) {
 			[]string{"rocky 8.10", "from version 9", "glibc 2.34", "glibc 2.28", "VERSION_ID=8.10"}},
 		{"rhel 8", probeOutput(t, "rhel-8", "x86_64", "systemd", rhelTools, "1000"),
 			[]string{"rhel 8.10", "from version 9"}},
+		{"debian 10", probeOutput(t, "debian-10", "x86_64", "systemd", debianTools, "1000"),
+			[]string{"debian 10", "Debian is supported from version 11", "glibc 2.31", "deb822", "VERSION_ID=10"}},
+		{"ubuntu 18.04", probeOutput(t, "ubuntu-18.04", "x86_64", "systemd", debianTools, "1000"),
+			[]string{"ubuntu 18.04", "Ubuntu is supported from version 20.04", "glibc 2.31"}},
+		{"alpine 3.21", probeOutput(t, "alpine-3.21", "x86_64", "init\n/run/openrc", alpineTools, "1000"),
+			[]string{"alpine 3.21.10", "Alpine is supported from version 3.22", "no longer supported by Alpine"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
