@@ -19,13 +19,14 @@
 - Loads or generates the gossip key.
 - For a replica region, reads the replication token of the authoritative region.
 - Resolves the artifacts: the Norca binary and the CNI archive are downloaded once, verified with SHA-256 and cached in `.norca-deployer/cache/`.
+- Connects to every node and finds out what it is: the family of its operating system, its package manager, its init system and how commands get root (`sudo` or `doas`). Each node prints a `Host:` line. Then the plan is checked against the nodes: the block of `host_packages` of each node's package manager, the package of `release.source: host-package`, the interpreter of the scripts. A node that cannot be reached or driven, or a plan that does not fit a node, stops the run **before anything changes** (a client that cannot be reached is reported and skipped, as before).
 
 ### 2. Server preparation (in parallel, no restarts)
 
 On every server, in this order:
 
 1. `pre_install` scripts
-2. APT repositories and packages (`host_packages`)
+2. Repositories and packages of the node's package manager (`host_packages.apt`)
 3. `post_packages` scripts
 4. Kernel tuning (sysctl, modules) or Windows tuning
 5. Directories (bin, config, data, log, tls; CNI and app volumes on client nodes)
@@ -35,6 +36,8 @@ On every server, in this order:
 9. `norca.hcl`
 10. Firewall rules
 11. Service unit (systemd or Windows service)
+
+Each item is a step: its files are written only when their content differs, and its change runs only when its check finds something to do, so a second `apply` changes nothing. The commands run in `sh` on the node (dash on Debian and Ubuntu), each starting with a comment that names its step (`# apply: apt packages`). The install script of a scaled machine is made of the same steps (see [Node scaling machines](node-scaling-machines.md)).
 
 The deployer records for each node whether the binary, a certificate, `norca.hcl` or the service unit changed. If any server fails here, the run stops **before any agent is restarted**.
 

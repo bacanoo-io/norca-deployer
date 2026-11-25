@@ -4,9 +4,22 @@
 
 **Operator machine:** the `norca-deployer` binary (build it with Go 1.26 or newer) and SSH access to every node.
 
-**Linux nodes:** systemd, `bash`, `sha256sum`, `tar`; Debian or Ubuntu when you use `host_packages`. SSH as `root`, or as a user with `sudo` (`connection.become: true`).
+**Linux nodes:** a supported operating system (below) with systemd, `sha256sum` and `tar`. SSH as `root`, or as a user with `sudo` or `doas` (`connection.become: true`). The deployer's commands run in `sh`; `bash` is needed only for scripts of the plan with `interpreter: bash` (the default).
 
 **Windows nodes:** OpenSSH Server and an administrator account.
+
+## Supported operating systems
+
+Before it changes anything, `apply` finds out what every node is (`/etc/os-release`, the package manager, the init system) and prints it (`Host: debian 12 (debian family), amd64, systemd, apt`). A node the deployer cannot drive fails before anything is changed on it.
+
+| Family | Systems | Package manager | Status |
+| --- | --- | --- | --- |
+| Debian | Debian 11+, Ubuntu 20.04+ (and systems with `ID_LIKE=debian`) | `apt` (`host_packages.apt`) | supported |
+| RHEL | RHEL 9+, Rocky Linux 9+, AlmaLinux 9+ | `dnf` | planned: a node without `host_packages` works with systemd, `host_packages.dnf` is not accepted yet |
+| Alpine | Alpine with a musl build of Norca | `apk` | planned |
+| Windows | Windows Server with OpenSSH | none | supported (no `host_packages`) |
+
+When the detection is wrong, set the right values in [`host_facts`](configuration.md#host_facts) of the node.
 
 **Network between the nodes:** TCP 4646-4647 and TCP/UDP 4648 to the servers; TCP/UDP 20000-32000 to the clients for allocation ports (the deployer can open these, see [Networking and tuning](networking-and-tuning.md)).
 

@@ -13,13 +13,15 @@ Windows nodes are supported as clients (typically for native `.exe` workloads wi
 | Area | Windows behavior |
 | --- | --- |
 | Commands | Run as `powershell.exe -EncodedCommand`, because the default OpenSSH shell is `cmd.exe` |
+| Host facts | Not probed: the facts come from the plan (`platform: windows`, family `windows`, no package manager); `host_facts` is refused |
 | File transfer | SFTP paths in the form `/C:/...` |
-| Binary update | The running `norca.exe` cannot be overwritten: the new binary is staged as `norca.exe.new` and swapped in while the service is stopped |
+| Binary update | The running `norca.exe` cannot be overwritten: the new binary is staged as `norca.exe.new` and swapped in while the service is stopped; a staged binary restarts the agent in the same `apply` |
 | Service | `norca` service created with `New-Service`, quoted `ImagePath` (paths with spaces), automatic start, restart on failure |
 | Firewall | Not configured: open the ports in Windows Firewall yourself (see [Networking and tuning](networking-and-tuning.md#firewall) for the ports) |
 | Tuning | `tuning.windows_long_paths: true` sets `LongPathsEnabled = 1` and the execution policy `RemoteSigned` |
 | Paths | Separate defaults under `C:\Program Files\norca` and `C:\ProgramData\norca` (see [Networking and tuning](networking-and-tuning.md)) |
-| Host packages, scripts | Skipped with a warning |
+| Host packages | No package manager: none of the blocks of `host_packages` applies; a selection for the node is skipped with a warning |
+| Scripts | Skipped with a warning; a script with `families` that do not list `windows` is skipped without one |
 | [GitOps](gitops.md) bindings on `apply` | Not run when the first server runs Windows: `apply` fails; `gitops run` works |
 | CNI plugins | Not installed |
 | `release.source: host-package` | Not possible; `validate` rejects it |

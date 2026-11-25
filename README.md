@@ -65,7 +65,7 @@ norca-deployer apply -c cluster-deploy.yaml
 | `secret encrypt <text>` | Encrypt a value for the plan (`!enc:v1:aes-gcm:...`) |
 | `pki issue-intermediate --name <name>` | Issue an intermediate CA signed by the cluster CA, for a system with a PKI of its own |
 | `pki issue-node-ca [--region <region>]` | Issue the name-constrained intermediate CA of a region, with which an operator signs the certificates of nodes that join by themselves |
-| `node-scaling install-script [--arch <arch>]` | Print the bash script that installs the norca binary, the CNI plugins, `norca-join` and the agent unit on a machine of the node scaling operator (for its image, or run at the first boot) |
+| `node-scaling install-script [--arch <arch>]` | Print the POSIX sh script that installs the norca binary, the CNI plugins, `norca-join` and the agent unit on a machine of the node scaling operator (for its image, or run at the first boot) |
 | `version` | Print the version |
 
 `-o json` prints a JSON document on stdout for scripts. Errors go to stderr as `[ERROR] ...`, never to stdout. Exit codes: `0` success, `1` a failure while the command ran, `2` a wrong command line (unknown command or flag, missing argument), `130` the command was interrupted (Ctrl-C) and stopped between two steps.

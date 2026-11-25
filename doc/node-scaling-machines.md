@@ -19,7 +19,7 @@ A scaled node is a Linux client of the plan. Before its bootstrap runs, the mach
 | `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download` |
 | The directories: bin `0755`, config `0750`, data `0750`, log `0750`, tls `0700`, CNI bin and config `0755` | `paths.linux` | the same modes as `apply` |
 | The systemd unit of the agent, enabled but not started | `/etc/systemd/system/norca.service` | the unit `apply` writes, with `tuning.file_descriptor_limit` |
-| The host packages of a client (Docker, for example) | APT | `host_packages` with the role `client` (or no role) |
+| The host packages of a client (Docker, for example) | APT | `host_packages.apt` with the role `client` (or no role) |
 | The sysctl tuning and the kernel modules | `/etc/sysctl.d/99-norca-production.conf`, `/etc/modules-load.d/norca-bridge.conf` | `tuning.apply_sysctl` |
 | A TPM 2.0, only for keys in the TPM (`join_key_store` of the operator `tpm` or `auto`) | `/dev/tpmrm0` | the machine: a virtual TPM on clouds (Google Shielded VM, Azure Trusted Launch, AWS NitroTPM), the firmware TPM on hardware |
 
@@ -34,8 +34,10 @@ module runs and reads them.
 
 ## One script, two modes
 
-`norca-deployer node-scaling install-script` prints a bash script that installs all of the
-above. The plan decides when it runs (`node_scaling.machine.install`):
+`norca-deployer node-scaling install-script` prints a POSIX `sh` script that installs all of
+the above. It is made of the same steps `apply` runs over SSH on the nodes of its inventory (the
+packages, the tuning, the DNS forwarding, the directories, the binary, the CNI plugins and the
+unit), rendered into shell. The plan decides when it runs (`node_scaling.machine.install`):
 
 - **`image`** (the default): run the script when the image of the provider is built, with Packer
   or by hand. Every machine of the image then starts with everything in place, and needs no
@@ -67,7 +69,8 @@ The keys are in the [configuration reference](configuration.md#node_scaling).
   `custom-url` or `host-package`, and `cni.source` not `local-path`. The plan check refuses
   `local-path` with `boot`.
 - An APT repository with `auth` is refused: its password would travel in the user data of every
-  machine.
+  machine (`... has credentials: at boot they would travel in the user data of the machine; use
+  node_scaling.machine.install: image`).
 - One region has one bootstrap Variable, so the script is for one architecture
   (`node_scaling.machine.arch`). Machines of another architecture need an image built with
   `install-script --arch`.
@@ -98,32 +101,40 @@ provisioner "file" {
   destination = "/tmp/norca-node-install.sh"
 }
 provisioner "shell" {
-  inline = ["sudo bash /tmp/norca-node-install.sh"]
+  inline = ["sudo sh /tmp/norca-node-install.sh"]
 }
 ```
 
 ### What the script does
 
-The script runs as root under `set -euo pipefail`, and is idempotent: it writes a file only when
-its content or mode differs, and a second run changes nothing (it ends with
-`done: nothing to change`). In order:
+The script runs as root under `set -eu` in `sh` (dash, bash or busybox ash), and is idempotent:
+it writes a file only when its content or mode differs, and a second run changes nothing (it ends
+with `done: nothing to change`). It first finds out the family of the machine from
+`/etc/os-release` (its `ID`, then `ID_LIKE`, as `apply` does over SSH) and runs the packages and
+the service of that family. It has the steps of the Debian family (Debian, Ubuntu); on another
+family it stops before it changes anything: `this script has no install for rocky (family rhel);
+it installs on the families: debian`. In order:
 
-1. **Host packages** of a client: the keyring, the deb822 source, the pin and the credentials of
-   each repository, `apt-get update` and `apt-get install` only when a package is missing or not
-   at its version, `apt-mark hold`/`unhold`, and a check of the installed versions. It writes the
+1. **Host packages** of a client (`host_packages.apt`): the keyring, the deb822 source, the pin
+   and the credentials of each repository, `apt-get update` and `apt-get install` (on every run
+   while `update_cache` is on, as `apply` does; otherwise only when a package is missing or not at
+   its version), `apt-mark hold`/`unhold`, and a check of the installed versions. It writes the
    same files as `apply`. A package from a local `.deb` file cannot be downloaded: the script
    checks that it is installed and says to install it into the image first.
-2. **sysctl tuning**: the modules file and the sysctl file, `modprobe` and `sysctl --system`. A
-   failure to apply them now (in a container, for example) is a warning: systemd applies the
-   files at the next boot.
-   - With `consul.dns_forwarding` enabled, **the DNS forwarding of the consul domain**: the same
-     POSIX `sh` functions `apply` runs on the nodes of the inventory (see
-     [DNS of the hosts](networking-and-tuning.md#dns-of-the-hosts-the-consul-domain)), embedded
-     in the script. A machine without systemd-resolved or dnsmasq stops the script with the
-     error `apply` gives. When systemd does not run (an image built in a container), the
-     resolver is chosen by its enabled unit, `/etc/resolv.conf` is not checked, nothing is
-     restarted, and with `docker: true` the containers are left out when `docker0` is missing
-     (a warning).
+2. **sysctl tuning**: the modules file (`/etc/modules-load.d/norca-bridge.conf`, so the modules
+   load at boot) and the sysctl file, `modprobe` and `sysctl --system`. A module that cannot be
+   loaded now is a warning; a failed `sysctl --system` is a warning where `/proc/sys` cannot be
+   written (an image built in a container: systemd applies the files at the next boot) and an
+   error elsewhere.
+   - With `consul.dns_forwarding` enabled, **the DNS forwarding of the consul domain**: the script
+     writes the POSIX `sh` script `apply` runs on the nodes of the inventory to
+     `/var/lib/norca-deployer/consul-dns.sh` and runs it (see
+     [DNS of the hosts](networking-and-tuning.md#dns-of-the-hosts-the-consul-domain)); its lines
+     are logged as `consul.dns_forwarding: ...`. A machine without systemd-resolved or dnsmasq
+     stops the script with the error `apply` gives. When systemd does not run (an image built in
+     a container), the resolver is chosen by its enabled unit, `/etc/resolv.conf` is not
+     checked, nothing is restarted, and with `docker: true` the containers are left out when
+     `docker0` is missing (a warning).
 3. **Directories** with the modes above, and `/var/lib/norca-deployer` (`0700`).
 4. **The norca binary**: download the release archive, check its SHA-256, extract `norca` and
    install it. A marker with the digests of the archive and of the binary skips the download on
@@ -145,52 +156,52 @@ its content or mode differs, and a second run changes nothing (it ends with
    `/etc/systemd/system/multi-user.target.wants/norca.service`, which is what `systemctl enable`
    creates, and says so.
 
-The downloads use `curl`, or `wget` when there is no `curl`. The script needs `sha256sum`, `tar`
-and the other coreutils of a Debian or Ubuntu machine, and `apt-get` only with host packages.
+The downloads use `curl`, or `wget` when there is no `curl`. The script needs `sha256sum`, `tar`,
+`base64`, `cmp`, `stat` and `mktemp` (GNU coreutils or busybox), and `apt-get` only with host
+packages. It needs no `bash`.
 
 An excerpt of a generated script (defaults of the plan, `install: image`):
 
-```bash
-#!/usr/bin/env bash
+```sh
+#!/bin/sh
 # The install script of a scaled Norca node, generated by norca-deployer
 # (node-scaling install-script) from the plan of cluster prod, region eu.
 # Do not edit: generate it again when the plan changes.
 ...
-set -euo pipefail
+set -eu
 umask 022
 ...
-# Directories
+# The family of this machine: the script has the steps of these families.
+os_id=$(os_release ID)
+os_family=$(family_of "$os_id" "$(os_release ID_LIKE)")
+case $os_family in
+debian) log "family $os_family (${os_id})" ;;
+*) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: debian" ;;
+esac
+...
+# directories
 ensure_dir '/usr/local/bin' 0755
 ensure_dir '/etc/norca.d' 0750
-ensure_dir '/var/lib/norca' 0750
-ensure_dir '/var/log/norca' 0750
-ensure_dir '/etc/norca.d/tls' 0700
-ensure_dir '/opt/cni/bin' 0755
-ensure_dir '/opt/cni/config' 0755
-ensure_dir "$state_dir" 0700
+...
+ensure_dir '/var/lib/norca-deployer' 0700
 
 # The norca binary (v0.3.0)
-norca_bin='/usr/local/bin/norca'
-release_marker="$state_dir/norca-release.sha256"
-if [ -f "$release_marker" ] && [ -f "$norca_bin" ] &&
-  [ "$(cat "$release_marker")" = "4b0c...e1d2 $(sha256_of "$norca_bin")" ]; then
-  log "$norca_bin is the binary of the release (unchanged)"
-else
-  fetch 'https://github.com/bacanoo-io/norca/releases/download/v0.3.0/norca_0.3.0_linux_amd64.tar.gz' "$work/norca.tar.gz"
-  verify "$work/norca.tar.gz" '4b0c...e1d2'
-  src=$(extract_binary "$work/norca.tar.gz" norca)
-  put_file "$norca_bin" 0755 <"$src"
-  ...
+# norca binary
+if ! {
+[ -f '/var/lib/norca-deployer/norca-release.sha256' ] && [ -f '/usr/local/bin/norca' ] &&
+  [ "$(cat '/var/lib/norca-deployer/norca-release.sha256')" = "4b0c...e1d2 $(sha256_of '/usr/local/bin/norca')" ]
+}; then
+fetch 'https://github.com/bacanoo-io/norca/releases/download/v0.3.0/norca_0.3.0_linux_amd64.tar.gz' "$work/norca.tar.gz"
+verify "$work/norca.tar.gz" '4b0c...e1d2'
+norca_src=$(extract_binary "$work/norca.tar.gz" norca)
+put_file '/usr/local/bin/norca' 0755 <"$norca_src"
+...
+  changed=1
 fi
 ...
-# The systemd unit of the agent: enabled, not started
-put_file '/etc/systemd/system/norca.service' 0644 <<'NORCA_EOF'
-[Unit]
-Description=Norca Orchestration Agent
-...
-ExecStart=/usr/local/bin/norca agent -config=/etc/norca.d/norca.hcl
-...
-NORCA_EOF
+case $os_family in
+debian) service_debian ;;
+esac
 ```
 
 ## What the bootstrap writes
