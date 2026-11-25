@@ -29,6 +29,11 @@ type shell struct {
 	path string
 	// machine runs the functions as the machine script does.
 	machine bool
+	// applets are the commands the shell runs as its own applet before a
+	// command of PATH (a busybox built with FEATURE_PREFER_APPLETS, as
+	// those of Debian and Ubuntu are): a stub of such a name is called
+	// through a shell function, which comes before an applet.
+	applets []string
 }
 
 func (s shell) hasPython() bool {
@@ -66,7 +71,11 @@ func shells(t *testing.T) []shell {
 				t.Fatal(err)
 			}
 		}
-		res = append(res, shell{name: "busybox", argv: []string{bb, "sh"}, path: dir})
+		list, err := exec.Command(bb, "--list").Output()
+		if err != nil {
+			t.Fatalf("%s --list: %v", bb, err)
+		}
+		res = append(res, shell{name: "busybox", argv: []string{bb, "sh"}, path: dir, applets: strings.Fields(string(list))})
 	}
 	if p, err := exec.LookPath("bash"); err == nil {
 		res = append(res, shell{name: "bash-machine", argv: []string{p}, path: systemPath, machine: true})
@@ -121,6 +130,10 @@ fi
 cat "$NCD_TEST_STATE/docker0"
 `
 
+// stubs are the commands newHost writes into the bin directory of a host,
+// by name.
+var stubs = map[string]string{"systemctl": systemctlStub, "ip": ipStub, "resolvectl": resolvectlStub}
+
 // host is a fixture host: the files below root, the state of the stubs,
 // and a fake connector that runs the uploaded script there.
 type host struct {
@@ -135,9 +148,9 @@ type host struct {
 func newHost(t *testing.T, sh shell) *host {
 	t.Helper()
 	h := &host{t: t, sh: sh, root: t.TempDir(), state: t.TempDir(), bin: t.TempDir()}
-	h.write(filepath.Join(h.bin, "systemctl"), systemctlStub, 0o755)
-	h.write(filepath.Join(h.bin, "ip"), ipStub, 0o755)
-	h.write(filepath.Join(h.bin, "resolvectl"), resolvectlStub, 0o755)
+	for name, stub := range stubs {
+		h.write(filepath.Join(h.bin, name), stub, 0o755)
+	}
 	// A running systemd, a Debian 12 without a local resolver.
 	if err := os.MkdirAll(filepath.Join(h.root, "run/systemd/system"), 0o755); err != nil {
 		t.Fatal(err)
@@ -224,6 +237,11 @@ func (h *host) handle(cmd string) (string, error, bool) {
 		script := string(h.conn.Files[ScriptPath])
 		if h.sh.machine {
 			script = "set -euo pipefail\n" + Functions() + "\nif norca_consul_dns; then exit 0; else exit 1; fi\n"
+		}
+		for stub := range stubs {
+			if slices.Contains(h.sh.applets, stub) {
+				script = stub + "() { " + connector.ShellQuote(filepath.Join(h.bin, stub)) + " \"$@\"; }\n" + script
+			}
 		}
 		p := filepath.Join(h.bin, "consul-dns.sh")
 		h.write(p, script, 0o600)

@@ -141,7 +141,7 @@ func TestScriptsAndPackages(t *testing.T) {
 			{Name: "jq"},
 			{Name: "norca-e2e", File: filepath.Join(dir, "norca-e2e_1.0-1_{arch}.deb"), Version: "1.0-1", Hold: true},
 		},
-}}
+	}}
 	sel := packages.Select(plan.AptPackages(), node, false)
 	steps, err := packages.Apt{}.Steps(sel, packages.Context{Plan: plan, Arch: node.Arch})
 	if err != nil {
@@ -157,8 +157,8 @@ func TestScriptsAndPackages(t *testing.T) {
 	}
 
 	checks := map[string]string{
-		"cat /opt/norca-e2e/hello": "hello from norca-e2e",
-		"apt-mark showhold":        "norca-e2e",
+		"cat /opt/norca-e2e/hello":                                       "hello from norca-e2e",
+		"apt-mark showhold":                                              "norca-e2e",
 		"stat -c '%a' /etc/apt/auth.conf.d/norca-backports.conf":         "600",
 		"grep Signed-By /etc/apt/sources.list.d/norca-backports.sources": "/etc/apt/keyrings/norca-backports.gpg",
 		"grep Pin: /etc/apt/preferences.d/norca-backports.pref":          "Pin: release n=bookworm-backports",
