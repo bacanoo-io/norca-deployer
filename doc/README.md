@@ -15,9 +15,8 @@ Norca Deployer installs and maintains [Norca](https://github.com/bacanoo-io/norc
 | [Node labels, pools and resources](node-labels-and-pools.md) | Meta and node class, client defaults, node pools, host networks, reserved resources, drain on shutdown, dynamic ports |
 | [Adding and removing nodes](adding-and-removing-nodes.md) | New nodes, decommissioning, the list of installed nodes |
 | [Machines of the node scaling operator](node-scaling-machines.md) | What a scaled machine needs, the install script for an image or the first boot, where the keys are |
-| [Bootstrap secrets and ACL policies](secrets-and-policies.md) | Namespaces (`norca-system` for the operator packs), secrets and Variables after the cluster is up, generated values, job-bound ACL policies, NATS example |
-| [Packs](packs.md) | Pack registries and pack releases deployed by `apply` |
-| [Rigger stacks](rigger.md) | A stack of Rigger modules applied by `apply` after the packs |
+| [Bootstrap secrets and ACL policies](secrets-and-policies.md) | Namespaces (`norca-system` for the operator modules), secrets and Variables after the cluster is up, generated values, job-bound ACL policies, NATS example |
+| [Rigger stacks](rigger.md) | A stack of Rigger modules applied by `apply`: the base services of a new cluster |
 | [GitOps](gitops.md) | Rigger stacks applied from Git repositories: `gitops run`, `apply` and the webhook daemon |
 | [Several datacenters with NATS](multi-datacenter.md) | One region over several datacenters, the event stream on the system bus, a NATS cluster for the applications |
 | [Multi-region](multi-region.md) | Federated regions with ACL replication |
@@ -37,10 +36,10 @@ flowchart LR
     end
     Engine -- "SSH / SFTP" --> S1["Server nodes"]
     Engine -- "SSH / SFTP" --> C1["Client nodes"]
-    Engine -- "norca CLI on the first server" --> API["Norca HTTP API<br/>ACL bootstrap, packs"]
+    Engine -- "norca CLI on the first server" --> API["Norca HTTP API<br/>ACL bootstrap, secrets, Rigger stack"]
 ```
 
 - **Plan:** one file per region. YAML and HCL use the same keys.
-- **Engine:** validates the plan, prepares every node in parallel, restarts what changed in a safe order and finishes with ACL bootstrap and packs.
+- **Engine:** validates the plan, prepares every node in parallel, restarts what changed in a safe order and finishes with the post-cluster tasks: ACL bootstrap, secrets, the Rigger stack and GitOps.
 - **Transport:** native Go SSH and SFTP. On Linux, `become` runs commands through `sudo`; on Windows, commands run as PowerShell.
 - **Local state:** the CA, the gossip key, the ACL management token, trusted host keys and downloaded artifacts live next to the plan file.

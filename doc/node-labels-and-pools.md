@@ -66,7 +66,7 @@ node_pools:
 
 The pools are written after the cluster is up (in the authoritative region; they replicate to the others), and again only when they change. Scheduler settings of a pool (`scheduler_config`) are not supported by Norca.
 
-**Jobs only run in their pool.** A job without `node_pool` runs in the pool `default`. When the clients are in another pool, set `node_pool` in the jobs and in the pack values (most packs have a `node_pool` variable), as the cluster example does.
+**Jobs only run in their pool.** A job without `node_pool` runs in the pool `default`. When the clients are in another pool, set `node_pool` in the jobs and in the values of the modules (most modules have a `node_pool` variable), as the cluster example does.
 
 ## Host networks
 

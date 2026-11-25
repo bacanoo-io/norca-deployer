@@ -198,7 +198,7 @@ func (r *Runner) Apply(ctx context.Context) error {
 	if ctx.Err() != nil {
 		return interrupted(ctx, "the post-cluster phase")
 	}
-	fmt.Printf("==> [5/5] Post-Cluster phase (ACL, decommission, secrets & packs)...\n")
+	fmt.Printf("==> [5/5] Post-Cluster phase (ACL, decommission, secrets, Rigger stack & GitOps)...\n")
 	if err := r.postClusterTasks(masters[0]); err != nil {
 		return fmt.Errorf("post-cluster tasks failed: %w", err)
 	}
@@ -767,8 +767,10 @@ func (r *Runner) resolveReplicationToken() error {
 	return nil
 }
 
-// postClusterTasks bootstraps ACLs and installs the packs through the first
-// server.
+// postClusterTasks bootstraps ACLs, writes what the plan has for the running
+// cluster (policies, node pools, namespaces, secrets, the node scaling
+// Variables) and applies the Rigger stack and the GitOps bindings, all
+// through the first server.
 func (r *Runner) postClusterTasks(first *target) error {
 	token, err := r.aclBootstrap(first)
 	if err != nil {
@@ -790,9 +792,6 @@ func (r *Runner) postClusterTasks(first *target) error {
 		return err
 	}
 	if err := r.publishNodeScaling(first, token); err != nil {
-		return err
-	}
-	if err := r.deployPacks(first, token); err != nil {
 		return err
 	}
 	if err := r.deployRigger(first, token); err != nil {
@@ -848,7 +847,7 @@ func (r *Runner) aclBootstrap(first *target) (string, error) {
 			if r.bootstrapSecret != "" {
 				fmt.Printf("    [WARN] ACLs were bootstrapped before with another token: the servers' acl.replication_token is not valid; put the management token into %s and apply again\n", tokenPath)
 			}
-			fmt.Printf("    [WARN] ACLs were bootstrapped before, but %s has no token; packs are skipped\n", tokenPath)
+			fmt.Printf("    [WARN] ACLs were bootstrapped before, but %s has no token; the steps that need it are skipped (ACL policies, node pools, namespaces, secrets, node scaling Variables, the Rigger stack, GitOps bindings)\n", tokenPath)
 			return "", nil
 		}
 		return "", fmt.Errorf("acl bootstrap failed: %w", err)

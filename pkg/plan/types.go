@@ -17,10 +17,9 @@ type DeploymentPlan struct {
 	// MetricsStore is the metrics_store block of every server.
 	MetricsStore *MetricsStoreConfig `yaml:"metrics_store,omitempty" json:"metrics_store,omitempty"`
 	// Bus is the bus block of every server: settings of the system bus.
-	Bus   *BusConfig   `yaml:"bus,omitempty" json:"bus,omitempty"`
-	Packs *PacksConfig `yaml:"packs,omitempty" json:"packs,omitempty"`
-	// Rigger is a stack of Rigger, the package manager that replaces packs,
-	// and the GitOps bindings (rigger.gitops).
+	Bus *BusConfig `yaml:"bus,omitempty" json:"bus,omitempty"`
+	// Rigger is a stack of Rigger, the package manager of Norca, and the
+	// GitOps bindings (rigger.gitops).
 	Rigger *RiggerConfig `yaml:"rigger,omitempty" json:"rigger,omitempty"`
 	// GitOps are GitOps bindings, as rigger.gitops.
 	GitOps       *GitOpsConfig  `yaml:"gitops,omitempty" json:"gitops,omitempty"`
@@ -38,8 +37,8 @@ type DeploymentPlan struct {
 	// pool named by a node is also created when the node registers).
 	NodePools []NodePoolConfig `yaml:"node_pools,omitempty" json:"node_pools,omitempty"`
 	// Namespaces are created after the cluster is up, before the secrets
-	// and the packs. The namespace of the Norca operators (norca-system) is
-	// always created; these are added to it.
+	// and the Rigger stack. The namespace of the Norca operators
+	// (norca-system) is always created; these are added to it.
 	Namespaces []NamespaceConfig `yaml:"namespaces,omitempty" json:"namespaces,omitempty"`
 	// NodeScaling publishes what the node scaling operator needs to create
 	// nodes by itself: the bootstrap template of the region and the
@@ -50,6 +49,10 @@ type DeploymentPlan struct {
 	// baseDir is the directory of the loaded configuration file; relative
 	// script paths are resolved against it.
 	baseDir string
+
+	// hasPacksKey notes that the loaded plan has the packs key, the section
+	// of the pack manager Norca no longer has. Validate refuses such a plan.
+	hasPacksKey bool
 }
 
 // AllGitOpsBindings returns the GitOps bindings of rigger.gitops and of the
@@ -184,7 +187,7 @@ type CNIConfig struct {
 // other regions. ACLs are bootstrapped in the authoritative region only; the
 // other regions replicate them with a management token of that region.
 // ConsulConfig wires the agents to a Consul agent on every node, such as
-// the one of the consul pack. Without it the agents do not use Consul: they
+// the one of the consul module. Without it the agents do not use Consul: they
 // do not register themselves there and do not look up servers there.
 type ConsulConfig struct {
 	// Address of the HTTP API of the local Consul agent (default
@@ -421,7 +424,8 @@ const (
 )
 
 // SecretsConfig lists secrets and Variables written after the cluster is up
-// (before the packs, which may read them).
+// (before the Rigger stack and the GitOps bindings, whose releases may read
+// them).
 type SecretsConfig struct {
 	// Store: builtin (default) writes the secrets into Norca's built-in
 	// secret store. external: the jobs read secrets from an external store
@@ -484,46 +488,6 @@ type BackupRetentionConfig struct {
 	KeepDaily   int `yaml:"keep_daily,omitempty" json:"keep_daily,omitempty"`
 	KeepWeekly  int `yaml:"keep_weekly,omitempty" json:"keep_weekly,omitempty"`
 	KeepMonthly int `yaml:"keep_monthly,omitempty" json:"keep_monthly,omitempty"`
-}
-
-type PacksConfig struct {
-	// Registry is a single registry (shorthand); Registries lists several.
-	Registry   PackRegistryConfig   `yaml:"registry,omitempty" json:"registry,omitempty"`
-	Registries []PackRegistryConfig `yaml:"registries,omitempty" json:"registries,omitempty"`
-	Deploy     []PackDeployItem     `yaml:"deploy,omitempty" json:"deploy,omitempty"`
-	// GitOps is refused: a binding applies a stack of Rigger, and the
-	// bindings are under rigger.gitops. The key is read to say so.
-	GitOps any `yaml:"gitops,omitempty" json:"gitops,omitempty"`
-}
-
-// AllRegistries returns the registries of registry and registries.
-func (p *PacksConfig) AllRegistries() []PackRegistryConfig {
-	var res []PackRegistryConfig
-	if p.Registry.Name != "" {
-		res = append(res, p.Registry)
-	}
-	return append(res, p.Registries...)
-}
-
-// PackRegistryConfig is created as a cluster registry (POST /v1/pack-registry).
-type PackRegistryConfig struct {
-	Name         string `yaml:"name" json:"name"`
-	Type         string `yaml:"type,omitempty" json:"type,omitempty"` // git (default), oci, dir
-	URL          string `yaml:"url" json:"url"`
-	Ref          string `yaml:"ref" json:"ref"`
-	SyncInterval string `yaml:"sync_interval,omitempty" json:"sync_interval,omitempty"`
-}
-
-// PackDeployItem is installed as a release with the server-side deploy
-// (POST /v1/release/<name>/deploy-pack).
-type PackDeployItem struct {
-	Name string `yaml:"name" json:"name"`
-	// Registry of the pack; may be empty when the plan has one registry.
-	Registry string         `yaml:"registry,omitempty" json:"registry,omitempty"`
-	Pack     string         `yaml:"pack" json:"pack"`
-	Version  string         `yaml:"version,omitempty" json:"version,omitempty"`
-	Enabled  bool           `yaml:"enabled" json:"enabled"`
-	Values   map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
 }
 
 // GitOpsConfig defines continuous GitOps reconcilers and bindings.
@@ -873,7 +837,7 @@ type NodeScalingConfig struct {
 	Enabled bool `yaml:"enabled" json:"enabled"`
 
 	// Namespace of the Variables (default "norca-system", the namespace of
-	// the operator packs). The bootstrap Variable holds the key of the node
+	// the operator modules). The bootstrap Variable holds the key of the node
 	// CA: only the operator may read it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 

@@ -1,7 +1,6 @@
 package plan
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -97,10 +96,6 @@ func knownKeys(node *yaml.Node, t reflect.Type, what string) error {
 }
 
 func (p *DeploymentPlan) validateGitOps() error {
-	if p.Packs != nil && p.Packs.GitOps != nil {
-		return errors.New("packs.gitops: pack bindings are gone, a GitOps binding applies a stack of Rigger: " +
-			"write the bindings under rigger.gitops (or the top-level gitops)")
-	}
 	var configs []*GitOpsConfig
 	if p.Rigger != nil {
 		configs = append(configs, p.Rigger.GitOps)

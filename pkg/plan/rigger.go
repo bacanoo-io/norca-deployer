@@ -11,10 +11,10 @@ import (
 )
 
 // RiggerConfig is the rigger section of a plan: a stack of Rigger (design of
-// Rigger, section 13.1), applied by the rigger program after the packs. The
-// stack is a directory next to the plan (stack), or its stack.hcl written in
-// the plan (stack_hcl). The section also holds the GitOps bindings, which
-// apply stacks of repositories (gitops); it may hold them alone.
+// Rigger, section 13.1), applied by the rigger program. The stack is a
+// directory next to the plan (stack), or its stack.hcl written in the plan
+// (stack_hcl). The section also holds the GitOps bindings, which apply
+// stacks of repositories (gitops); it may hold them alone.
 type RiggerConfig struct {
 	// Stack is the directory of the stack, relative to the plan: its
 	// stack.hcl, own modules, values and rigger.lock.hcl.

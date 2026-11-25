@@ -377,23 +377,6 @@ func TestGitOpsUnknownKeysAreRefused(t *testing.T) {
 	}
 }
 
-// Pack bindings are gone: packs.gitops is refused, and the error names
-// where the bindings are now.
-func TestGitOpsUnderPacksIsRefused(t *testing.T) {
-	for name, tc := range map[string]struct{ file, plan string }{
-		"yaml":           {"p.yaml", "packs:\n  gitops:\n    enabled: true\n    bindings:\n      - name: a\n        release_name: r\n        forgejo:\n          url: https://f/o/r.git\n"},
-		"yaml, disabled": {"p.yaml", "packs:\n  gitops:\n    enabled: false\n"},
-		"hcl":            {"p.hcl", "packs {\n  gitops {\n    enabled = true\n    binding \"a\" {\n      release_name = \"r\"\n      forgejo {\n        url = \"https://f/o/r.git\"\n      }\n    }\n  }\n}\n"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			_, err := LoadFromFile(writePlan(t, tc.file, tc.plan))
-			if err == nil || !strings.Contains(err.Error(), "packs.gitops") || !strings.Contains(err.Error(), "rigger.gitops") {
-				t.Fatalf("got %v", err)
-			}
-		})
-	}
-}
-
 func TestGitOpsResolvedBindings(t *testing.T) {
 	path := writePlan(t, "p.yaml", `gitops:
   enabled: true

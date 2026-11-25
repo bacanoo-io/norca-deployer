@@ -3,7 +3,7 @@
 #   - 3 dedicated servers (Raft quorum survives one failure), no workloads on them
 #   - 2 Linux clients with Docker CE from the Docker APT repository
 #   - 1 Windows client for native .exe workloads (raw_exec)
-#   - mTLS, gossip encryption, ACLs, packs and backups
+#   - mTLS, gossip encryption, ACLs, a Rigger stack (Redis and NATS) and backups
 #
 #   norca-deployer validate -c examples/nodes/cluster.yaml
 #   norca-deployer plan     -c examples/nodes/cluster.yaml
@@ -73,7 +73,7 @@ tuning:
                                     # mode (the CNI port mapping forwards ahead of the rules).
                                     # Open them wider only for services meant to be public.
     extra_ports:                    # Static ports of workloads (outside 20000-32000).
-      - port: "4222"                # NATS clients (nats pack); 6222 routes and 8222 monitoring
+      - port: "4222"                # NATS clients (nats module); 6222 routes and 8222 monitoring
         cidrs: [10.8.0.0/24]        # only matter between the NATS servers / for operators.
         roles: [client]             # Default: the nodes that run a client; proto tcp (udp, both).
     default_deny: true              # Enable ufw and deny all other incoming traffic. The SSH
@@ -216,12 +216,12 @@ scripts:
       EOF
       systemctl restart docker
 
-secrets:                            # Written after the cluster is up, before the packs.
+secrets:                            # Written after the cluster is up, before the Rigger stack.
   store: builtin                    # builtin: Norca's built-in secret store. external: the jobs
                                     # read secrets from an external store (e.g. Vault) that you
                                     # set up first; the "secret" entries are then skipped.
   bootstrap:
-    # Passwords of the NATS users (nats pack, auth_mode userpass): the item
+    # Passwords of the NATS users (nats module, auth_mode userpass): the item
     # password of nats/users/<user>. "!generate:<name>" creates a random value
     # once and keeps it (encrypted with the master key) in
     # .norca-deployer/generated/<name>, so you can hand it to the clients.
@@ -244,54 +244,65 @@ secrets:                            # Written after the cluster is up, before th
     #   path: nomad/jobs/billing
     #   items:
     #     api_url: https://billing.example.com
-    # - type: variable                  # A token the operator packs read (here the token of a
+    # - type: variable                  # A token the operator modules read (here the token of a
     #   path: providers/dns-eu          # DNS zone of norca-provider for norca-acme and norca-dns):
     #   namespace: norca-system         # it belongs to their namespace, norca-system.
     #   items:
     #     token: "!enc:v1:aes-gcm:..."
 
-packs:
-  registries:
-    - name: builtin                 # Registry name in the cluster.
-      type: dir                     # git (default) | oci | dir
-      url: builtin                  # The packs that ship with Norca.
-      ref: latest
-    - name: norca                   # The Norca pack registry (nats, postgres, rustfs, ...).
-      type: git
-      url: https://github.com/bacanoo-io/norca-registry
-      ref: v0.5.0                   # Pin a tag.
-  deploy:
-    - name: cache                   # Release name (lower case, digits, '-').
-      registry: builtin             # Needed with several registries.
-      pack: redis                   # Pack in the registry.
-      enabled: true                 # false: keep the entry but do not deploy it.
-      values:                       # Pack variables.
-        datacenters: [dc1, dc2]
-        node_pool: apps             # The clients are in the pool "apps" (client_defaults); jobs
-                                    # without node_pool only run in the pool "default".
-        count: 1
-        memory: 256
+rigger:                             # A Rigger stack, applied after the secrets: the base services
+                                    # of the cluster as modules.
+  sync_registries: [global]         # The servers sync the global registry before the stack: they
+                                    # fetch modules only from a registry they have synced.
+  # prune: true                     # Uninstall the releases that were removed from the stack.
+  # The stack.hcl, written in the plan (or stack: <directory> for a stack with
+  # files of its own). Its lock file is kept in .norca-deployer/rigger-stack/,
+  # so the versions stay from one apply to the next.
+  stack_hcl: |
+    rigger {
+      name   = "base"                  # Recorded in every release as its owner.
+      region = "eu-central"            # The region of this plan (metadata.region).
+    }
+
+    module "cache" {                   # The release "cache": one Redis server.
+      source  = "norca/redis"          # A module of the global registry, by a version constraint.
+      version = "~> 0.4"
+
+      values = {                       # Variables of the module.
+        datacenters = ["dc1", "dc2"]
+        node_pool   = "apps"           # The clients are in the pool "apps" (client_defaults); jobs
+                                       # without node_pool only run in the pool "default".
+        memory      = 256
+      }
+    }
 
     # NATS cluster (JetStream) for the applications.
-    - name: nats
-      registry: norca
-      pack: nats
-      enabled: true
-      values:
-        datacenters: [dc1, dc2]
-        node_pool: apps
-        count: 1                    # One server per client node (distinct_hosts): use 3 for HA
-                                    # on 3 or more Linux clients with Docker.
-        jetstream_enabled: true
-        auth_mode: userpass         # Users in accounts, passwords from the secrets above.
-        users:
-          - name: app
-            publish_allow: ["app.>", "$JS.API.>"]
-            subscribe_allow: ["app.>", "_INBOX.>"]
-          - name: ops
-            account: SYS            # nats server report, raft peer-remove.
-        # tls_enabled: true         # TLS: put tls_ca/tls_cert/tls_key into the Variable
-                                    # nomad/jobs/nats (a secrets entry of type variable).
+    module "nats" {
+      source  = "norca/nats"
+      version = "~> 2.0"
+
+      values = {
+        datacenters       = ["dc1", "dc2"]
+        node_pool         = "apps"
+        count             = 1          # One server per client node (distinct_hosts): use 3 for HA
+                                       # on 3 or more Linux clients with Docker.
+        jetstream_enabled = true
+        auth_mode         = "userpass" # Users in accounts, passwords from the secrets above.
+        users = [
+          {
+            name            = "app"
+            publish_allow   = ["app.>", "$JS.API.>"]
+            subscribe_allow = ["app.>", "_INBOX.>"]
+          },
+          {
+            name    = "ops"
+            account = "SYS"            # nats server report, raft peer-remove.
+          },
+        ]
+        # tls_enabled = true           # TLS: put tls_ca/tls_cert/tls_key into the Variable
+                                       # nomad/jobs/nats (a secrets entry of type variable).
+      }
+    }
 
 # Defaults for every node that runs a client. A node's own client_settings
 # win: values when set, meta entries by key, lists and blocks when given.
@@ -316,8 +327,8 @@ node_pools:                         # Descriptions of the pools (created after t
     description: Windows nodes for native .exe workloads
 
 namespaces:                         # Created after the cluster is up, before the secrets and the
-  - name: apps                      # packs. norca-system, the namespace of the operator packs, is
-    description: Applications of the teams   # always created; this adds more. Never deleted.
+  - name: apps                      # Rigger stack. norca-system, the namespace of the operator
+    description: Applications of the teams   # modules, is always created; this adds more. Never deleted.
     meta:
       owner: platform
 

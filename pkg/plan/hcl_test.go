@@ -27,17 +27,13 @@ func TestDecodeHCLErrors(t *testing.T) {
 	}
 }
 
-func TestDecodeHCLPackValues(t *testing.T) {
+// Free-form values keep their form in HCL: a nested block is an object, not
+// a list of one object.
+func TestDecodeHCLFreeFormValues(t *testing.T) {
 	src := `
-packs {
-  registry {
-    name = "builtin"
-    url  = "builtin"
-  }
-  deploy {
-    name    = "web"
-    pack    = "test-app"
-    enabled = true
+gitops {
+  enabled = true
+  binding "web" {
     values {
       count = 2
       extra_env {
@@ -51,7 +47,11 @@ packs {
 	if err := decodeHCL([]byte(src), &p); err != nil {
 		t.Fatal(err)
 	}
-	v := p.Packs.Deploy[0].Values
+	bindings := p.AllGitOpsBindings()
+	if len(bindings) != 1 {
+		t.Fatalf("bindings = %#v", bindings)
+	}
+	v := bindings[0].Values
 	env, ok := v["extra_env"].(map[string]any)
 	if v["count"] != 2 || !ok || env["LOG"] != "debug" {
 		t.Fatalf("values = %#v", v)
@@ -148,16 +148,6 @@ func TestBootstrapValidation(t *testing.T) {
 		"policy without rules": {func(p *DeploymentPlan) {
 			p.Security.ACL.Policies = []ACLPolicyConfig{{Name: "x"}}
 		}, "rules"},
-		"pack registry ambiguous": {func(p *DeploymentPlan) {
-			p.Packs = &PacksConfig{
-				Registries: []PackRegistryConfig{{Name: "a", URL: "a", Type: "dir"}, {Name: "b", URL: "b", Type: "dir"}},
-				Deploy:     []PackDeployItem{{Name: "x", Pack: "redis", Enabled: true}},
-			}
-		}, "registry is required"},
-		"pack registry unknown": {func(p *DeploymentPlan) {
-			p.Packs = &PacksConfig{Registries: []PackRegistryConfig{{Name: "a", URL: "a", Type: "dir"}},
-				Deploy: []PackDeployItem{{Name: "x", Registry: "b", Pack: "redis", Enabled: true}}}
-		}, "unknown registry"},
 		"namespace name": {func(p *DeploymentPlan) {
 			p.Namespaces = []NamespaceConfig{{Name: "team_a"}}
 		}, "namespaces[0]"},

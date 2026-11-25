@@ -50,7 +50,7 @@ tuning:
 | SSH | All, with `default_deny` | Any source |
 | `extra_ports` | Nodes of their `roles` (default: nodes running a client) | Their `cidrs`, default `cluster_cidrs` |
 
-`extra_ports` opens static ports of workloads, which are outside the allocation range, e.g. the client port 4222 of the NATS pack:
+`extra_ports` opens static ports of workloads, which are outside the allocation range, e.g. the client port 4222 of the `nats` module:
 
 ```yaml
 tuning:

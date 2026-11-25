@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -77,6 +78,31 @@ func orYAML(f Format) Format {
 		return FormatYAML
 	}
 	return f
+}
+
+// packsKey is the key of the section of the pack manager, which Norca no
+// longer has.
+const packsKey = "packs"
+
+// errPacksSection refuses a plan that has the packs key.
+var errPacksSection = errors.New("packs: the pack manager is gone from Norca, modules of Rigger replace the packs: " +
+	"write a rigger section (GitOps bindings go under rigger.gitops or the top-level gitops)")
+
+// UnmarshalYAML reads a plan and notes the packs key, with or without a
+// value. YAML and JSON ignore a key the plan does not have, and a plan whose
+// packs were silently left out would look applied; Validate refuses it.
+func (p *DeploymentPlan) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			if node.Content[i].Value == packsKey {
+				p.hasPacksKey = true
+			}
+		}
+	}
+
+	type plain DeploymentPlan
+
+	return node.Decode((*plain)(p))
 }
 
 // SaveToFile serializes the plan to YAML and writes it to disk. The file is
@@ -165,16 +191,6 @@ func (p *DeploymentPlan) SetDefaults() {
 	}
 	if s := p.Security.PKI; s != nil && s.SPIFFE != nil && s.SPIFFE.Enabled && s.SPIFFE.TrustDomain == "" {
 		s.SPIFFE.TrustDomain = strings.ToLower(p.Metadata.Name) + ".norca"
-	}
-	if p.Packs != nil {
-		if p.Packs.Registry.Name != "" && p.Packs.Registry.Type == "" {
-			p.Packs.Registry.Type = "git"
-		}
-		for i := range p.Packs.Registries {
-			if p.Packs.Registries[i].Type == "" {
-				p.Packs.Registries[i].Type = "git"
-			}
-		}
 	}
 	if r := p.Rigger; r != nil {
 		if r.RunOn == "" {
@@ -378,6 +394,10 @@ func (p *DeploymentPlan) fillWindowsPathDefaults(pc *PathConfig) {
 
 // Validate verifies logical and structural requirements of the plan.
 func (p *DeploymentPlan) Validate() error {
+	if p.hasPacksKey {
+		return errPacksSection
+	}
+
 	if len(p.Inventory.Masters) == 0 {
 		return fmt.Errorf("at least one master (server) node must be specified in the inventory")
 	}

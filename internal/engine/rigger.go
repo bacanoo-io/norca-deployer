@@ -147,12 +147,12 @@ func startRiggerProxy(cli *remoteCLI) (addr string, stop func(), err error) {
 }
 
 // deployRigger applies the stack of the rigger section with rigger stack
-// apply, after the packs. By default norca rigger runs on the first server,
-// on a copy of the stack, and sends it to the servers, which apply it. The
-// plan may name the rigger program of this machine instead (run_on), and
-// have the program apply the stack itself (mode). What is unchanged Rigger
-// decides from the releases of the cluster, so the deployer keeps no marker
-// for it.
+// apply, after the secrets and the node scaling Variables its releases may
+// read. By default norca rigger runs on the first server, on a copy of the
+// stack, and sends it to the servers, which apply it. The plan may name the
+// rigger program of this machine instead (run_on), and have the program
+// apply the stack itself (mode). What is unchanged Rigger decides from the
+// releases of the cluster, so the deployer keeps no marker for it.
 func (r *Runner) deployRigger(first *target, token string) error {
 	rc := r.plan.Rigger
 	// A section of GitOps bindings only has no stack of the plan.

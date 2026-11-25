@@ -77,19 +77,6 @@ secrets:
       path: nomad/jobs/nats
       items: {tls_ca: "@ca.pem", client_token: "!generate:nats-app"}
       overwrite: true
-packs:
-  registries:
-    - {name: builtin, type: dir, url: builtin}
-    - {name: norca, url: https://github.com/bacanoo-io/norca-registry, ref: v0.1.0}
-  deploy:
-    - name: nats
-      registry: norca
-      pack: nats
-      enabled: true
-      values:
-        bridge_enabled: true
-        bridge_nkey: "!nkey-public:bridge"
-        users: [{name: app}]
 inventory:
   masters:
     - {host: 10.0.0.1, hostname: s1}
@@ -194,33 +181,50 @@ func TestACLPolicyBoundToJob(t *testing.T) {
 	}
 }
 
-func TestPacksFromSeveralRegistriesWithGeneratedValues(t *testing.T) {
-	r, first, api := bootstrapRunner(t, bootstrapPlan)
-	if err := r.deployPacks(first, "token"); err != nil {
-		t.Fatal(err)
+// The values of a GitOps binding are resolved into a copy of the same form:
+// a generated value is replaced, a list stays a list and a number a number.
+func TestResolveValuesKeepsTheTree(t *testing.T) {
+	r, _, _ := bootstrapRunner(t, bootstrapPlan)
+
+	values := map[string]any{
+		"bridge_nkey": "!nkey-public:bridge",
+		"count":       3,
+		"users":       []any{map[string]any{"name": "app", "password": "!generate:nats-app"}},
 	}
-	joined := strings.Join(api.calls, "\n")
-	for _, want := range []string{"POST /v1/pack-registry/builtin/sync", "POST /v1/pack-registry/norca/sync", "POST /v1/release/nats/deploy-pack"} {
-		if !strings.Contains(joined, want) {
-			t.Fatalf("missing %s:\n%s", want, joined)
-		}
-	}
-	var req struct {
-		Registry string
-		Values   map[string]any
-	}
-	json.Unmarshal([]byte(api.bodies["POST /v1/release/nats/deploy-pack"]), &req)
-	pub, _ := req.Values["bridge_nkey"].(string)
-	seed, err := r.store.NKeySeed("bridge")
+
+	resolved, err := r.resolveValues(values)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPub, _ := r.store.NKeyPublic("bridge")
-	if req.Registry != "norca" || !strings.HasPrefix(pub, "U") || pub != wantPub || seed == pub {
-		t.Fatalf("deploy request: registry %q, bridge_nkey %q", req.Registry, pub)
+
+	got, _ := resolved.(map[string]any)
+
+	wantPub, err := r.store.NKeyPublic("bridge")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if users, ok := req.Values["users"].([]any); !ok || len(users) != 1 {
-		t.Fatalf("list values must stay lists: %#v", req.Values["users"])
+
+	if pub, _ := got["bridge_nkey"].(string); !strings.HasPrefix(pub, "U") || pub != wantPub {
+		t.Errorf("bridge_nkey = %q, want the public NKey %q", got["bridge_nkey"], wantPub)
+	}
+
+	if got["count"] != 3 {
+		t.Errorf("count = %#v, want 3", got["count"])
+	}
+
+	users, ok := got["users"].([]any)
+	if !ok || len(users) != 1 {
+		t.Fatalf("users = %#v, want a list of one user", got["users"])
+	}
+
+	user, _ := users[0].(map[string]any)
+	if password, _ := user["password"].(string); user["name"] != "app" || len(password) < 20 || strings.HasPrefix(password, "!") {
+		t.Errorf("users[0] = %#v, want the name kept and the password generated", user)
+	}
+
+	// The plan keeps what it said.
+	if values["bridge_nkey"] != "!nkey-public:bridge" {
+		t.Errorf("the values of the plan were changed: %#v", values)
 	}
 }
 

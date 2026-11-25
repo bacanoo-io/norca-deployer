@@ -115,3 +115,121 @@ rigger {
 		t.Fatalf("sync_registries = %q, want global and team-modules", got)
 	}
 }
+
+// Norca has no pack manager any more: a plan that still has the packs key is
+// refused in every format, whatever is under the key, and the message names
+// the rigger section and where the GitOps bindings go.
+func TestPacksSectionIsRefused(t *testing.T) {
+	const (
+		yamlHead = "inventory:\n  masters:\n    - host: 10.0.0.1\n"
+		hclHead  = "inventory {\n  masters {\n    host = \"10.0.0.1\"\n  }\n}\n"
+	)
+
+	tests := []struct {
+		name   string
+		format Format
+		src    string
+	}{
+		{
+			name:   "yaml",
+			format: FormatYAML,
+			src: yamlHead + `packs:
+  registry: {name: builtin, type: dir, url: builtin}
+  deploy:
+    - {name: cache, pack: redis, enabled: true}
+`,
+		},
+		{
+			name:   "yaml, bindings under the key",
+			format: FormatYAML,
+			src: yamlHead + `packs:
+  gitops:
+    enabled: true
+    bindings:
+      - name: a
+        forgejo:
+          url: https://f/o/r.git
+`,
+		},
+		{
+			name:   "yaml, the key without a value",
+			format: FormatYAML,
+			src:    "packs:\n" + yamlHead,
+		},
+		{
+			name:   "json",
+			format: FormatJSON,
+			src: `{"inventory": {"masters": [{"host": "10.0.0.1"}]},
+				"packs": {"registry": {"name": "builtin", "type": "dir", "url": "builtin"},
+					"deploy": [{"name": "cache", "pack": "redis", "enabled": true}]}}`,
+		},
+		{
+			name:   "json, null",
+			format: FormatJSON,
+			src:    `{"inventory": {"masters": [{"host": "10.0.0.1"}]}, "packs": null}`,
+		},
+		{
+			name:   "hcl",
+			format: FormatHCL,
+			src: hclHead + `packs {
+  registry {
+    name = "builtin"
+    type = "dir"
+    url  = "builtin"
+  }
+  deploy {
+    name    = "cache"
+    pack    = "redis"
+    enabled = true
+    values {
+      count = 1
+    }
+  }
+}
+`,
+		},
+		{
+			name:   "hcl, bindings under the key",
+			format: FormatHCL,
+			src: hclHead + `packs {
+  gitops {
+    enabled = true
+    binding "a" {
+      forgejo {
+        url = "https://f/o/r.git"
+      }
+    }
+  }
+}
+`,
+		},
+		{
+			name:   "hcl, an empty block",
+			format: FormatHCL,
+			src:    hclHead + "packs {}\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.src), tt.format, t.TempDir())
+			if err == nil {
+				t.Fatal("Parse() accepted a plan with the packs key")
+			}
+
+			for _, want := range []string{"packs: the pack manager is gone", "a rigger section", "rigger.gitops", "top-level gitops"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Parse() = %q, want it to contain %q", err, want)
+				}
+			}
+		})
+	}
+}
+
+// The refusal is of the key: a plan that only has the word in a value loads.
+func TestPlanWithoutPacksKeyLoads(t *testing.T) {
+	src := "metadata: {name: packs}\ninventory:\n  masters:\n    - host: 10.0.0.1\n"
+	if _, err := Parse([]byte(src), FormatYAML, t.TempDir()); err != nil {
+		t.Fatalf("Parse() = %v, want the plan loaded", err)
+	}
+}

@@ -19,6 +19,13 @@ func decodeHCL(data []byte, plan *DeploymentPlan) error {
 	if err := hcl.Decode(&raw, string(data)); err != nil {
 		return err
 	}
+	// The packs key is no key of the plan any more. It is noted and left
+	// out here, so that Validate refuses the plan with its reason and the
+	// shaping does not call it an unknown key.
+	if _, ok := raw[packsKey]; ok {
+		delete(raw, packsKey)
+		plan.hasPacksKey = true
+	}
 	shaped, err := shape(raw, reflect.TypeOf(plan).Elem(), "")
 	if err != nil {
 		return err
@@ -117,7 +124,8 @@ func single(v any, path string) (map[string]any, error) {
 	return nil, fmt.Errorf("%s: expected a block", where(path))
 }
 
-// generic unwraps the single-object lists of free-form values (pack values).
+// generic unwraps the single-object lists of free-form values (the values of
+// a GitOps binding).
 func generic(v any) any {
 	switch o := v.(type) {
 	case []map[string]any:

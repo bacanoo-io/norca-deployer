@@ -54,7 +54,7 @@ federation:
 
 - The `join` addresses are added to the servers' `retry_join`, which federates the regions.
 - `replication_token_file` (required with ACLs) is the authoritative region's management token. It is written to the servers as `acl.replication_token`.
-- A replica region does not bootstrap ACLs: `apply` prints `Region us-east replicates ACLs from eu-central (no bootstrap)`, and packs use the authoritative token.
+- A replica region does not bootstrap ACLs: `apply` prints `Region us-east replicates ACLs from eu-central (no bootstrap)`, and what `apply` writes there (secrets, the Rigger stack, GitOps bindings) uses the authoritative token.
 
 ## Order
 

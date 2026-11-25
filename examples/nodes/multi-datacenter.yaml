@@ -106,32 +106,42 @@ secrets:
     - path: nats/users/ops
       items: {password: "!generate:nats-ops"}
 
-packs:
-  registries:
-    - name: norca
-      type: git
-      url: https://github.com/bacanoo-io/norca-registry
-      ref: v0.3.0                   # nats 0.5.0: stream limits, datacenter placement tags.
-  deploy:
-    - name: nats
-      registry: norca
-      pack: nats
-      enabled: true
-      values:
-        datacenters: [eu-a, eu-b, eu-c]
-        count: 3                    # One NATS server per datacenter...
-        separate_scope: "${node.datacenter}"   # ...kept apart by the datacenter (a Norca
-        separate_required: true                # placement rule), one per node (distinct_hosts).
-        jetstream_enabled: true     # Streams with 3 replicas keep a majority without one datacenter.
-        jetstream_unique_tag: dc    # Replicas of every stream in different datacenters.
-        cluster_compression: s2_auto   # Compressed routes between the datacenters.
-        auth_mode: userpass
-        users:
-          - name: app
-            publish_allow: ["app.>", "$JS.API.>"]
-            subscribe_allow: ["app.>", "_INBOX.>"]
-          - name: ops
-            account: SYS            # nats server report, raft peer-remove.
+# The NATS cluster is a Rigger stack with one module, written in the plan.
+rigger:
+  sync_registries: [global]         # The servers sync the global registry before they fetch the module.
+  stack_hcl: |
+    rigger {
+      name   = "base"                  # Recorded in every release as its owner.
+      region = "eu"                    # The region of this plan (metadata.region).
+    }
+
+    module "nats" {
+      source  = "norca/nats"           # The nats module of the global registry.
+      version = "~> 2.0"
+
+      values = {
+        datacenters          = ["eu-a", "eu-b", "eu-c"]
+        count                = 3                      # One NATS server per datacenter...
+        separate_scope       = "$${node.datacenter}"  # ...kept apart by the datacenter (a Norca placement
+        separate_required    = true                   # rule; $$ leaves the reference to the scheduler),
+                                                      # one per node (distinct_hosts).
+        jetstream_enabled    = true                   # Streams with 3 replicas keep a majority without one datacenter.
+        jetstream_unique_tag = "dc"                   # Replicas of every stream in different datacenters.
+        cluster_compression  = "s2_auto"              # Compressed routes between the datacenters.
+        auth_mode            = "userpass"
+        users = [
+          {
+            name            = "app"
+            publish_allow   = ["app.>", "$JS.API.>"]
+            subscribe_allow = ["app.>", "_INBOX.>"]
+          },
+          {
+            name    = "ops"
+            account = "SYS"                           # nats server report, raft peer-remove.
+          },
+        ]
+      }
+    }
 
 inventory:
   masters:

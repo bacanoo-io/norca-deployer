@@ -34,7 +34,7 @@ var (
 	sha256Re      = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
-// validateCluster checks the inventory, release, CNI, security and packs
+// validateCluster checks the inventory, release, CNI, security and Rigger
 // settings that the original validation did not cover.
 func (p *DeploymentPlan) validateCluster() error {
 	seen := map[string]string{}
@@ -185,9 +185,6 @@ func (p *DeploymentPlan) validateCluster() error {
 		}
 	}
 
-	if err := p.validatePacks(); err != nil {
-		return err
-	}
 	if err := p.validateRigger(); err != nil {
 		return err
 	}

@@ -129,16 +129,6 @@ func newPlanCmd() *cobra.Command {
 					fmt.Fprintf(out, "  - %s %s/%s [%s] (%s)\n", b.Type, b.Namespace, b.Path, strings.Join(sortedKeys(b.Items), ", "), mode)
 				}
 			}
-			if pk := plan.Packs; pk != nil && len(pk.Deploy) > 0 {
-				fmt.Fprintf(out, "Packs (%d):\n", len(pk.Deploy))
-				for _, d := range pk.Deploy {
-					reg := d.Registry
-					if reg == "" {
-						reg = pk.AllRegistries()[0].Name
-					}
-					fmt.Fprintf(out, "  - %s: %s/%s enabled=%t\n", d.Name, reg, d.Pack, d.Enabled)
-				}
-			}
 			if bindings := plan.AllGitOpsBindings(); len(bindings) > 0 {
 				fmt.Fprintf(out, "GitOps Bindings (%d):\n", len(bindings))
 				for _, b := range bindings {

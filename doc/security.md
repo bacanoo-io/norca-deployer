@@ -107,9 +107,9 @@ The key is written to the server block (`encrypt`).
 
 ## ACLs
 
-With `security.acl.enabled: true` the agents run with ACLs. With `auto_bootstrap: true`, the first `apply` runs `norca acl bootstrap` on the first server and stores the management token in `security.acl.management_token_output` (default `.norca-deployer/management-token`). Later runs read the stored token; packs are deployed with it.
+With `security.acl.enabled: true` the agents run with ACLs. With `auto_bootstrap: true`, the first `apply` runs `norca acl bootstrap` on the first server and stores the management token in `security.acl.management_token_output` (default `.norca-deployer/management-token`). Later runs read the stored token; the post-cluster tasks (policies, namespaces, secrets, the Rigger stack, GitOps) run with it.
 
-If the cluster was bootstrapped earlier but the token file is missing, `apply` warns and skips the packs; it cannot bootstrap a second time.
+If the cluster was bootstrapped earlier but the token file is missing, `apply` warns and skips the tasks that need the token (ACL policies, node pools, namespaces, secrets, node scaling Variables, the Rigger stack, GitOps bindings); it cannot bootstrap a second time.
 
 ## Secrets in the plan
 

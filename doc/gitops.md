@@ -2,7 +2,7 @@
 
 `norca-deployer` applies [Rigger](rigger.md) stacks straight from Git repositories: once with `gitops run`, on
 every `apply`, and on every push with the `gitops daemon` webhook listener. Repositories are read into memory
-and never stored on disk. Pack bindings are gone: a binding applies a stack.
+and never stored on disk.
 
 ## How a stack reaches the cluster
 
@@ -180,7 +180,7 @@ which `--mode plan-only` allows.
 
 ## On apply
 
-`apply` runs every binding after the packs and the stack of the plan: it fetches the stack, the servers plan
+`apply` runs every binding after the stack of the plan: it fetches the stack, the servers plan
 it, and a stack that is not in sync is applied (or, with `plan-only`, its plan is shown). It runs through the
 CLI of the first server, which must run Linux.
 

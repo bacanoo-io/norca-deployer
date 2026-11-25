@@ -11,13 +11,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/bacanoo-io/norca-deployer/internal/gitops"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
-// resolveValue resolves a value of a secret item or a pack value: an
+// resolveValue resolves a value of a secret item or of a GitOps binding: an
 // encrypted value, a generated value or NKey, or (fileOK) "@path".
 func (r *Runner) resolveValue(v string, fileOK bool) (string, error) {
 	switch {
@@ -38,7 +37,8 @@ func (r *Runner) resolveValue(v string, fileOK bool) (string, error) {
 	return r.resolveSecret(v)
 }
 
-// resolveValues resolves the strings of a pack values tree into a copy.
+// resolveValues resolves the strings of the values tree of a GitOps binding
+// into a copy.
 func (r *Runner) resolveValues(v any) (any, error) {
 	switch t := v.(type) {
 	case string:
@@ -206,83 +206,6 @@ func redact(out string, items map[string]string) string {
 	return out
 }
 
-// deployPacks creates the cluster registries and installs the enabled packs
-// with the server-side deploy. A pack is only deployed again when its
-// settings changed since the last successful apply.
-func (r *Runner) deployPacks(first *target, token string) error {
-	pk := r.plan.Packs
-	if pk == nil || len(pk.Deploy) == 0 {
-		return nil
-	}
-	if r.plan.Security.ACL != nil && r.plan.Security.ACL.Enabled && token == "" {
-		fmt.Printf("    [WARN] No management token: %d pack(s) not deployed\n", len(pk.Deploy))
-		return nil
-	}
-	cli := first.cli(r, token)
-
-	regs := pk.AllRegistries()
-	for _, reg := range regs {
-		body, _ := json.Marshal(map[string]any{
-			"Name": reg.Name,
-			"Spec": map[string]any{
-				"type":         reg.Type,
-				"source":       reg.URL,
-				"defaultRef":   reg.Ref,
-				"syncInterval": reg.SyncInterval,
-			},
-		})
-		if status, out, err := cli.api("POST", "/v1/pack-registry", body); err != nil || status != 200 {
-			return apiError(fmt.Sprintf("pack registry %q", reg.Name), status, out, err)
-		}
-		if status, out, err := cli.api("POST", "/v1/pack-registry/"+reg.Name+"/sync", nil); err != nil || status != 200 {
-			return apiError(fmt.Sprintf("pack registry %q sync", reg.Name), status, out, err)
-		}
-		fmt.Printf("    Pack registry %q synced\n", reg.Name)
-	}
-
-	for _, d := range pk.Deploy {
-		if !d.Enabled {
-			continue
-		}
-		registry := d.Registry
-		if registry == "" {
-			registry = regs[0].Name
-		}
-		values, err := r.resolveValues(d.Values)
-		if err != nil {
-			return fmt.Errorf("pack %q values: %w", d.Name, err)
-		}
-		req := map[string]any{
-			"Registry": registry,
-			"Pack":     d.Pack,
-			"Version":  d.Version,
-			"Values":   values,
-			"Wait":     true,
-			"Timeout":  int64(10 * time.Minute),
-		}
-		body, err := json.Marshal(req)
-		if err != nil {
-			return fmt.Errorf("pack %q: %w", d.Name, err)
-		}
-		sum := sha256.Sum256(body)
-		marker := r.store.Path(filepath.Join("packs", d.Name+".sha256"))
-		if prev, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(prev)) == hex.EncodeToString(sum[:]) {
-			fmt.Printf("    Pack %s unchanged (skipped)\n", d.Name)
-			continue
-		}
-		fmt.Printf("    Deploying pack %s (%s/%s)...\n", d.Name, registry, d.Pack)
-		status, out, err := cli.api("POST", "/v1/release/"+d.Name+"/deploy-pack", body)
-		if err != nil || status != 200 {
-			return apiError(fmt.Sprintf("pack %q", d.Name), status, out, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(marker), 0700); err == nil {
-			_ = os.WriteFile(marker, []byte(hex.EncodeToString(sum[:])+"\n"), 0600)
-		}
-		fmt.Printf("    [OK] Pack %s deployed\n", d.Name)
-	}
-	return nil
-}
-
 // applyNodePools creates or updates the node pools of the plan (description
 // and meta). A pool that a node names is created anyway when the node
 // registers; this sets its description. Node pools replicate from the
@@ -319,8 +242,8 @@ func (r *Runner) applyNodePools(first *target, token string) error {
 	return nil
 }
 
-// applyNamespaces creates the namespaces the secrets and the packs need:
-// norca-system, the namespace of the operator packs, and those of the plan.
+// applyNamespaces creates the namespaces the secrets and the releases need:
+// norca-system, the namespace of the operator modules, and those of the plan.
 // A namespace is looked up only when its entry changed since the last apply.
 // A missing one is created. An existing one is left as it is when its
 // description and meta are the plan's, and for norca-system when the plan

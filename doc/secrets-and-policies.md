@@ -1,6 +1,6 @@
 # Bootstrap Secrets and ACL Policies
 
-After the cluster is up, `apply` can create the ACL policies, the namespaces, the secrets and the Variables that the jobs of the cluster need, before it deploys the packs that read them. The order in the post-cluster stage is: ACL bootstrap, decommission, ACL policies, node pools, namespaces, secrets, node scaling Variables, packs, GitOps bindings.
+After the cluster is up, `apply` can create the ACL policies, the namespaces, the secrets and the Variables that the jobs of the cluster need, before it applies the Rigger stack and the GitOps bindings, whose releases read them. The order in the post-cluster stage is: ACL bootstrap, decommission, ACL policies, node pools, namespaces, secrets, node scaling Variables, the Rigger stack, GitOps bindings.
 
 ## Namespaces
 
@@ -12,7 +12,7 @@ namespaces:
       owner: platform
 ```
 
-`apply` always creates the namespace **`norca-system`** (description `Norca operators`). The operator packs of the Norca pack registry (`loadbalancer-operator`, `nodescaler-operator`, `norca-acme`, `norca-dns`, `norca-provider`) run their jobs there by default and keep their token Variables and secrets there. They expect the namespace to exist and do not create it, so `apply` makes sure it is there before the secrets and the packs. Give rights in it to the operators of the cluster only: the jobs run with ACL policies bound to them, and the Variables hold provider tokens and the key of the node CA. The `namespaces` block adds more namespaces.
+`apply` always creates the namespace **`norca-system`** (description `Norca operators`). The operator modules of the global registry (`loadbalancer-operator`, `nodescaler-operator`, `norca-acme`, `norca-dns`, `norca-provider`) run their jobs there by default and keep their token Variables and secrets there. They expect the namespace to exist and do not create it, so `apply` makes sure it is there before the secrets and the Rigger stack. Give rights in it to the operators of the cluster only: the jobs run with ACL policies bound to them, and the Variables hold provider tokens and the key of the node CA. The `namespaces` block adds more namespaces.
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -52,7 +52,7 @@ secrets:
 | `store` | `builtin` | `builtin`: the secrets go into Norca's built-in secret store. `external`: the jobs read their secrets from an external store (e.g. Vault), which must be set up before; the entries of type `secret` are skipped, Variables are still written |
 | `bootstrap[].type` | `secret` | `secret` (built-in secret store, `/v1/secret/<path>`) or `variable` (`/v1/var/<path>`) |
 | `bootstrap[].path` | | Path of the secret or Variable |
-| `bootstrap[].namespace` | `default` | Namespace; the tokens and secrets the operator packs read belong to `norca-system` |
+| `bootstrap[].namespace` | `default` | Namespace; the tokens and secrets the operator modules read belong to `norca-system` |
 | `bootstrap[].items` | | Item names and values (see below) |
 | `bootstrap[].overwrite` | `false` | See below |
 
@@ -74,7 +74,7 @@ With ACLs the writes use the management token; without a token the entries are s
 | `!nkey-seed:<name>` | Seed of a NATS user NKey pair (`SU...`) |
 | `!nkey-public:<name>` | Public key of that pair (`U...`) |
 
-Generated values are created on first use and kept in `.norca-deployer/generated/<name>` and `.norca-deployer/nkeys/<name>`, encrypted when a master key exists. Every apply and every entry that names the same `<name>` gets the same value, so one value can be used in several places (a server token and the client that presents it), and you can read it from the state directory to hand it to a client. The generated and NKey forms can also be used in pack values; `@path` only in secret items.
+Generated values are created on first use and kept in `.norca-deployer/generated/<name>` and `.norca-deployer/nkeys/<name>`, encrypted when a master key exists. Every apply and every entry that names the same `<name>` gets the same value, so one value can be used in several places (a server token and the client that presents it), and you can read it from the state directory to hand it to a client. The generated and NKey forms can also be used in the `values` of a GitOps binding; `@path` only in secret items.
 
 ## ACL policies
 
@@ -94,14 +94,14 @@ security:
           # task: archive
 ```
 
-A policy with `job` is bound to the workload identity of that job (as `norca acl policy apply -job`), so the job needs no static token. The operator packs bind their policies to their jobs themselves; a policy for another job in `norca-system` names `namespace: norca-system`. The deployer writes a policy again only when its name, description, rules or binding changed. In a replica region the policies are not written: they replicate from the authoritative region.
+A policy with `job` is bound to the workload identity of that job (as `norca acl policy apply -job`), so the job needs no static token. The operator modules bind their policies to their jobs themselves; a policy for another job in `norca-system` names `namespace: norca-system`. The deployer writes a policy again only when its name, description, rules or binding changed. In a replica region the policies are not written: they replicate from the authoritative region.
 
 ## Example: NATS for the applications
 
-The cluster example ([cluster.yaml](../examples/nodes/cluster.yaml)) deploys the `nats` pack of the Norca pack registry with user/password authentication:
+The cluster example ([cluster.yaml](../examples/nodes/cluster.yaml)) installs the `nats` module of the global registry with user/password authentication, in the stack of its `rigger` section:
 
 1. The secrets `nats/users/app` and `nats/users/ops` get generated passwords.
-2. The pack values name the users; the pack reads their passwords from the secrets.
+2. The values of the module name the users; the module reads their passwords from the secrets.
 
 The passwords of `app` and `ops` are in `.norca-deployer/generated/nats-app` and `nats-ops` for the clients that connect.
 

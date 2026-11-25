@@ -224,7 +224,7 @@ systemctl restart docker
 EOT
 }
 
-secrets {                              # Written after the cluster is up, before the packs.
+secrets {                              # Written after the cluster is up, before the Rigger stack.
   store = "builtin"                    # external: secrets come from an external store (skipped here).
 
   # NATS user passwords (generated once, kept in .norca-deployer/generated/).
@@ -246,7 +246,7 @@ secrets {                              # Written after the cluster is up, before
   #   path  = "nomad/jobs/billing"
   #   items = { api_url = "https://billing.example.com" }
   # }
-  # bootstrap {                          # A token the operator packs read: in their namespace.
+  # bootstrap {                          # A token the operator modules read: in their namespace.
   #   type      = "variable"
   #   path      = "providers/dns-eu"
   #   namespace = "norca-system"
@@ -254,51 +254,59 @@ secrets {                              # Written after the cluster is up, before
   # }
 }
 
-packs {
-  registries {
-    name = "builtin"
-    type = "dir"                       # git (default) | oci | dir
-    url  = "builtin"                   # The packs that ship with Norca.
-    ref  = "latest"
-  }
-  registries {
-    name = "norca"                     # The Norca pack registry (nats, postgres, ...).
-    type = "git"
-    url  = "https://github.com/bacanoo-io/norca-registry"
-    ref  = "v0.5.0"
-  }
+# A Rigger stack, applied after the secrets: the base services of the cluster
+# as modules. The stack.hcl is written in the plan, as a heredoc (or
+# stack = "<directory>" for a stack with files of its own).
+rigger {
+  sync_registries = ["global"]         # The servers sync the global registry before the stack.
+  # prune         = true               # Uninstall the releases that were removed from the stack.
 
-  deploy {
-    name     = "cache"                 # Release name.
-    registry = "builtin"
-    pack     = "redis"
-    enabled  = true
-    values {                           # Pack variables.
-      datacenters = ["dc1", "dc2"]
-      node_pool   = "apps"             # The clients are in the pool "apps" (client_defaults).
-      count       = 1
-      memory      = 256
-    }
-  }
+  stack_hcl = <<EOT
+rigger {
+  name   = "base"                  # Recorded in every release as its owner.
+  region = "eu-central"            # The region of this plan (metadata.region).
+}
 
-  # NATS cluster (JetStream) for the applications.
-  deploy {
-    name     = "nats"
-    registry = "norca"
-    pack     = "nats"
-    enabled  = true
-    values {
-      datacenters       = ["dc1", "dc2"]
-      node_pool         = "apps"
-      count             = 1            # 3 for HA on 3 or more Linux clients with Docker.
-      jetstream_enabled = true
-      auth_mode         = "userpass"
-      users = [
-        { name = "app", publish_allow = ["app.>", "$JS.API.>"], subscribe_allow = ["app.>", "_INBOX.>"] },
-        { name = "ops", account = "SYS" },
-      ]
-    }
+module "cache" {                   # The release "cache": one Redis server.
+  source  = "norca/redis"          # A module of the global registry, by a version constraint.
+  version = "~> 0.4"
+
+  values = {                       # Variables of the module.
+    datacenters = ["dc1", "dc2"]
+    node_pool   = "apps"           # The clients are in the pool "apps" (client_defaults); jobs
+                                   # without node_pool only run in the pool "default".
+    memory      = 256
   }
+}
+
+# NATS cluster (JetStream) for the applications.
+module "nats" {
+  source  = "norca/nats"
+  version = "~> 2.0"
+
+  values = {
+    datacenters       = ["dc1", "dc2"]
+    node_pool         = "apps"
+    count             = 1          # One server per client node (distinct_hosts): use 3 for HA
+                                   # on 3 or more Linux clients with Docker.
+    jetstream_enabled = true
+    auth_mode         = "userpass" # Users in accounts, passwords from the secrets above.
+    users = [
+      {
+        name            = "app"
+        publish_allow   = ["app.>", "$JS.API.>"]
+        subscribe_allow = ["app.>", "_INBOX.>"]
+      },
+      {
+        name    = "ops"
+        account = "SYS"            # nats server report, raft peer-remove.
+      },
+    ]
+    # tls_enabled = true           # TLS: put tls_ca/tls_cert/tls_key into the Variable
+                                   # nomad/jobs/nats (a secrets entry of type variable).
+  }
+}
+EOT
 }
 
 # Defaults for every node that runs a client; the node's own settings win.
@@ -328,9 +336,9 @@ node_pools {
   description = "Windows nodes for native .exe workloads"
 }
 
-# Namespaces created after the cluster is up, before the secrets and the packs.
-# norca-system, the namespace of the operator packs, is always created; this
-# adds more. A namespace is never deleted.
+# Namespaces created after the cluster is up, before the secrets and the
+# Rigger stack. norca-system, the namespace of the operator modules, is always
+# created; this adds more. A namespace is never deleted.
 namespaces {
   name        = "apps"
   description = "Applications of the teams"

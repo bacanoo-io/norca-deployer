@@ -1,6 +1,6 @@
 # One Region over Several Datacenters
 
-A region can span several datacenters: availability zones of a cloud region, or buildings of a campus. The servers form one Raft cluster across them, the clients of every datacenter run jobs, the native service catalog knows the datacenter of every instance and can prefer the caller's own, and the system bus of the servers (the event stream, the Consul KV, the usage reports of the autoscaler, the pack push notices) is replicated over the datacenters. The example plan also runs a NATS cluster with one server per datacenter, as an example of a stateful service spread over the datacenters. Example: [multi-datacenter.yaml](../examples/nodes/multi-datacenter.yaml).
+A region can span several datacenters: availability zones of a cloud region, or buildings of a campus. The servers form one Raft cluster across them, the clients of every datacenter run jobs, the native service catalog knows the datacenter of every instance and can prefer the caller's own, and the system bus of the servers (the event stream, the Consul KV, the usage reports of the autoscaler) is replicated over the datacenters. The example plan also runs a NATS cluster with one server per datacenter, as an example of a stateful service spread over the datacenters. Example: [multi-datacenter.yaml](../examples/nodes/multi-datacenter.yaml).
 
 ```mermaid
 flowchart LR
@@ -106,20 +106,20 @@ The built-in DNS, the templates and the Task API of a workload, `GET /v1/service
 
 ## NATS across the datacenters (an example)
 
-NATS is an example of a stateful service with one instance per datacenter, and the one the example plan runs. The `nats` pack of the Norca pack registry runs one NATS server per datacenter:
+NATS is an example of a stateful service with one instance per datacenter, and the one the example plan runs. The `nats` module of the global registry, in the stack of the `rigger` section, runs one NATS server per datacenter:
 
-| Pack value | Meaning |
+| Value of the module | Meaning |
 | --- | --- |
-| `datacenters: [eu-a, eu-b, eu-c]`, `count: 3` | Three servers |
-| `separate_scope: "${node.datacenter}"`, `separate_required: true` | One per datacenter (and `distinct_hosts`: one per node) |
-| `jetstream_enabled: true` | Streams and KV buckets; with 3 replicas they keep a majority without one datacenter |
-| `jetstream_unique_tag: dc` | Every server is tagged `dc:<datacenter>`; the replicas of every stream go to different datacenters (also with more servers than datacenters) |
-| `cluster_compression: s2_auto` | Routes compressed by their round trip time: more between datacenters, little inside one |
-| `auth_mode: userpass`, `users` | Users in accounts; their passwords are secrets `nats/users/<user>` |
+| `datacenters = ["eu-a", "eu-b", "eu-c"]`, `count = 3` | Three servers |
+| `separate_scope = "$${node.datacenter}"`, `separate_required = true` | One per datacenter (and `distinct_hosts`: one per node); `$$` leaves the reference to the scheduler |
+| `jetstream_enabled = true` | Streams and KV buckets; with 3 replicas they keep a majority without one datacenter |
+| `jetstream_unique_tag = "dc"` | Every server is tagged `dc:<datacenter>`; the replicas of every stream go to different datacenters (also with more servers than datacenters) |
+| `cluster_compression = "s2_auto"` | Routes compressed by their round trip time: more between datacenters, little inside one |
+| `auth_mode = "userpass"`, `users` | Users in accounts; their passwords are secrets `nats/users/<user>` |
 
 The servers find each other through the native service catalog (`<job>-cluster`) and connect with routes on port 6222. Clients connect to any server on port 4222; the service `nats` lists them.
 
-The deployer prepares everything the pack reads:
+The deployer prepares everything the module reads, before the stack is applied:
 
 ```yaml
 secrets:
@@ -139,9 +139,8 @@ The servers embed NATS with JetStream, and the servers of a region form one NATS
 | The event stream of the region | stream `NORCA_EVENTS_<region>`, 72 hours by default |
 | The Consul KV of the Consul-compatible API (backend `auto`) | key-value bucket `consul-kv`, shared by every node of the region |
 | The task group usage that the clients report to the autoscaler and the metrics store | stream `NORCA_TELEMETRY_<region>`, 1 hour |
-| The pack push notices that make the leader sync the registries at once | stream `NORCA_PACK_PUSHES`, 24 hours |
 
-Every stream and the bucket have one replica per server, up to three. With one server per datacenter every datacenter holds a copy, and the loss of one leaves a majority. The bus is not a broker for applications (they keep their own NATS, as in the example above); [System bus](https://bacanoo-io.github.io/norca-doc/docs/features/system-bus/) describes each of the four.
+Every stream and the bucket have one replica per server, up to three. With one server per datacenter every datacenter holds a copy, and the loss of one leaves a majority. The bus is not a broker for applications (they keep their own NATS, as in the example above); [System bus](https://bacanoo-io.github.io/norca-doc/docs/features/system-bus/) describes each of the three.
 
 ### The event stream
 
@@ -168,14 +167,14 @@ norca operator bus status               # streams, routes and JetStream state of
 | Jobs | Allocations of eu-b are rescheduled to eu-a and eu-c (within the limits of `datacenters`, `spread` and `separate`) |
 | Service lookups | The instances of eu-b stop being returned when their health checks fail or their nodes are marked down; consumers in eu-a and eu-c with `prefer = "datacenter"` keep using the instances of their own datacenter, and the others are served from the rest of the region |
 | NATS | Two servers remain; JetStream streams with 3 replicas keep their majority |
-| System bus | Two of three replicas of every stream and of the Consul KV bucket remain: events, usage reports, push notices and the Consul KV keep working, and the leader (or a new one) keeps publishing |
+| System bus | Two of three replicas of every stream and of the Consul KV bucket remain: events, usage reports and the Consul KV keep working, and the leader (or a new one) keeps publishing |
 
 `separate_required: true` keeps the third NATS server pending while eu-b is down, instead of putting two NATS servers into one datacenter; it is placed again when eu-b comes back.
 
 ## Operations
 
 - **Rollouts:** servers restart one at a time, so every datacenter keeps its quorum share; `upgrade.max_parallel_clients` limits the clients restarted together across all datacenters.
-- **Adding a datacenter:** add its nodes with their `datacenter`, extend `cluster_cidrs` if needed, and add it to the `datacenters` of the jobs and packs. Keep the number of servers odd (3 or 5).
+- **Adding a datacenter:** add its nodes with their `datacenter`, extend `cluster_cidrs` if needed, and add it to the `datacenters` of the jobs and of the modules of the stack. Keep the number of servers odd (3 or 5).
 - **Removing nodes:** move them to `inventory.decommission` ([adding and removing nodes](adding-and-removing-nodes.md)).
 
 ## Tested in the lab

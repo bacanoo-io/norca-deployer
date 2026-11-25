@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	// Secret and Variable paths, as the Norca CLI and the packs use them.
+	// Secret and Variable paths, as the Norca CLI and the jobs use them.
 	secretPathRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)*$`)
 	itemNameRe   = regexp.MustCompile(`^[a-zA-Z0-9_.-]{1,128}$`)
 	namespaceRe  = regexp.MustCompile(`^[a-zA-Z0-9-]{1,128}$`)
@@ -55,85 +55,6 @@ func (p *DeploymentPlan) checkValue(what, v string, fileOK bool) error {
 	case fileOK && strings.HasPrefix(v, "@"):
 		if _, err := os.Stat(p.ResolveLocalPath(v[1:])); err != nil {
 			return fmt.Errorf("%s: %w", what, err)
-		}
-	}
-	return nil
-}
-
-func (p *DeploymentPlan) validatePacks() error {
-	pk := p.Packs
-	if pk == nil || len(pk.Deploy) == 0 {
-		return nil
-	}
-	regs := pk.AllRegistries()
-	if len(regs) == 0 {
-		return fmt.Errorf("packs: no registry (packs.registry or packs.registries)")
-	}
-	byName := map[string]bool{}
-	for i, r := range regs {
-		what := fmt.Sprintf("packs registry %d (%s)", i, r.Name)
-		if !releaseNameRe.MatchString(r.Name) {
-			return fmt.Errorf("%s: name must be lower case letters, digits and '-'", what)
-		}
-		if byName[r.Name] {
-			return fmt.Errorf("%s: duplicate registry name", what)
-		}
-		byName[r.Name] = true
-		if r.URL == "" {
-			return fmt.Errorf("%s: url is required", what)
-		}
-		switch r.Type {
-		case "git", "oci", "dir":
-		default:
-			return fmt.Errorf("%s: type %q must be git, oci or dir", what, r.Type)
-		}
-	}
-	names := map[string]bool{}
-	for i, d := range pk.Deploy {
-		if !releaseNameRe.MatchString(d.Name) {
-			return fmt.Errorf("packs.deploy[%d]: name %q must be lower case letters, digits and '-'", i, d.Name)
-		}
-		if names[d.Name] {
-			return fmt.Errorf("packs.deploy[%d]: duplicate release name %q", i, d.Name)
-		}
-		names[d.Name] = true
-		if d.Pack == "" {
-			return fmt.Errorf("packs.deploy[%d]: pack is required", i)
-		}
-		switch {
-		case d.Registry == "" && len(regs) > 1:
-			return fmt.Errorf("packs.deploy[%d] (%s): registry is required with several registries", i, d.Name)
-		case d.Registry != "" && !byName[d.Registry]:
-			return fmt.Errorf("packs.deploy[%d] (%s): unknown registry %q", i, d.Name, d.Registry)
-		}
-		if err := walkStrings(d.Values, func(v string) error {
-			return p.checkValue(fmt.Sprintf("packs.deploy[%d] (%s) values", i, d.Name), v, false)
-		}); err != nil {
-			return err
-		}
-	}
-	if p.Security.ACL != nil && p.Security.ACL.Enabled && !p.Security.ACL.AutoBootstrap && p.Security.ACL.ManagementTokenOutput == "" {
-		return fmt.Errorf("packs with ACLs need security.acl.auto_bootstrap or a management_token_output file")
-	}
-	return nil
-}
-
-// walkStrings calls fn for every string in a pack values tree.
-func walkStrings(v any, fn func(string) error) error {
-	switch t := v.(type) {
-	case string:
-		return fn(t)
-	case map[string]any:
-		for _, e := range t {
-			if err := walkStrings(e, fn); err != nil {
-				return err
-			}
-		}
-	case []any:
-		for _, e := range t {
-			if err := walkStrings(e, fn); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
@@ -221,7 +142,7 @@ func (p *DeploymentPlan) validateACLPolicies() error {
 	return nil
 }
 
-// The namespace of the Norca operator packs: their jobs, their token
+// The namespace of the Norca operator modules: their jobs, their token
 // Variables and their secrets are there by default, and they expect it to
 // exist. apply always creates it.
 const (

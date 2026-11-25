@@ -1,6 +1,6 @@
 # Rigger stacks
 
-[Rigger](https://github.com/bacanoo-io/norca/tree/main/rigger) is the package manager of Norca: modules written in HCL, deployed as a stack with a lock file of versions and digests. `apply` can apply one Rigger stack after the packs, so a new cluster comes with its base services from modules.
+[Rigger](https://github.com/bacanoo-io/norca/tree/main/rigger) is the package manager of Norca: modules written in HCL, deployed as a stack with a lock file of versions and digests. `apply` can apply one Rigger stack after the cluster is up, so a new cluster comes with its base services from modules.
 
 ```yaml
 rigger:
@@ -82,7 +82,7 @@ rigger:
 
 ## What happens
 
-In the post-cluster stage, after the packs and before GitOps.
+In the post-cluster stage, after the secrets and the node scaling Variables and before GitOps.
 
 With `run_on: server`:
 
@@ -122,6 +122,7 @@ Without it the apply of a cluster of the region `eu` stops with `Unexpected resp
 
 ## Notes
 
+- **Secrets come first.** The secrets and Variables a module reads are written before the stack is applied: put them into `secrets.bootstrap` (generated or encrypted, see [Bootstrap secrets](secrets-and-policies.md)), not into the values of the stack as plain text. The namespace `norca-system` of the operator modules exists by then too.
 - **Modules are fetched where the program runs**, also with `embedded`: the program loads the stack with the modules its lock file names before it sends it. With `run_on: server` that is the first server, which must reach the Git and OCI sources of the stack; its cache is the cache directory of the user the commands of the deployer run as there (`~/.cache/rigger`). With `embedded` the servers fetch the modules too. `builtin/<name>` modules ship inside Norca and Rigger.
 - A stack in a directory (`stack`) uses its own `rigger.lock.hcl`; run `rigger stack sync` (or `norca rigger stack sync`) there and commit the lock before `apply`.
 - `vars` are arguments of the program, visible in the process list of the machine it runs on: no secrets in them. A value file is copied to the first server as a private file and removed with the copy.
