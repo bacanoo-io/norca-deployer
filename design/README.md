@@ -61,6 +61,30 @@ This directory contains the system design, architecture specifications and user 
   - 5. Testing strategy
   - 6. Risks and mitigations
   - 7. First slice
+- [Norca Deployer – GitOps on Rigger](gitops-rigger-design.md) (proposal)
+  - 1. In short (what is left for GitOps once Rigger and the release engine do plan, drift, rollback and prune)
+  - 2. Where we are (today's pack GitOps and its gaps; what changes with Rigger)
+  - 3. What users expect of a GitOps tool (R1 to R18)
+  - 4. Who does what (Rigger and the release engine vs the GitOps controller)
+  - 5. The GitOps controller (one loop, bindings with two sources, webhook and poll, operations and retries, drift reaction, operator form with `gitops.norca.io/Binding`, pull requests, notifications, provenance)
+  - 6. Changes needed in Norca and Rigger (`Commit`, the source of an operation, the autoscaler's `count`, evaluation in a child process, mixed versions)
+  - 7. Platform management: a new scope (the platform tree as a Rigger stack)
+  - 8. Order of the work (G0 to G8)
+  - 9. Open questions
+  - Appendix A. Research summary (Terraform, GitOps for Nomad, Waypoint, sources)
+- [Norca Deployer – Sync with Norca and Rigger](norca-rigger-sync-plan.md) (work plan)
+  - what Norca and Rigger can do that the plan cannot express, what the deployer writes or checks wrongly, and how to close each gap
+- [Norca Deployer – Host Platform Abstraction](host-platform-abstraction-plan.md) (work plan; decisions of 2026-11-25)
+  - 1. Goal and non-goals (Debian, Ubuntu, RHEL, Alpine)
+  - 2. Where the deployer is bound today (bash, sudo, apt, systemd, the second implementation in the node scaling script)
+  - 3. The four families (package manager, keys, pinning, hold, init, firewall, shell, SELinux, glibc and musl)
+  - 4. Architecture (facts of a node, shell dialect and escalation, drivers, steps with an SSH executor and a script renderer, Windows)
+  - 5. Plan model (`host_packages.apt|dnf|apk`, `become_method`, `host_facts`, script `interpreter` and `families`)
+  - 6. Family-specific notes
+  - 7. Prerequisites outside the deployer (musl build of Norca, OpenRC, SELinux, lab images)
+  - 8. Phases F0 to F4
+  - 9. Open questions
+  - 10. Files
 - [Draft issue: replication scope of admission policies, network policies and object kinds (not filed)](issue-norca-replication-scope.md)
 - [Draft issue: read-only capabilities for `plan` tokens, ACL read and plan-job (not filed)](issue-norca-readonly-plan.md)
 - [Draft issue: machine-readable features list, replication scope and resolved KV backend (not filed)](issue-norca-features-endpoint.md)
