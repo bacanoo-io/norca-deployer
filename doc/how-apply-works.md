@@ -70,7 +70,7 @@ Allocations keep running while a client agent restarts. A failed batch stops the
 - The **secrets and Variables** of `secrets.bootstrap` (see [Bootstrap secrets and ACL policies](secrets-and-policies.md)), and with `node_scaling.enabled` the Variables of the node scaling operator.
 - **Packs:** the pack registries are created and synced, and changed pack releases are deployed (see [Packs](packs.md)).
 - **Rigger:** the stack of the `rigger` section is applied with `norca rigger stack apply` on the first server, by the servers; the plan may choose the `rigger` program of the operator machine, and the program as the one that applies (see [Rigger stacks](rigger.md)).
-- **GitOps:** the enabled bindings are fetched into memory, and deployed when the pack or its settings changed (see [GitOps](gitops.md)).
+- **GitOps:** the stack of each enabled binding is fetched into memory and planned by the servers; one that is not in sync is applied, or with `plan-only` its plan is shown (see [GitOps](gitops.md)).
 
 These calls use the `norca` CLI on the first server (`norca operator api`), so the API does not have to be reachable from the operator machine.
 
@@ -103,7 +103,6 @@ A node whose agent is not running is always started. Successfully provisioned no
 | `.norca-deployer/known_hosts` | Host keys trusted on first use |
 | `.norca-deployer/packs/*.sha256` | Settings digest of each deployed pack |
 | `.norca-deployer/rigger-stack/` | The stack of `rigger.stack_hcl` and its lock file |
-| `.norca-deployer/gitops/*.sha256` | Digest of the pack and settings of each GitOps binding |
 | `.norca-deployer/generated/`, `nkeys/` | Generated values and NATS NKey seeds (encrypted when a master key exists) |
 | `.norca-deployer/secrets/`, `acl-policies/`, `namespaces/` | Digests of the written secrets and policies and of the namespace entries |
 | `.norca-deployer/cache/` | Downloaded Norca and CNI artifacts |

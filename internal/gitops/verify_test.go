@@ -3,7 +3,9 @@ package gitops
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -71,10 +73,10 @@ func newSignedRepo(t *testing.T, release, stranger *openpgp.Entity) *signedRepo 
 	}
 	who := &object.Signature{Name: "t", Email: "t@example.com", When: time.Now()}
 	commit := func(n string, signer *openpgp.Entity) plumbing.Hash {
-		if err := os.WriteFile(filepath.Join(dir, "metadata.hcl"), []byte(strings.ReplaceAll(packMeta, "0.1.0", n)), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "stack.hcl"), []byte(stackAt(n)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.Add("metadata.hcl"); err != nil {
+		if _, err := w.Add("stack.hcl"); err != nil {
 			t.Fatal(err)
 		}
 		opts := &git.CommitOptions{Author: who}
@@ -132,10 +134,10 @@ func TestVerify(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			opts := tc.opts
 			opts.URL, opts.VerifyKeys = url, keys
-			res, err := FetchPackInMemory(context.Background(), &opts)
+			res, err := FetchStackInMemory(context.Background(), &opts)
 			if tc.signer == "" {
 				if err == nil {
-					t.Fatalf("must be refused, got %s", res.Signer)
+					t.Fatalf("must be refused, got %s", res.Signature())
 				}
 				if !strings.Contains(err.Error(), "signature") {
 					t.Fatalf("got %v", err)
@@ -145,24 +147,29 @@ func TestVerify(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.HasPrefix(res.Signer, tc.signer) {
+			if !strings.HasPrefix(res.Signature(), tc.signer) {
+				t.Fatalf("signature %q", res.Signature())
+			}
+			// Who signed is the name of the key alone: it is what the
+			// servers record as the signer of the origin.
+			if res.Signer != "release <release@example.com>" {
 				t.Fatalf("signer %q", res.Signer)
 			}
 		})
 	}
 
-	// The deployed commit is the one of the tag.
-	res, err := FetchPackInMemory(context.Background(), &FetchOptions{URL: url, Tag: "annotated-signed", VerifyKeys: keys})
+	// The fetched commit is the one of the tag.
+	res, err := FetchStackInMemory(context.Background(), &FetchOptions{URL: url, Tag: "annotated-signed", VerifyKeys: keys})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.CommitSHA != r.unsigned || res.PackVersion != "2.0.0" {
-		t.Fatalf("commit %s version %s", res.CommitSHA, res.PackVersion)
+	if res.CommitSHA != r.unsigned || string(res.Files["stack.hcl"]) != stackAt("2.0.0") || res.Ref != "annotated-signed" {
+		t.Fatalf("commit %s ref %s stack %s", res.CommitSHA, res.Ref, res.Files["stack.hcl"])
 	}
 
 	// Without keys nothing is verified.
-	res, err = FetchPackInMemory(context.Background(), &FetchOptions{URL: url, Branch: branch})
-	if err != nil || res.Signer != "" {
+	res, err = FetchStackInMemory(context.Background(), &FetchOptions{URL: url, Branch: branch})
+	if err != nil || res.Signer != "" || res.Signature() != "" {
 		t.Fatalf("signer %q err %v", res.Signer, err)
 	}
 }
@@ -172,21 +179,21 @@ func TestVerify_NeverUsesTheArchive(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/archive/") {
 			atomic.AddInt32(&archives, 1)
-			_, _ = w.Write(tarball(t, "", map[string]string{"r/metadata.hcl": packMeta}))
+			_, _ = w.Write(tarball(t, "", map[string]string{"r/stack.hcl": stackHCL}))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer s.Close()
 	_, key := newKey(t, "release")
-	_, err := FetchPackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", VerifyKeys: []string{key}})
+	_, err := FetchStackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", VerifyKeys: []string{key}})
 	if err == nil || atomic.LoadInt32(&archives) != 0 {
 		t.Fatalf("archives %d err %v", archives, err)
 	}
 }
 
 func TestVerify_BadKey(t *testing.T) {
-	_, err := FetchPackInMemory(context.Background(), &FetchOptions{URL: "file:///nowhere", VerifyKeys: []string{"not a key"}})
+	_, err := FetchStackInMemory(context.Background(), &FetchOptions{URL: "file:///nowhere", VerifyKeys: []string{"not a key"}})
 	if err == nil || !strings.Contains(err.Error(), "public key 1") {
 		t.Fatalf("got %v", err)
 	}
@@ -208,35 +215,80 @@ func TestVerify_FetchOptionsOfABinding(t *testing.T) {
 	}
 }
 
-// A push of an unsigned commit doesn't reach the cluster, and the log says why.
+// A push of an unsigned commit doesn't reach the cluster, and the log says
+// why. A signed one is applied: the servers are told the commit and who
+// signed it, and the log has the operation.
 func TestVerify_DaemonRefusesAnUnsignedPush(t *testing.T) {
 	release, key := newKey(t, "release")
 	stranger, _ := newKey(t, "stranger")
 	r := newSignedRepo(t, release, stranger)
+	url := "file://" + filepath.ToSlash(r.dir)
 
 	logger := NewRingLogger(50)
 	f := &fakeNorca{}
 	rec := NewReconciler(logger, f, time.Millisecond)
 	defer rec.Close()
-	rec.RegisterBinding(config.GitOpsBinding{Name: "b", ReleaseName: "rel",
-		Forgejo: &config.RepoConfig{URL: "file://" + filepath.ToSlash(r.dir), Branch: branchOf(t, r.dir)},
+	rec.RegisterBinding(config.GitOpsBinding{Name: "b", Namespace: "production",
+		Forgejo: &config.RepoConfig{URL: url, Branch: branchOf(t, r.dir)},
 		Verify:  &config.VerifyConfig{PublicKeys: []string{key}}})
 
 	err := rec.ReconcileBinding(context.Background(), "b", "webhook", &WebhookEvent{Branch: branchOf(t, r.dir), CommitSHA: r.unsigned})
 	if err == nil || f.count("") != 0 {
-		t.Fatalf("err %v calls %v", err, f.calls)
+		t.Fatalf("err %v calls %v", err, f.called())
 	}
+	if !strings.Contains(err.Error(), "gitops binding b") || !strings.Contains(err.Error(), "has no signature") {
+		t.Fatalf("got %v", err)
+	}
+	failed := logger.All()[len(logger.All())-1]
+	if failed.Phase != "FAILED" || !strings.Contains(failed.Error, "has no signature") {
+		t.Fatalf("entry %+v", failed)
+	}
+
 	if err := rec.ReconcileBinding(context.Background(), "b", "webhook", &WebhookEvent{Branch: branchOf(t, r.dir), CommitSHA: r.signed}); err != nil {
 		t.Fatal(err)
 	}
-	if f.count("POST") != 1 {
-		t.Fatalf("calls %v", f.calls)
+	if f.count(planCall) != 1 || f.count(applyCall) != 1 {
+		t.Fatalf("calls %v", f.called())
 	}
-	phases := ""
+	for _, req := range f.asked() {
+		want := map[string]string{"repository": url, "ref": branchOf(t, r.dir), "commit": r.signed, "signer": "release <release@example.com>"}
+		if !maps.Equal(req.Origin, want) {
+			t.Fatalf("%s: origin %v, want %v", req.Path, req.Origin, want)
+		}
+	}
+
+	var phases []string
 	for _, e := range logger.All() {
-		phases += e.Phase + " "
+		phases = append(phases, e.Phase)
 	}
-	if !strings.Contains(phases, "VERIFY") {
-		t.Fatalf("phases %s", phases)
+	if got := strings.Join(phases, " "); !strings.Contains(got, "VERIFY PLAN") || !strings.Contains(got, "APPLY OPERATION") || !strings.HasSuffix(got, "SUCCESS") {
+		t.Fatalf("phases %s", got)
+	}
+	last := logger.All()[len(logger.All())-1]
+	if last.Stack != "demo" || last.Operation != operationName(0) || last.CommitSHA != r.signed ||
+		!strings.Contains(last.Details, "applied by the operation "+operationName(0)) {
+		t.Fatalf("entry %+v", last)
+	}
+}
+
+// A binding that applies and has no keys never reaches the repository or
+// the cluster, whatever configured it.
+func TestVerify_DaemonRefusesToApplyWithoutKeys(t *testing.T) {
+	dir, _, _ := localRepo(t)
+	logger := NewRingLogger(50)
+	f := &fakeNorca{}
+	rec := NewReconciler(logger, f, time.Millisecond)
+	defer rec.Close()
+	rec.RegisterBinding(config.GitOpsBinding{Name: "b",
+		Forgejo: &config.RepoConfig{URL: "file://" + filepath.ToSlash(dir), Branch: branchOf(t, dir), Subpath: "stacks/a"}})
+
+	err := rec.ReconcileBinding(context.Background(), "b", "webhook", nil)
+	if !errors.Is(err, ErrApplyNeedsVerify) || f.count("") != 0 {
+		t.Fatalf("err %v calls %v", err, f.called())
+	}
+	for _, e := range logger.All() {
+		if e.Phase == "FETCH" {
+			t.Fatalf("the repository was fetched: %+v", e)
+		}
 	}
 }

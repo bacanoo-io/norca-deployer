@@ -155,7 +155,8 @@ func startRiggerProxy(cli *remoteCLI) (addr string, stop func(), err error) {
 // for it.
 func (r *Runner) deployRigger(first *target, token string) error {
 	rc := r.plan.Rigger
-	if rc == nil {
+	// A section of GitOps bindings only has no stack of the plan.
+	if rc == nil || !rc.HasStack() {
 		return nil
 	}
 

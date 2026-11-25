@@ -42,9 +42,9 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `namespaces` | | Namespaces created after the cluster is up; `norca-system` is always created |
 | `node_scaling` | | The bootstrap and the network ranges for the node scaling operator |
 | `secrets` | | Secrets and Variables written after the cluster is up |
-| `packs` | | Pack registries and releases; `packs.gitops` holds GitOps bindings |
-| `rigger` | | A Rigger stack applied after the packs |
-| `gitops` | | GitOps bindings, the same as `packs.gitops` |
+| `packs` | | Pack registries and releases |
+| `rigger` | | A Rigger stack applied after the packs; `rigger.gitops` holds GitOps bindings |
+| `gitops` | | GitOps bindings, the same as `rigger.gitops` |
 | `inventory` | | Servers and clients |
 
 ## metadata
@@ -299,8 +299,34 @@ See [Packs](packs.md).
 | `mode` | `embedded` | Who applies the stack: `embedded`, the servers, to which the program sends it (`-server`); `standalone`, the program |
 | `binary` | `rigger` | The rigger program of `run_on: local`; refused with `run_on: server` |
 | `sync_registries` | | Rigger registries of the cluster that the servers sync before the stack is applied (`global` is the global registry); only with `mode: embedded` |
+| `gitops` | | GitOps bindings: stacks of repositories, see [gitops](#gitops). The section may hold them alone, without `stack` or `stack_hcl` |
 
 The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. `stack` is a directory of its own, not the one of the plan. See [Rigger stacks](rigger.md).
+
+## gitops
+
+Under `rigger.gitops` or the top-level `gitops`. A binding is an entry of `bindings` with a `name`, or in HCL a `binding "<name>"` block. `packs.gitops` is refused.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Run the bindings |
+| `debounce_duration` | `5s` | Pushes within it become one run of the daemon |
+| `log_buffer_size` | `200` | Entries of the log of the daemon |
+| `bindings[].name` | | Name of the binding; each name once |
+| `bindings[].namespace` | `default` | Namespace the stack is sent to: the one of its `rigger` block |
+| `bindings[].region` | the region of the server asked | Region the stack is sent to: the one of its `rigger` block |
+| `bindings[].values` | | Values of the variables of the stack |
+| `bindings[].forgejo`, `gitea`, `github`, `gitlab` | | The repository, exactly one: `url`, `branch` or `ref`, `subpath` (the directory with the `stack.hcl`), `auth_secret`, `ssh_private_key`, `known_hosts`, `ca_cert_pem`, `insecure_skip_verify`; `api_url` (`github`), `project_path` (`gitlab`) |
+| `bindings[].verify.public_keys` | | Armored PGP public keys: the stack needs a commit or tag signed with one of them |
+| `bindings[].verify.enabled` | `true` | `false` turns the check off and keeps the keys |
+| `bindings[].webhook.secret_key` | | Secret of the webhook of the provider; required with `webhook` |
+| `bindings[].webhook.events` | `push` | `push`, `release` |
+| `bindings[].webhook.filter_branches` | the `branch` of the binding, else `main` | Patterns of the branches whose pushes run the binding |
+| `bindings[].webhook.filter_tags` | | Patterns of the tags that run the binding; without it no tag does |
+| `bindings[].policy.mode` | `apply` | `apply`: the servers apply the stack, which needs `verify`; `plan-only`: they plan it, and the plan is logged |
+| `bindings[].policy.prune` | `false` | Uninstall the releases the stack owns and no longer has |
+
+A binding and its `policy` take no other key. See [GitOps](gitops.md).
 
 ## node_scaling
 

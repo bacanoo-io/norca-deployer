@@ -13,7 +13,7 @@ import (
 )
 
 // CheckVerifyKeys refuses public keys that can't be read, so that a typing
-// error shows when a binding starts instead of as a refused pack.
+// error shows when a binding starts instead of as a refused stack.
 func CheckVerifyKeys(keys []string) error {
 	for i, key := range keys {
 		if _, err := openpgp.ReadArmoredKeyRing(strings.NewReader(key)); err != nil {
@@ -62,23 +62,23 @@ func verifyAny(v verifier, keys []string) (*openpgp.Entity, error) {
 }
 
 // verifySignature accepts a signed annotated tag that points at the commit, or
-// a signed commit. It returns who signed.
-func verifySignature(repo *git.Repository, commit *object.Commit, tagName string, keys []string) (string, error) {
+// a signed commit. It returns who signed, and what: "commit" or "tag <name>".
+func verifySignature(repo *git.Repository, commit *object.Commit, tagName string, keys []string) (signer, signed string, err error) {
 	if tagName != "" {
 		if ref, err := repo.Tag(tagName); err == nil {
 			if tag, err := repo.TagObject(ref.Hash()); err == nil && tag.Target == commit.Hash && tag.Signature != "" {
 				if e, err := verifyAny(tag, keys); err == nil {
-					return "tag " + tagName + " signed by " + signerName(e), nil
+					return signerName(e), "tag " + tagName, nil
 				}
 			}
 		}
 	}
 	if commit.Signature == "" {
-		return "", fmt.Errorf("commit %s has no signature", commit.Hash)
+		return "", "", fmt.Errorf("commit %s has no signature", commit.Hash)
 	}
 	e, err := verifyAny(commit, keys)
 	if err != nil {
-		return "", fmt.Errorf("commit %s is not signed by a trusted key: %w", commit.Hash, err)
+		return "", "", fmt.Errorf("commit %s is not signed by a trusted key: %w", commit.Hash, err)
 	}
-	return "commit signed by " + signerName(e), nil
+	return signerName(e), "commit", nil
 }

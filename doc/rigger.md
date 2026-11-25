@@ -40,6 +40,8 @@ rigger:
     }
 ```
 
+The section also holds the GitOps bindings (`rigger.gitops`), which apply stacks of Git repositories; it may hold them alone, without a stack of the plan. See [GitOps](gitops.md).
+
 ## Where the program runs, and who applies
 
 The stack is applied with the command `stack apply` of Rigger. Two settings choose how:

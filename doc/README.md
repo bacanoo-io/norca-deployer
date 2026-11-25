@@ -18,7 +18,7 @@ Norca Deployer installs and maintains [Norca](https://github.com/bacanoo-io/norc
 | [Bootstrap secrets and ACL policies](secrets-and-policies.md) | Namespaces (`norca-system` for the operator packs), secrets and Variables after the cluster is up, generated values, job-bound ACL policies, NATS example |
 | [Packs](packs.md) | Pack registries and pack releases deployed by `apply` |
 | [Rigger stacks](rigger.md) | A stack of Rigger modules applied by `apply` after the packs |
-| [GitOps](gitops.md) | Packs deployed from Git repositories: `gitops run`, `apply` and the webhook daemon |
+| [GitOps](gitops.md) | Rigger stacks applied from Git repositories: `gitops run`, `apply` and the webhook daemon |
 | [Several datacenters with NATS](multi-datacenter.md) | One region over several datacenters, the event stream on the system bus, a NATS cluster for the applications |
 | [Multi-region](multi-region.md) | Federated regions with ACL replication |
 | [Windows nodes](windows.md) | What differs on Windows clients and servers |

@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,8 +132,9 @@ func (r *Reconciler) fire(name string, d *debouncer) {
 	}()
 }
 
-// ReconcileBinding fetches a binding and deploys it. The event selects what
-// to fetch: the pushed commit or the tag.
+// ReconcileBinding runs a binding: it fetches its stack directory and has
+// the servers plan and apply it. The event selects what to fetch: the
+// pushed commit or the tag.
 func (r *Reconciler) ReconcileBinding(ctx context.Context, bindingName string, trigger string, event *WebhookEvent) error {
 	r.mu.Lock()
 	binding, ok := r.bindings[bindingName]
@@ -162,8 +164,9 @@ func (r *Reconciler) ReconcileBinding(ctx context.Context, bindingName string, t
 	}
 	log("TRIGGER", fmt.Sprintf("Reconciliation triggered via %s", trigger), nil)
 
-	// Release mutex: ensures only one deployment runs at a time for this release
-	lockKey := binding.Namespace + "/" + binding.ReleaseName
+	// One run of a stack directory at a time: two bindings may name the
+	// same one. The servers run one operation of a stack at a time too.
+	lockKey := stackKey(&binding)
 	r.mu.Lock()
 	lock, ok := r.locks[lockKey]
 	if !ok {
@@ -174,30 +177,38 @@ func (r *Reconciler) ReconcileBinding(ctx context.Context, bindingName string, t
 	lock.Lock()
 	defer lock.Unlock()
 
-	// 1. In-Memory Fetch Phase
 	opts := FetchOptionsFor(&binding)
 	applyEvent(opts, event)
-	log("FETCH", fmt.Sprintf("Fetching %s (%s) purely into RAM", SanitizeURL(opts.URL), resolveRef(opts)), nil)
 
-	res, err := FetchPackInMemory(ctx, opts)
+	runner := Runner{Client: r.client, Report: func(e Event) {
+		// What the run has learnt names the entries from here on.
+		if e.Commit != "" {
+			entry.CommitSHA = e.Commit
+		}
+		if e.Stack != "" {
+			entry.Stack = e.Stack
+		}
+		if e.Operation != "" {
+			entry.Operation = e.Operation
+		}
+		log(e.Phase, e.Details, nil)
+	}}
+	res, err := runner.Run(ctx, &binding, opts, binding.Values)
 	if err != nil {
-		log("FAILED", fmt.Sprintf("In-memory fetch failed: %v", err), err)
-		return fmt.Errorf("fetch failed: %w", err)
-	}
-	entry.CommitSHA = res.CommitSHA
-
-	// 2. Deploy Phase
-	if res.Signer != "" {
-		log("VERIFY", res.Signer, nil)
-	}
-	log("APPLY", fmt.Sprintf("Deploying pack %s %s to release %s (namespace: %s)", res.PackName, res.PackVersion, binding.ReleaseName, binding.Namespace), nil)
-	if err := Deploy(ctx, r.client, res, ReleaseOf(&binding, binding.Values, res)); err != nil {
-		log("FAILED", fmt.Sprintf("Deploy failed: %v", err), err)
+		log("FAILED", "The run failed", err)
 		return err
 	}
 
-	log("SUCCESS", fmt.Sprintf("Release %s successfully deployed in %dms", binding.ReleaseName, time.Since(start).Milliseconds()), nil)
+	log("SUCCESS", fmt.Sprintf("%s, in %dms", res, time.Since(start).Milliseconds()), nil)
 	return nil
+}
+
+// stackKey names the stack directory of a binding and where it goes.
+func stackKey(b *config.GitOpsBinding) string {
+	repo := b.EffectiveRepo()
+	host, _ := repoHostPath(repo.URL)
+	subpath, _ := cleanSubpath(repo.Subpath)
+	return strings.Join([]string{b.Region, b.Namespace, host, repoPath(repo.URL), subpath}, "\x00")
 }
 
 // applyEvent points the options at what an event carries.

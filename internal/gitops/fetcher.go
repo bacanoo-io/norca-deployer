@@ -4,10 +4,8 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -17,7 +15,6 @@ import (
 	"path"
 	"regexp"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -31,16 +28,18 @@ import (
 	"github.com/go-git/go-git/v6/storage/memory"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
+
+	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
 const (
 	// fetchTimeout bounds a fetch.
 	fetchTimeout = 3 * time.Minute
 
-	// The limits of a pack in memory, those of the pack uploads of the
-	// servers. A repository is fetched by anyone who can push to it.
-	maxPackBytes = 64 << 20
-	maxPackFiles = 4096
+	// The limits of a stack directory in memory, those of the archive the
+	// servers take. A repository is fetched by anyone who can push to it.
+	maxStackBytes = 64 << 20
+	maxStackFiles = 4096
 )
 
 var (
@@ -51,8 +50,9 @@ var (
 	sensitiveHeaders = []string{"Authorization", "PRIVATE-TOKEN"}
 )
 
-// FetchPackInMemory fetches the repository pack purely into memory.
-func FetchPackInMemory(ctx context.Context, opts *FetchOptions) (*FetchResult, error) {
+// FetchStackInMemory fetches the stack directory of a repository purely into
+// memory: the files below the subpath, which has the stack.hcl at its root.
+func FetchStackInMemory(ctx context.Context, opts *FetchOptions) (*FetchResult, error) {
 	if opts.URL == "" {
 		return nil, errors.New("repository URL is required")
 	}
@@ -75,46 +75,59 @@ func FetchPackInMemory(ctx context.Context, opts *FetchOptions) (*FetchResult, e
 	}
 
 	// 1. Direct HTTP tarball archive streaming, without packfile overhead.
-	// An archive has no signatures: a verified pack is always cloned.
-	var files map[string][]byte
-	var commit string
+	// An archive has no signatures: a verified stack is always cloned.
 	var archiveErr error
 	if len(opts.VerifyKeys) == 0 {
+		var files map[string][]byte
+		var commit string
 		files, commit, archiveErr = fetchArchiveStream(ctx, provider, opts, ref, subpath)
 		if archiveErr == nil && len(files) > 0 {
-			return buildFetchResult(provider, ref, subpath, commitOf(opts, commit), files)
+			return buildFetchResult(provider, namedRef(opts, defaultBranch), subpath, commitOf(opts, commit), files)
 		}
 	}
 
 	// 2. Fallback: generic in-memory clone with go-git/v6.
-	files, commit, signer, err := fetchWithGoGit(ctx, opts, subpath)
+	c, err := fetchWithGoGit(ctx, opts, subpath)
 	if err != nil {
 		if archiveErr != nil {
 			return nil, fmt.Errorf("in-memory fetch failed for %s (%s): archive: %w; clone: %w", SanitizeURL(opts.URL), ref, archiveErr, err)
 		}
 		return nil, fmt.Errorf("in-memory fetch failed for %s (%s): %w", SanitizeURL(opts.URL), ref, err)
 	}
-	res, err := buildFetchResult(provider, ref, subpath, commit, files)
+	res, err := buildFetchResult(provider, namedRef(opts, c.head), subpath, c.commit, c.files)
 	if err != nil {
 		return nil, err
 	}
-	res.Signer = signer
+	res.Signer, res.Signed = c.signer, c.signed
 	return res, nil
 }
 
+// defaultBranch is what an archive is asked for when nothing else is named.
+const defaultBranch = "main"
+
 // resolveRef returns what to fetch: a commit, then a ref, a tag or a branch.
 func resolveRef(opts *FetchOptions) string {
-	switch {
-	case wantedCommit(opts) != "":
+	if wantedCommit(opts) != "" {
 		return opts.CommitSHA
+	}
+	return namedRef(opts, defaultBranch)
+}
+
+// namedRef returns the ref, the tag or the branch the options name. They
+// name none when they name only a commit, and fallback is what was fetched
+// when they name nothing.
+func namedRef(opts *FetchOptions, fallback string) string {
+	switch {
 	case opts.Ref != "":
 		return opts.Ref
 	case opts.Tag != "":
 		return opts.Tag
 	case opts.Branch != "":
 		return opts.Branch
+	case wantedCommit(opts) != "":
+		return ""
 	}
-	return "main"
+	return fallback
 }
 
 func wantedCommit(opts *FetchOptions) string {
@@ -182,13 +195,28 @@ func detectProvider(repoURL string) string {
 	return "forgejo"
 }
 
-// SanitizeURL removes the credentials of a URL.
+// userinfoRe is the user part of a URL that can't be parsed.
+var userinfoRe = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9+.-]*://)[^/?#]*@`)
+
+// SanitizeURL removes the credentials of a URL, for a log, an error and the
+// origin the servers record. The user of an SSH URL is part of its address
+// (ssh://git@host/...) and stays; its password does not.
 func SanitizeURL(repoURL string) string {
 	u, err := url.Parse(repoURL)
-	if err != nil || u.User == nil || u.Scheme == "ssh" {
+	switch {
+	case err != nil:
+		// A credential may be why it can't be parsed.
+		return userinfoRe.ReplaceAllString(repoURL, "$1")
+	case u.User == nil:
 		return repoURL
+	case u.Scheme == "ssh":
+		if _, secret := u.User.Password(); !secret {
+			return repoURL
+		}
+		u.User = url.User(u.User.Username())
+	default:
+		u.User = nil
 	}
-	u.User = nil
 	return u.String()
 }
 
@@ -333,20 +361,20 @@ func buildArchiveURLAndHeaders(provider string, opts *FetchOptions, ref string) 
 	return "", nil, fmt.Errorf("unsupported archive provider: %s", provider)
 }
 
-// packSpace counts what a pack takes in memory.
-type packSpace struct {
+// stackSpace counts what a stack directory takes in memory.
+type stackSpace struct {
 	files int
 	bytes int64
 }
 
-func (s *packSpace) add(size int64) error {
+func (s *stackSpace) add(size int64) error {
 	s.files++
 	s.bytes += size
-	if s.files > maxPackFiles {
-		return fmt.Errorf("the pack has more than %d files", maxPackFiles)
+	if s.files > maxStackFiles {
+		return fmt.Errorf("the stack directory has more than %d files", maxStackFiles)
 	}
-	if s.bytes > maxPackBytes {
-		return fmt.Errorf("the pack is larger than %d MiB", maxPackBytes>>20)
+	if s.bytes > maxStackBytes {
+		return fmt.Errorf("the stack directory is larger than %d MiB", maxStackBytes>>20)
 	}
 	return nil
 }
@@ -363,7 +391,7 @@ func extractTarGzStream(body io.Reader, subpath string) (map[string][]byte, stri
 	tr := tar.NewReader(gz)
 	files := make(map[string][]byte)
 	commit := ""
-	var space packSpace
+	var space stackSpace
 
 	for {
 		hdr, err := tr.Next()
@@ -515,10 +543,21 @@ func gitClientOptions(opts *FetchOptions) ([]client.Option, error) {
 	return clientOpts, nil
 }
 
-func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (map[string][]byte, string, string, error) {
+// cloned is what a clone fetched.
+type cloned struct {
+	files  map[string][]byte
+	commit string
+	// head is the branch the clone checked out when the options name
+	// nothing: the default branch of the repository.
+	head string
+	// signer and signed say who signed what, when it was verified.
+	signer, signed string
+}
+
+func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (*cloned, error) {
 	clientOpts, err := gitClientOptions(opts)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	cloneOpts := &git.CloneOptions{URL: opts.URL, ClientOptions: clientOpts}
 
@@ -545,16 +584,20 @@ func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (ma
 	// Clone strictly into RAM.
 	repo, err := git.CloneContext(ctx, memory.NewStorage(), memfs.New(), cloneOpts)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 
+	res := &cloned{}
 	var hash plumbing.Hash
 	if revision == "" {
 		head, err := repo.Head()
 		if err != nil {
-			return nil, "", "", err
+			return nil, err
 		}
 		hash = head.Hash()
+		if head.Name().IsBranch() {
+			res.head = head.Name().Short()
+		}
 	} else {
 		var last error
 		for _, candidate := range []string{revision, "refs/remotes/origin/" + revision, "refs/tags/" + revision} {
@@ -566,7 +609,7 @@ func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (ma
 			last = err
 		}
 		if last != nil {
-			return nil, "", "", fmt.Errorf("revision %s: %w", revision, last)
+			return nil, fmt.Errorf("revision %s: %w", revision, last)
 		}
 	}
 
@@ -575,30 +618,30 @@ func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (ma
 	if tag, err := repo.TagObject(hash); err == nil {
 		commit, err = tag.Commit()
 		if err != nil {
-			return nil, "", "", err
+			return nil, err
 		}
 	} else if commit, err = repo.CommitObject(hash); err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
+	res.commit = commit.Hash.String()
 
-	signer := ""
 	if len(opts.VerifyKeys) > 0 {
 		tagName := opts.Tag
 		if tagName == "" && wantedCommit(opts) == "" {
 			tagName = opts.Ref
 		}
-		if signer, err = verifySignature(repo, commit, tagName, opts.VerifyKeys); err != nil {
-			return nil, "", "", fmt.Errorf("signature verification failed: %w", err)
+		if res.signer, res.signed, err = verifySignature(repo, commit, tagName, opts.VerifyKeys); err != nil {
+			return nil, fmt.Errorf("signature verification failed: %w", err)
 		}
 	}
 
 	tree, err := commit.Tree()
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 
 	files := make(map[string][]byte)
-	var space packSpace
+	var space stackSpace
 	err = tree.Files().ForEach(func(f *object.File) error {
 		relPath, ok := belowSubpath(f.Name, subpath)
 		if !ok {
@@ -620,77 +663,53 @@ func fetchWithGoGit(ctx context.Context, opts *FetchOptions, subpath string) (ma
 		files[relPath] = data
 		return nil
 	})
-	return files, commit.Hash.String(), signer, err
+	if err != nil {
+		return nil, err
+	}
+	res.files = files
+	return res, nil
 }
 
 func buildFetchResult(provider, ref, subpath, commit string, files map[string][]byte) (*FetchResult, error) {
 	if len(files) == 0 {
-		return nil, errors.New("no files found in pack repository or subpath")
+		return nil, errors.New("no files found in the repository or its subpath")
 	}
 
-	// The pack is at the root of the subpath: that is where the servers look.
-	meta, ok := files["metadata.hcl"]
-	if !ok {
-		return nil, fmt.Errorf("no metadata.hcl in %q of the repository", subpath)
+	// The stack is at the root of the subpath: that is where the servers
+	// are told it is.
+	if _, ok := files[stackFile]; !ok {
+		return nil, fmt.Errorf("no %s in %q of the repository: the subpath is the directory of a stack", stackFile, subpath)
 	}
 
-	metaStr := string(meta)
-	return &FetchResult{
-		Provider:    provider,
-		CommitSHA:   commit,
-		Branch:      ref,
-		PackFiles:   files,
-		PackName:    extractPackAttr(metaStr, "name"),
-		PackVersion: extractPackAttr(metaStr, "version"),
-	}, nil
+	return &FetchResult{Provider: provider, CommitSHA: commit, Ref: ref, Files: files}, nil
 }
 
-// packAttrRe matches an attribute line, whatever its alignment.
-var packAttrRe = regexp.MustCompile(`^([A-Za-z0-9_-]+)\s*=\s*"([^"]*)"`)
-
-// extractPackAttr reads an attribute of the pack block of metadata.hcl. The
-// app block and nested blocks have attributes of the same name.
-func extractPackAttr(hcl, key string) string {
-	depth, inPack := 0, false
-	for line := range strings.SplitSeq(hcl, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
-			continue
-		}
-		if depth == 0 && strings.HasPrefix(line, "pack") && strings.HasSuffix(line, "{") {
-			inPack = strings.TrimSpace(strings.TrimSuffix(line, "{")) == "pack"
-			depth = 1
-			continue
-		}
-		if inPack && depth == 1 {
-			if m := packAttrRe.FindStringSubmatch(line); m != nil && m[1] == key {
-				return m[2]
-			}
-		}
-		if strings.HasSuffix(line, "{") {
-			depth++
-		}
-		if line == "}" {
-			depth--
-			if depth == 0 {
-				inPack = false
-			}
-		}
+// FetchOptionsFor returns the fetch options of a binding whose secrets are
+// resolved.
+func FetchOptionsFor(b *config.GitOpsBinding) *FetchOptions {
+	repo := b.EffectiveRepo()
+	opts := &FetchOptions{
+		Provider: b.EffectiveProvider(),
+		URL:      repo.URL,
+		Branch:   repo.Branch,
+		Ref:      repo.Ref,
+		Subpath:  repo.Subpath,
+		APIURL:   b.EffectiveAPIURL(),
+		Auth: &AuthCredentials{
+			Token:         repo.AuthSecret,
+			SSHPrivateKey: repo.SSHPrivateKey,
+			KnownHosts:    repo.KnownHosts,
+		},
+		TLS: &TLSConfig{
+			InsecureSkipVerify: repo.InsecureSkipVerify,
+			CACertPEM:          repo.CACertPEM,
+		},
 	}
-	return ""
-}
-
-// PackDigest identifies the content of a pack.
-func PackDigest(files map[string][]byte) string {
-	names := make([]string, 0, len(files))
-	for name := range files {
-		names = append(names, name)
+	if b.GitLab != nil {
+		opts.ProjectPath = b.GitLab.ProjectPath
 	}
-	sort.Strings(names)
-	h := sha256.New()
-	for _, name := range names {
-		fmt.Fprintf(h, "%s\x00%d\x00", name, len(files[name]))
-		h.Write(files[name])
+	if b.Verify.Active() {
+		opts.VerifyKeys = b.Verify.PublicKeys
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return opts
 }

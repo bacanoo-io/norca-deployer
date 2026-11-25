@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // FilePrefix makes a GitOps setting the content of a local file.
@@ -55,11 +58,54 @@ func expandLabelledBindings(list []any, at string) ([]any, error) {
 	return res, nil
 }
 
-func (p *DeploymentPlan) validateGitOps() error {
-	configs := []*GitOpsConfig{p.GitOps}
-	if p.Packs != nil {
-		configs = append(configs, p.Packs.GitOps)
+// UnmarshalYAML reads a binding and refuses a key it does not have. The HCL
+// decoder refuses unknown keys everywhere; YAML and JSON ignore them, and
+// here a key that is ignored would have a stack applied in another way than
+// the plan says.
+func (b *GitOpsBinding) UnmarshalYAML(node *yaml.Node) error {
+	if err := knownKeys(node, reflectBinding, "gitops binding"); err != nil {
+		return err
 	}
+	type plain GitOpsBinding
+	return node.Decode((*plain)(b))
+}
+
+// UnmarshalYAML reads a policy and refuses a key it does not have.
+func (p *GitOpsPolicy) UnmarshalYAML(node *yaml.Node) error {
+	if err := knownKeys(node, reflect.TypeFor[GitOpsPolicy](), "gitops binding policy"); err != nil {
+		return err
+	}
+	type plain GitOpsPolicy
+	return node.Decode((*plain)(p))
+}
+
+// knownKeys refuses a key of a YAML mapping that is no field of t.
+func knownKeys(node *yaml.Node, t reflect.Type, what string) error {
+	if node.Kind != yaml.MappingNode {
+		return nil // the decoder says what is wrong
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := node.Content[i]
+		if key.Tag == "!!merge" {
+			continue
+		}
+		if _, ok := fieldByTag(t, key.Value); !ok {
+			return fmt.Errorf("%s (line %d): unknown key %q", what, key.Line, key.Value)
+		}
+	}
+	return nil
+}
+
+func (p *DeploymentPlan) validateGitOps() error {
+	if p.Packs != nil && p.Packs.GitOps != nil {
+		return errors.New("packs.gitops: pack bindings are gone, a GitOps binding applies a stack of Rigger: " +
+			"write the bindings under rigger.gitops (or the top-level gitops)")
+	}
+	var configs []*GitOpsConfig
+	if p.Rigger != nil {
+		configs = append(configs, p.Rigger.GitOps)
+	}
+	configs = append(configs, p.GitOps)
 	seen := map[string]bool{}
 	for _, g := range configs {
 		if g == nil {
@@ -90,9 +136,6 @@ func validateBinding(b *GitOpsBinding, seen map[string]bool) error {
 		return fmt.Errorf("gitops: duplicate binding %q", b.Name)
 	}
 	seen[b.Name] = true
-	if b.ReleaseName == "" {
-		return fmt.Errorf("gitops binding %s: release_name is required", b.Name)
-	}
 
 	blocks := 0
 	for _, set := range []bool{b.Forgejo != nil, b.Gitea != nil, b.GitHub != nil, b.GitLab != nil} {
@@ -118,6 +161,16 @@ func validateBinding(b *GitOpsBinding, seen map[string]bool) error {
 
 	if b.Verify.Active() && len(b.Verify.PublicKeys) == 0 {
 		return fmt.Errorf("gitops binding %s: verify needs public_keys", b.Name)
+	}
+
+	switch b.Mode() {
+	case GitOpsModePlanOnly:
+	case GitOpsModeApply:
+		if !b.Verify.Active() {
+			return fmt.Errorf("gitops binding %s: %s", b.Name, GitOpsApplyNeedsVerify)
+		}
+	default:
+		return fmt.Errorf("gitops binding %s: policy mode %q is not %s or %s", b.Name, b.Mode(), GitOpsModeApply, GitOpsModePlanOnly)
 	}
 
 	if w := b.Webhook; w != nil {
@@ -152,9 +205,11 @@ func (p *DeploymentPlan) GitOpsLogBufferSize() int {
 	return 0
 }
 
+// gitOpsConfig is the block whose settings the daemon takes: rigger.gitops
+// before the top-level gitops.
 func (p *DeploymentPlan) gitOpsConfig() *GitOpsConfig {
-	if p.Packs != nil && p.Packs.GitOps != nil {
-		return p.Packs.GitOps
+	if p.Rigger != nil && p.Rigger.GitOps != nil {
+		return p.Rigger.GitOps
 	}
 	return p.GitOps
 }

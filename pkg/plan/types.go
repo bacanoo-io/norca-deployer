@@ -19,8 +19,10 @@ type DeploymentPlan struct {
 	// Bus is the bus block of every server: settings of the system bus.
 	Bus   *BusConfig   `yaml:"bus,omitempty" json:"bus,omitempty"`
 	Packs *PacksConfig `yaml:"packs,omitempty" json:"packs,omitempty"`
-	// Rigger is a stack of Rigger, the package manager that replaces packs.
-	Rigger       *RiggerConfig  `yaml:"rigger,omitempty" json:"rigger,omitempty"`
+	// Rigger is a stack of Rigger, the package manager that replaces packs,
+	// and the GitOps bindings (rigger.gitops).
+	Rigger *RiggerConfig `yaml:"rigger,omitempty" json:"rigger,omitempty"`
+	// GitOps are GitOps bindings, as rigger.gitops.
 	GitOps       *GitOpsConfig  `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 	CNI          *CNIConfig     `yaml:"cni,omitempty" json:"cni,omitempty"`
 	Upgrade      UpgradeConfig  `yaml:"upgrade,omitempty" json:"upgrade,omitempty"`
@@ -50,11 +52,12 @@ type DeploymentPlan struct {
 	baseDir string
 }
 
-// AllGitOpsBindings returns all configured GitOps bindings across packs and top-level gitops.
+// AllGitOpsBindings returns the GitOps bindings of rigger.gitops and of the
+// top-level gitops.
 func (p *DeploymentPlan) AllGitOpsBindings() []GitOpsBinding {
 	var res []GitOpsBinding
-	if p.Packs != nil {
-		res = append(res, p.Packs.GitOps.AllBindings()...)
+	if p.Rigger != nil {
+		res = append(res, p.Rigger.GitOps.AllBindings()...)
 	}
 	return append(res, p.GitOps.AllBindings()...)
 }
@@ -488,7 +491,9 @@ type PacksConfig struct {
 	Registry   PackRegistryConfig   `yaml:"registry,omitempty" json:"registry,omitempty"`
 	Registries []PackRegistryConfig `yaml:"registries,omitempty" json:"registries,omitempty"`
 	Deploy     []PackDeployItem     `yaml:"deploy,omitempty" json:"deploy,omitempty"`
-	GitOps     *GitOpsConfig        `yaml:"gitops,omitempty" json:"gitops,omitempty"`
+	// GitOps is refused: a binding applies a stack of Rigger, and the
+	// bindings are under rigger.gitops. The key is read to say so.
+	GitOps any `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 }
 
 // AllRegistries returns the registries of registry and registries.
@@ -541,15 +546,19 @@ func (g *GitOpsConfig) AllBindings() []GitOpsBinding {
 	return res
 }
 
-// GitOpsBinding maps a Git repository source to a Norca pack release deployment.
+// GitOpsBinding ties a stack directory of a Git repository to a namespace
+// and a region: the servers there apply the stack (a stack of Rigger, sent
+// to them as files). The stack names its releases, and sets atomic and
+// max_history per module, in its stack.hcl.
 type GitOpsBinding struct {
-	Name        string         `yaml:"name" json:"name"`
-	ReleaseName string         `yaml:"release_name" json:"release_name"`
-	Namespace   string         `yaml:"namespace,omitempty" json:"namespace,omitempty"`
-	Region      string         `yaml:"region,omitempty" json:"region,omitempty"`
-	Atomic      bool           `yaml:"atomic,omitempty" json:"atomic,omitempty"`
-	MaxHistory  int            `yaml:"max_history,omitempty" json:"max_history,omitempty"`
-	Values      map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
+	Name string `yaml:"name" json:"name"`
+	// Namespace and Region are where the stack is sent: those of the rigger
+	// block of its stack.hcl, or the servers refuse it. Empty is the
+	// default namespace, and the region of the server that is asked.
+	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
+	Region    string `yaml:"region,omitempty" json:"region,omitempty"`
+	// Values are values of the variables of the stack.
+	Values map[string]any `yaml:"values,omitempty" json:"values,omitempty"`
 
 	// Provider settings
 	Provider string        `yaml:"provider,omitempty" json:"provider,omitempty"` // forgejo (default), gitea, github, gitlab
@@ -563,10 +572,52 @@ type GitOpsBinding struct {
 
 	// Verify requires a signed commit or tag
 	Verify *VerifyConfig `yaml:"verify,omitempty" json:"verify,omitempty"`
+
+	// Policy is what a run does with the stack.
+	Policy *GitOpsPolicy `yaml:"policy,omitempty" json:"policy,omitempty"`
 }
 
-// VerifyConfig requires a pack to come from a commit or tag signed with one of
-// the keys. The block turns it on; enabled = false turns it off.
+// GitOpsPolicy is what a run of a binding does with its stack.
+type GitOpsPolicy struct {
+	// Mode is apply (the default): the servers apply the stack; or
+	// plan-only: they plan it, and the run logs the plan.
+	Mode string `yaml:"mode,omitempty" json:"mode,omitempty"`
+	// Prune uninstalls the releases the stack owns and no longer has.
+	Prune bool `yaml:"prune,omitempty" json:"prune,omitempty"`
+}
+
+// The values of the mode of a policy.
+const (
+	GitOpsModeApply    = "apply"
+	GitOpsModePlanOnly = "plan-only"
+)
+
+// GitOpsApplyNeedsVerify says why a binding that applies needs a verify
+// block. Until the servers evaluate a stack in a process of its own, an
+// evaluation that runs out of memory or overflows its call stack ends the
+// leader, and applying on every push puts that within reach of everyone
+// who can push.
+const GitOpsApplyNeedsVerify = "mode apply needs a verify block with public_keys: the servers evaluate a stack in their own process, " +
+	"so they are sent to apply only what a signed commit or tag vouches for; mode plan-only needs none"
+
+// Mode returns the mode of the binding: the one of its policy, apply when
+// the policy names none.
+func (b *GitOpsBinding) Mode() string {
+	if b.Policy != nil && b.Policy.Mode != "" {
+		return b.Policy.Mode
+	}
+	return GitOpsModeApply
+}
+
+// PlanOnly reports whether a run of the binding stops after the plan.
+func (b *GitOpsBinding) PlanOnly() bool { return b.Mode() == GitOpsModePlanOnly }
+
+// Prune reports whether an apply uninstalls the releases the stack owns and
+// no longer has.
+func (b *GitOpsBinding) Prune() bool { return b.Policy != nil && b.Policy.Prune }
+
+// VerifyConfig requires a stack to come from a commit or tag signed with one
+// of the keys. The block turns it on; enabled = false turns it off.
 type VerifyConfig struct {
 	Enabled *bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 

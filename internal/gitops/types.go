@@ -19,7 +19,8 @@ type TLSConfig struct {
 	CACertPEM          string
 }
 
-// FetchOptions contains parameters for an in-memory pack fetch.
+// FetchOptions contains parameters for an in-memory fetch of a stack
+// directory.
 type FetchOptions struct {
 	Provider  string // forgejo, gitea, github, gitlab
 	URL       string
@@ -36,25 +37,37 @@ type FetchOptions struct {
 	// of its URL.
 	ProjectPath string
 
-	// VerifyKeys are armored PGP public keys. With them the pack needs a signed
-	// commit or tag of one of them. An archive has no signatures, so it is
-	// always cloned.
+	// VerifyKeys are armored PGP public keys. With them the stack needs a
+	// signed commit or tag of one of them. An archive has no signatures, so
+	// it is always cloned.
 	VerifyKeys []string
 }
 
-// FetchResult contains the metadata and memory files of a fetched pack.
+// FetchResult is a fetched stack directory, in memory.
 type FetchResult struct {
-	Provider    string
-	CommitSHA   string
-	Branch      string
-	Author      string
-	Message     string
-	PackFiles   map[string][]byte // Path -> file content in RAM
-	PackName    string
-	PackVersion string
+	Provider  string
+	CommitSHA string
 
-	// Signer says who signed the commit or tag, when it was verified.
+	// Ref is the branch, the tag or the revision that was fetched; empty
+	// when only a commit was named.
+	Ref string
+
+	// Files are the files of the stack directory, by their paths below it.
+	Files map[string][]byte
+
+	// Signer is who signed the commit or the tag, when it was verified, and
+	// Signed what carries the signature: "commit" or "tag <name>".
 	Signer string
+	Signed string
+}
+
+// Signature says what was verified: "commit signed by <key>" or "tag <name>
+// signed by <key>". It is empty when nothing was.
+func (r *FetchResult) Signature() string {
+	if r.Signer == "" {
+		return ""
+	}
+	return r.Signed + " signed by " + r.Signer
 }
 
 // WebhookEvent represents an ingested and verified webhook payload.
@@ -81,9 +94,11 @@ type LogEntry struct {
 	Provider    string    `json:"provider"`
 	Trigger     string    `json:"trigger"` // "webhook" | "on-demand"
 	CommitSHA   string    `json:"commit_sha,omitempty"`
+	Stack       string    `json:"stack,omitempty"`     // the stack, once a plan of the servers named it
+	Operation   string    `json:"operation,omitempty"` // the operation of the servers, once it started
 	Author      string    `json:"author,omitempty"`
 	Message     string    `json:"message,omitempty"`
-	Phase       string    `json:"phase"` // "TRIGGER", "FETCH", "RENDER", "APPLY", "SUCCESS", "FAILED"
+	Phase       string    `json:"phase"` // "TRIGGER", "FETCH", "VERIFY", "PLAN", "APPLY", "OPERATION", "SUCCESS", "FAILED"
 	Details     string    `json:"details"`
 	DurationMs  int64     `json:"duration_ms,omitempty"`
 	Error       string    `json:"error,omitempty"`

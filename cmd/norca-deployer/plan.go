@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/bacanoo-io/norca-deployer/internal/engine"
+	"github.com/bacanoo-io/norca-deployer/internal/gitops"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -142,8 +143,8 @@ func newPlanCmd() *cobra.Command {
 				fmt.Fprintf(out, "GitOps Bindings (%d):\n", len(bindings))
 				for _, b := range bindings {
 					repo := b.EffectiveRepo()
-					fmt.Fprintf(out, "  - %s: release=%s provider=%s url=%s branch=%s atomic=%t\n",
-						b.Name, b.ReleaseName, b.EffectiveProvider(), repo.URL, repo.Branch, b.Atomic)
+					fmt.Fprintf(out, "  - %s: namespace=%s provider=%s url=%s branch=%s subpath=%s mode=%s prune=%t\n",
+						b.Name, b.Namespace, b.EffectiveProvider(), gitops.SanitizeURL(repo.URL), repo.Branch, repo.Subpath, b.Mode(), b.Prune())
 				}
 			}
 

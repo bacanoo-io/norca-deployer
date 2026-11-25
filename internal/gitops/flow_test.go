@@ -9,13 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -26,10 +24,6 @@ import (
 
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
-
-const packMeta = "app {\n  url = \"https://example.com\"\n  name = \"wrong\"\n}\n\npack {\n  name        = \"demo\"\n  description = \"d\"\n  version     = \"0.1.0\"\n\n  requires {\n    name = \"nested\"\n  }\n}\n"
-
-const sha = "7f8b91a24d8c910283e5891d1209384bcdaef190"
 
 func tarball(t *testing.T, commit string, files map[string]string) []byte {
 	t.Helper()
@@ -53,193 +47,61 @@ func tarball(t *testing.T, commit string, files map[string]string) []byte {
 	return b.Bytes()
 }
 
-// fakeNorca records the calls of a deployment like the servers answer them.
-type fakeNorca struct {
-	mu      sync.Mutex
-	calls   []string
-	deploy  map[string]any
-	archive []byte
-	uploads []string
-	status  int
-}
-
-func (f *fakeNorca) API(_ context.Context, method, path string, body []byte) (int, string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, method+" "+path)
-	if f.status != 0 {
-		return f.status, "refused", nil
-	}
-	switch {
-	case method == http.MethodPut && strings.HasPrefix(path, "/v1/pack-upload"):
-		f.archive = body
-		sum := sha256.Sum256(body)
-		digest := "sha256:" + hex.EncodeToString(sum[:])
-		f.uploads = append(f.uploads, digest)
-		list := []map[string]string{}
-		for _, u := range f.uploads {
-			list = append(list, map[string]string{"digest": u})
-		}
-		out, _ := json.Marshal(map[string]any{"Digest": digest, "Registry": map[string]any{"Status": map[string]any{"uploads": list}}})
-		return 200, string(out), nil
-	case method == http.MethodDelete:
-		f.uploads = f.uploads[len(f.uploads)-1:]
-		return 200, "{}", nil
-	case strings.Contains(path, "/deploy-pack"):
-		_ = json.Unmarshal(body, &f.deploy)
-		return 200, "{}", nil
-	}
-	return 404, "unknown", nil
-}
-
-func (f *fakeNorca) count(prefix string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, c := range f.calls {
-		if strings.HasPrefix(c, prefix) {
-			n++
-		}
-	}
-	return n
-}
-
-func fetched(version string) *FetchResult {
-	return &FetchResult{PackName: "demo", PackVersion: version, Branch: "main", CommitSHA: sha,
-		PackFiles: map[string][]byte{"metadata.hcl": []byte(packMeta), "templates/app.nomad.tpl": []byte("job")}}
-}
-
-func TestDeploy_UploadsThePackThenDeploysItFromTheRegistry(t *testing.T) {
-	f := &fakeNorca{}
-	rel := &Release{Name: "payment", Namespace: "production", Region: "eu", Values: map[string]any{"replicas": 5},
-		Atomic: true, MaxHistory: 7, Description: "d"}
-	if err := Deploy(context.Background(), f, fetched("0.1.0"), rel); err != nil {
-		t.Fatal(err)
-	}
-
-	registry := UploadRegistry("production", "payment")
-	if !strings.Contains(f.calls[0], "PUT /v1/pack-upload?") || !strings.Contains(f.calls[0], "registry="+registry) || !strings.Contains(f.calls[0], "region=eu") {
-		t.Fatalf("upload: %v", f.calls)
-	}
-	if !strings.Contains(f.calls[1], "POST /v1/release/payment/deploy-pack?") || !strings.Contains(f.calls[1], "namespace=production") || !strings.Contains(f.calls[1], "region=eu") {
-		t.Fatalf("deploy: %v", f.calls)
-	}
-	if f.deploy["Registry"] != registry || f.deploy["Pack"] != "demo" || f.deploy["Version"] != "0.1.0" || f.deploy["Atomic"] != true || f.deploy["MaxHistory"] != float64(7) {
-		t.Fatalf("request: %v", f.deploy)
-	}
-
-	// The pack is at the root of the archive, where the servers look for it.
-	files, _, err := extractPlain(f.archive)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if files["metadata.hcl"] != packMeta || files["templates/app.nomad.tpl"] != "job" {
-		t.Fatalf("archive: %v", files)
-	}
-}
-
-func extractPlain(data []byte) (map[string]string, string, error) {
-	gz, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		return nil, "", err
-	}
-	tr := tar.NewReader(gz)
-	out := map[string]string{}
-	for {
-		h, err := tr.Next()
-		if err == io.EOF {
-			return out, "", nil
-		}
-		if err != nil {
-			return nil, "", err
-		}
-		b, _ := io.ReadAll(tr)
-		out[h.Name] = string(b)
-	}
-}
-
-func TestDeploy_AtomicIsLeftToTheNamespace(t *testing.T) {
-	f := &fakeNorca{}
-	if err := Deploy(context.Background(), f, fetched("0.1.0"), &Release{Name: "r"}); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := f.deploy["Atomic"]; ok {
-		t.Fatal("false must not override the namespace")
-	}
-}
-
-func TestDeploy_OldUploadIsRemovedBeforeTheDeployment(t *testing.T) {
-	f := &fakeNorca{}
-	rel := &Release{Name: "r"}
-	if err := Deploy(context.Background(), f, fetched("0.1.0"), rel); err != nil {
-		t.Fatal(err)
-	}
-	res := fetched("0.1.0")
-	res.PackFiles["templates/app.nomad.tpl"] = []byte("job changed")
-	if err := Deploy(context.Background(), f, res, rel); err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Join(f.calls, "\n")
-	del, dep := strings.LastIndex(got, "DELETE /v1/pack-upload/"), strings.LastIndex(got, "deploy-pack")
-	if del < 0 || del > dep {
-		t.Fatalf("calls: %s", got)
-	}
-}
-
-func TestDeploy_Refusals(t *testing.T) {
-	f := &fakeNorca{}
-	noVersion := fetched("")
-	if err := Deploy(context.Background(), f, noVersion, &Release{Name: "r"}); err == nil || len(f.calls) != 0 {
-		t.Fatalf("a pack without a version must not be sent: %v %v", err, f.calls)
-	}
-	f.status = 403
-	if err := Deploy(context.Background(), f, fetched("0.1.0"), &Release{Name: "r"}); err == nil || !strings.Contains(err.Error(), "403") {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestProvenance_HidesCredentials(t *testing.T) {
-	d := Provenance("github", "https://oauth2:SECRET@github.com/o/r.git", fetched("1"))
-	if strings.Contains(d, "SECRET") || !strings.Contains(d, sha) {
-		t.Fatalf("got %s", d)
-	}
-}
-
-func TestExtractPackAttr_RealMetadata(t *testing.T) {
-	if got := extractPackAttr(packMeta, "name"); got != "demo" {
-		t.Fatalf("name %q", got)
-	}
-	if got := extractPackAttr(packMeta, "version"); got != "0.1.0" {
-		t.Fatalf("version %q", got)
-	}
-	// A pack block of another name doesn't count.
-	if got := extractPackAttr("packages {\n  name = \"x\"\n}\n", "name"); got != "" {
-		t.Fatalf("got %q", got)
-	}
-}
-
 func TestFetch_CommitOfAnEventIsRequestedAndReported(t *testing.T) {
 	var path string
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path = r.URL.Path
-		_, _ = w.Write(tarball(t, "", map[string]string{"r/metadata.hcl": packMeta}))
+		_, _ = w.Write(tarball(t, "", map[string]string{"r/stack.hcl": stackHCL}))
 	}))
 	defer s.Close()
-	res, err := FetchPackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", Branch: "main", CommitSHA: sha})
+	res, err := FetchStackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", Branch: "main", CommitSHA: sha})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(path, sha) || res.CommitSHA != sha {
 		t.Fatalf("path %s commit %s", path, res.CommitSHA)
 	}
+	// The commit is what is fetched, the branch what it is recorded under.
+	if res.Ref != "main" || string(res.Files["stack.hcl"]) != stackHCL {
+		t.Fatalf("ref %q files %v", res.Ref, res.Files)
+	}
+
+	// A commit alone is of no branch that could be named.
+	res, err = FetchStackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", CommitSHA: sha})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Ref != "" || res.CommitSHA != sha {
+		t.Fatalf("ref %q commit %s", res.Ref, res.CommitSHA)
+	}
+}
+
+// The directory of a stack has its stack.hcl at its root.
+func TestFetch_NeedsAStack(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(tarball(t, sha, map[string]string{"r/metadata.hcl": "pack {}", "r/stacks/a/stack.hcl": stackHCL, "r/stacks/a/values/prod.vars.hcl": "x = 1"}))
+	}))
+	defer s.Close()
+	opts := &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", Branch: "main"}
+	if _, err := FetchStackInMemory(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "no stack.hcl") {
+		t.Fatalf("got %v", err)
+	}
+	opts.Subpath = "stacks/a"
+	res, err := FetchStackInMemory(context.Background(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Files) != 2 || string(res.Files["stack.hcl"]) != stackHCL || string(res.Files["values/prod.vars.hcl"]) != "x = 1" {
+		t.Fatalf("files %v", res.Files)
+	}
 }
 
 func TestFetch_CommitOfTheArchive(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(tarball(t, sha, map[string]string{"r/metadata.hcl": packMeta}))
+		_, _ = w.Write(tarball(t, sha, map[string]string{"r/stack.hcl": stackHCL}))
 	}))
 	defer s.Close()
-	res, err := FetchPackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", Branch: "main"})
+	res, err := FetchStackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git", Branch: "main"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +114,7 @@ func TestFetch_RedirectDropsCredentials(t *testing.T) {
 	var got string
 	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("PRIVATE-TOKEN") + r.Header.Get("Authorization")
-		_, _ = w.Write(tarball(t, "", map[string]string{"r/metadata.hcl": packMeta}))
+		_, _ = w.Write(tarball(t, "", map[string]string{"r/stack.hcl": stackHCL}))
 	}))
 	defer other.Close()
 	gl := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -262,7 +124,7 @@ func TestFetch_RedirectDropsCredentials(t *testing.T) {
 		http.Redirect(w, r, strings.Replace(other.URL, "127.0.0.1", "localhost", 1)+"/s3", http.StatusFound)
 	}))
 	defer gl.Close()
-	if _, err := FetchPackInMemory(context.Background(), &FetchOptions{Provider: "gitlab", URL: gl.URL + "/g/p.git", Auth: &AuthCredentials{Token: "SECRET"}}); err != nil {
+	if _, err := FetchStackInMemory(context.Background(), &FetchOptions{Provider: "gitlab", URL: gl.URL + "/g/p.git", Auth: &AuthCredentials{Token: "SECRET"}}); err != nil {
 		t.Fatal(err)
 	}
 	if got != "" {
@@ -305,7 +167,7 @@ func TestDetectProvider_LooksAtTheHostOnly(t *testing.T) {
 }
 
 func TestSubpath(t *testing.T) {
-	for in, want := range map[string]string{"": "", ".": "", "/": "", "/packs/a/": "packs/a", "packs/./a": "packs/a"} {
+	for in, want := range map[string]string{"": "", ".": "", "/": "", "/stacks/a/": "stacks/a", "stacks/./a": "stacks/a"} {
 		got, err := cleanSubpath(in)
 		if err != nil || got != want {
 			t.Errorf("%q: got %q %v", in, got, err)
@@ -319,20 +181,20 @@ func TestSubpath(t *testing.T) {
 }
 
 func TestExtract_Limits(t *testing.T) {
-	var space packSpace
-	if err := space.add(maxPackBytes + 1); err == nil {
+	var space stackSpace
+	if err := space.add(maxStackBytes + 1); err == nil {
 		t.Fatal("too many bytes")
 	}
-	space = packSpace{files: maxPackFiles}
+	space = stackSpace{files: maxStackFiles}
 	if err := space.add(1); err == nil {
 		t.Fatal("too many files")
 	}
-	big := tarball(t, "", map[string]string{"r/big": strings.Repeat("x", maxPackBytes+1)})
+	big := tarball(t, "", map[string]string{"r/big": strings.Repeat("x", maxStackBytes+1)})
 	if _, _, err := extractTarGzStream(bytes.NewReader(big), ""); err == nil {
-		t.Fatal("an oversized pack must be refused")
+		t.Fatal("an oversized stack directory must be refused")
 	}
 	// Files outside the subpath take no memory and count for nothing.
-	files, _, err := extractTarGzStream(bytes.NewReader(big), "packs")
+	files, _, err := extractTarGzStream(bytes.NewReader(big), "stacks")
 	if err != nil || len(files) != 0 {
 		t.Fatalf("got %v %v", files, err)
 	}
@@ -358,14 +220,13 @@ func localRepo(t *testing.T) (dir, first, second string) {
 		t.Fatal(err)
 	}
 	commit := func(version string) string {
-		if err := os.MkdirAll(filepath.Join(dir, "packs", "a"), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(dir, "stacks", "a"), 0755); err != nil {
 			t.Fatal(err)
 		}
-		meta := strings.ReplaceAll(packMeta, "0.1.0", version)
-		if err := os.WriteFile(filepath.Join(dir, "packs", "a", "metadata.hcl"), []byte(meta), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "stacks", "a", "stack.hcl"), []byte(stackAt(version)), 0644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := w.Add("packs/a/metadata.hcl"); err != nil {
+		if _, err := w.Add("stacks/a/stack.hcl"); err != nil {
 			t.Fatal(err)
 		}
 		h, err := w.Commit("v"+version, &git.CommitOptions{Author: &object.Signature{Name: "t", Email: "t@example.com", When: time.Now()}})
@@ -389,6 +250,12 @@ func localRepo(t *testing.T) (dir, first, second string) {
 	return dir, first, second
 }
 
+// stackAt is the stack.hcl of a commit of a test repository: the version
+// of its module tells the commits apart.
+func stackAt(version string) string {
+	return strings.ReplaceAll(stackHCL, "0.1.0", version)
+}
+
 func TestFetch_GoGitFallback(t *testing.T) {
 	dir, first, second := localRepo(t)
 	url := "file://" + filepath.ToSlash(dir)
@@ -397,21 +264,31 @@ func TestFetch_GoGitFallback(t *testing.T) {
 		opts    FetchOptions
 		version string
 		commit  string
+		ref     string
 	}{
-		"branch": {FetchOptions{Branch: branch}, "2.0.0", second},
-		"tag":    {FetchOptions{Tag: "v1"}, "1.0.0", first},
-		"commit": {FetchOptions{Branch: branch, CommitSHA: first}, "1.0.0", first},
-		"ref":    {FetchOptions{Ref: "v1"}, "1.0.0", first},
+		"branch":         {FetchOptions{Branch: branch}, "2.0.0", second, branch},
+		"tag":            {FetchOptions{Tag: "v1"}, "1.0.0", first, "v1"},
+		"commit":         {FetchOptions{Branch: branch, CommitSHA: first}, "1.0.0", first, branch},
+		"only a commit":  {FetchOptions{CommitSHA: first}, "1.0.0", first, ""},
+		"ref":            {FetchOptions{Ref: "v1"}, "1.0.0", first, "v1"},
+		"nothing named":  {FetchOptions{}, "2.0.0", second, branch},
+		"a zero commit":  {FetchOptions{Branch: branch, CommitSHA: "0000000000000000000000000000000000000000"}, "2.0.0", second, branch},
+		"commit and tag": {FetchOptions{Tag: "v1", CommitSHA: first}, "1.0.0", first, "v1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts := tc.opts
-			opts.URL, opts.Subpath = url, "packs/a"
-			res, err := FetchPackInMemory(context.Background(), &opts)
+			opts.URL, opts.Subpath = url, "stacks/a"
+			res, err := FetchStackInMemory(context.Background(), &opts)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if res.PackVersion != tc.version || res.CommitSHA != tc.commit {
-				t.Fatalf("version %s commit %s", res.PackVersion, res.CommitSHA)
+			if got := string(res.Files["stack.hcl"]); got != stackAt(tc.version) || res.CommitSHA != tc.commit {
+				t.Fatalf("stack %q commit %s", got, res.CommitSHA)
+			}
+			// The ref is what the origin of the stack names: the branch,
+			// the tag or the revision, never a guess.
+			if res.Ref != tc.ref {
+				t.Fatalf("ref %q, want %q", res.Ref, tc.ref)
 			}
 		})
 	}
@@ -433,7 +310,7 @@ func branchOf(t *testing.T, dir string) string {
 func TestFetch_ArchiveErrorIsKept(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusForbidden) }))
 	defer s.Close()
-	_, err := FetchPackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git"})
+	_, err := FetchStackInMemory(context.Background(), &FetchOptions{Provider: "forgejo", URL: s.URL + "/o/r.git"})
 	if err == nil || !strings.Contains(err.Error(), "HTTP 403") {
 		t.Fatalf("got %v", err)
 	}
@@ -462,12 +339,14 @@ func newDaemonFixture(t *testing.T, cfg DaemonConfig, bindings ...config.GitOpsB
 		atomic.AddInt32(&fetches, 1)
 		auth.Store(r.Header.Get("Authorization"))
 		path.Store(r.URL.Path)
-		_, _ = w.Write(tarball(t, "", map[string]string{"r/metadata.hcl": packMeta}))
+		_, _ = w.Write(tarball(t, "", map[string]string{"r/stack.hcl": stackHCL}))
 	}))
 	t.Cleanup(gitSrv.Close)
 
+	// The bindings only plan: an archive has no signature, and a binding
+	// that applies needs one (verify_test.go has those).
 	if len(bindings) == 0 {
-		bindings = []config.GitOpsBinding{{Name: "b", ReleaseName: "rel", Namespace: "production",
+		bindings = []config.GitOpsBinding{{Name: "b", Namespace: "production", Policy: planOnly(),
 			Forgejo: &config.RepoConfig{URL: gitSrv.URL + "/o/r.git", Branch: "main", AuthSecret: "git-token"},
 			Webhook: &config.WebhookConfig{SecretKey: "secret", Events: []string{"push"}}}}
 	} else {
@@ -487,6 +366,10 @@ func newDaemonFixture(t *testing.T, cfg DaemonConfig, bindings ...config.GitOpsB
 	srv := httptest.NewServer(d.server.Handler)
 	t.Cleanup(srv.Close)
 	return &daemonFixture{url: srv.URL, norca: f, fetches: &fetches, auth: auth, path: path}
+}
+
+func planOnly() *config.GitOpsPolicy {
+	return &config.GitOpsPolicy{Mode: config.GitOpsModePlanOnly}
 }
 
 func (f *daemonFixture) post(t *testing.T, query, event, secret, payload string) int {
@@ -525,10 +408,10 @@ func TestDaemon_DebounceRunsTheLatestPushOnce(t *testing.T) {
 			t.Fatalf("status %d", status)
 		}
 	}
-	waitFor(t, func() bool { return f.norca.count("POST") == 1 })
+	waitFor(t, func() bool { return f.norca.count(planCall) == 1 })
 	time.Sleep(200 * time.Millisecond)
-	if n := atomic.LoadInt32(f.fetches); n != 1 || f.norca.count("POST") != 1 {
-		t.Fatalf("fetches %d, deployments %d", n, f.norca.count("POST"))
+	if n := atomic.LoadInt32(f.fetches); n != 1 || f.norca.count(planCall) != 1 {
+		t.Fatalf("fetches %d, plans %d", n, f.norca.count(planCall))
 	}
 
 	// The binding reached the servers and the provider with its credentials
@@ -539,11 +422,77 @@ func TestDaemon_DebounceRunsTheLatestPushOnce(t *testing.T) {
 	if p := f.path.Load().(string); !strings.Contains(p, sha) {
 		t.Fatalf("path %s", p)
 	}
-	if !strings.Contains(strings.Join(f.norca.calls, " "), "namespace=production") {
-		t.Fatalf("calls %v", f.norca.calls)
+	if calls := f.norca.called(); calls[0] != planCall+"?namespace=production" {
+		t.Fatalf("calls %v", calls)
 	}
-	if d := f.norca.deploy["Description"].(string); !strings.Contains(d, sha) {
-		t.Fatalf("description %s", d)
+	// The servers are told where the stack came from: the address without
+	// the credentials of the binding, the branch and the pushed commit.
+	origin := f.norca.asked()[0].Origin
+	if origin["commit"] != sha || origin["ref"] != "main" || !strings.HasSuffix(origin["repository"], "/o/r.git") || origin["signer"] != "" {
+		t.Fatalf("origin %v", origin)
+	}
+	if strings.Contains(origin["repository"], "git-token") {
+		t.Fatalf("origin %v", origin)
+	}
+	// A binding that only plans starts no operation.
+	if n := f.norca.count(applyCall); n != 0 {
+		t.Fatalf("%d applies", n)
+	}
+}
+
+// The log of the daemon names the stack and the commit of a run, and its
+// status says what the binding does.
+func TestDaemon_LogAndStatusOfARun(t *testing.T) {
+	logger := NewRingLogger(50)
+	f := newDaemonFixture(t, DaemonConfig{Logger: logger, APIToken: "api"})
+	if status := f.post(t, "", "push", "secret", push(sha)); status != 200 {
+		t.Fatalf("status %d", status)
+	}
+	waitFor(t, func() bool {
+		all := logger.All()
+		return len(all) > 0 && all[len(all)-1].Phase == "SUCCESS"
+	})
+
+	var phases []string
+	for _, e := range logger.All() {
+		phases = append(phases, e.Phase)
+		if e.BindingName != "b" || e.CommitSHA != sha {
+			t.Errorf("entry %+v", e)
+		}
+		if (e.Phase == "PLAN" || e.Phase == "SUCCESS") && e.Stack != "demo" {
+			t.Errorf("entry %+v", e)
+		}
+	}
+	got := strings.Join(phases, " ")
+	if !strings.HasPrefix(got, "TRIGGER FETCH PLAN") || !strings.HasSuffix(got, "PLAN SUCCESS") {
+		t.Fatalf("phases %s", got)
+	}
+	last := logger.All()[len(logger.All())-1]
+	if !strings.Contains(last.Details, "stack demo at commit 7f8b91a24d8c planned, nothing applied") {
+		t.Fatalf("details %s", last.Details)
+	}
+
+	req, _ := http.NewRequest(http.MethodGet, f.url+"/v1/gitops/status", nil)
+	req.Header.Set("Authorization", "Bearer api")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var status []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status) != 1 {
+		t.Fatalf("status %v", status)
+	}
+	st := status[0]
+	if st["name"] != "b" || st["namespace"] != "production" || st["mode"] != "plan-only" || st["prune"] != false ||
+		st["status"] != "SUCCESS" || st["last_commit"] != sha || st["last_stack"] != "demo" {
+		t.Fatalf("status %v", st)
+	}
+	if _, has := st["release_name"]; has {
+		t.Fatalf("status %v", st)
 	}
 }
 
@@ -586,20 +535,20 @@ func TestDaemon_SameRepositoryWithAnotherHostDeploys(t *testing.T) {
 	f := newDaemonFixture(t, DaemonConfig{})
 	own := `{"ref":"refs/heads/main","after":"` + sha + `","repository":{"clone_url":"https://public.example/O/R.git"}}`
 	f.post(t, "", "push", "secret", own)
-	waitFor(t, func() bool { return f.norca.count("POST") == 1 })
+	waitFor(t, func() bool { return f.norca.count(planCall) == 1 })
 }
 
 func TestDaemon_ASharedURLFindsTheBindingOfTheSecret(t *testing.T) {
 	f := newDaemonFixture(t, DaemonConfig{},
-		config.GitOpsBinding{Name: "one", ReleaseName: "one", Forgejo: &config.RepoConfig{URL: "/o/r.git", Branch: "main"},
+		config.GitOpsBinding{Name: "one", Namespace: "one", Policy: planOnly(), Forgejo: &config.RepoConfig{URL: "/o/r.git", Branch: "main"},
 			Webhook: &config.WebhookConfig{SecretKey: "s1"}},
-		config.GitOpsBinding{Name: "two", ReleaseName: "two", Forgejo: &config.RepoConfig{URL: "/o/r.git", Branch: "main"},
+		config.GitOpsBinding{Name: "two", Namespace: "two", Policy: planOnly(), Forgejo: &config.RepoConfig{URL: "/o/r.git", Branch: "main"},
 			Webhook: &config.WebhookConfig{SecretKey: "s2"}})
 	if status := f.post(t, "", "push", "s2", push(sha)); status != 200 {
 		t.Fatalf("status %d", status)
 	}
-	waitFor(t, func() bool { return f.norca.count("POST /v1/release/two/") == 1 })
-	if f.norca.count("POST /v1/release/one/") != 0 {
+	waitFor(t, func() bool { return f.norca.count(planCall+"?namespace=two") == 1 })
+	if f.norca.count(planCall+"?namespace=one") != 0 {
 		t.Fatal("the other binding must not run")
 	}
 }

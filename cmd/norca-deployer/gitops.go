@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -95,17 +96,21 @@ type runFlags struct {
 	apiURL     string
 	caCert     string
 	insecure   bool
-	name       string
 	namespace  string
 	region     string
-	atomic     bool
+	mode       string
+	prune      bool
 	vars       []string
 	verifyKeys []string
 	noVerify   bool
 }
 
-// binding returns the binding to run: the one of --binding, the first of the
-// plan when the flags name no repository, or one made of the flags.
+// flagsBinding names the binding that is made of the flags, in the output
+// and the errors.
+const flagsBinding = "command-line"
+
+// resolveBinding returns the binding to run: the one of --binding, the first
+// of the plan when the flags name no repository, or one made of the flags.
 func (f *runFlags) resolveBinding(cmd *cobra.Command) (*config.GitOpsBinding, error) {
 	b := &config.GitOpsBinding{}
 	if f.url == "" {
@@ -127,6 +132,7 @@ func (f *runFlags) resolveBinding(cmd *cobra.Command) (*config.GitOpsBinding, er
 			return nil, errors.New("--url or a configured binding is required")
 		}
 	} else {
+		b.Name = flagsBinding
 		b.Provider = f.provider
 		repo := &config.RepoConfig{URL: f.url}
 		switch b.EffectiveProvider() {
@@ -141,23 +147,35 @@ func (f *runFlags) resolveBinding(cmd *cobra.Command) (*config.GitOpsBinding, er
 		}
 	}
 
-	if f.name != "" {
-		b.ReleaseName = f.name
-	}
-	if b.ReleaseName == "" {
-		return nil, errors.New("--name (release name) is required")
-	}
 	if f.namespace != "" {
 		b.Namespace = f.namespace
 	}
 	if f.region != "" {
 		b.Region = f.region
 	}
-	if cmd.Flags().Changed("atomic") || f.url != "" {
-		b.Atomic = f.atomic
+
+	// The flags change a copy of the policy: the binding is of the plan.
+	policy := config.GitOpsPolicy{}
+	if b.Policy != nil {
+		policy = *b.Policy
 	}
-	if len(f.vars) > 0 && b.Values == nil {
-		b.Values = map[string]any{}
+	switch f.mode {
+	case "":
+	case config.GitOpsModeApply, config.GitOpsModePlanOnly:
+		policy.Mode = f.mode
+	default:
+		return nil, fmt.Errorf("--mode %q is not %s or %s", f.mode, config.GitOpsModeApply, config.GitOpsModePlanOnly)
+	}
+	if cmd.Flags().Changed("prune") {
+		policy.Prune = f.prune
+	}
+	b.Policy = &policy
+
+	if len(f.vars) > 0 {
+		// A copy too: the values are of the plan.
+		values := make(map[string]any, len(b.Values)+len(f.vars))
+		maps.Copy(values, b.Values)
+		b.Values = values
 	}
 	for _, v := range f.vars {
 		k, val, ok := strings.Cut(v, "=")
@@ -258,35 +276,33 @@ func (f *runFlags) run(cmd *cobra.Command) error {
 	if err != nil {
 		return err
 	}
+	// The rule of a binding of the plan, for one of the flags too: the
+	// servers apply only what a signed commit or tag vouches for.
+	if !b.PlanOnly() && len(opts.VerifyKeys) == 0 {
+		return fmt.Errorf("gitops binding %s: %w (flags: --verify-key-file, or --mode %s)", b.Name, gitops.ErrApplyNeedsVerify, config.GitOpsModePlanOnly)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	fmt.Fprintf(out, "=== In-Memory GitOps Fetch & Deploy ===\n")
+	fmt.Fprintf(out, "=== In-Memory GitOps Fetch & Apply ===\n")
+	fmt.Fprintf(out, "Binding:      %s\n", b.Name)
 	fmt.Fprintf(out, "Provider:     %s\n", b.EffectiveProvider())
 	fmt.Fprintf(out, "Repository:   %s\n", gitops.SanitizeURL(opts.URL))
 	if opts.Subpath != "" {
 		fmt.Fprintf(out, "Subpath:      %s\n", opts.Subpath)
 	}
-	fmt.Fprintf(out, "Target:       Release %q (namespace: %q, atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
-	fmt.Fprintln(out, "Fetching repository strictly into memory...")
+	fmt.Fprintf(out, "Target:       namespace %q, region %q (mode: %s, prune: %t)\n", b.Namespace, b.Region, b.Mode(), b.Prune())
 
 	start := time.Now()
-	res, err := gitops.FetchPackInMemory(ctx, opts)
+	runner := gitops.Runner{Client: client, Report: func(e gitops.Event) {
+		fmt.Fprintf(out, "[%s] %s\n", e.Phase, e.Details)
+	}}
+	res, err := runner.Run(ctx, b, opts, b.Values)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "[OK] Pack %q (version: %s, commit: %s) fetched into RAM in %dms (%d files)\n",
-		res.PackName, res.PackVersion, res.CommitSHA, time.Since(start).Milliseconds(), len(res.PackFiles))
-	if res.Signer != "" {
-		fmt.Fprintf(out, "[OK] Verified: %s\n", res.Signer)
-	}
-
-	fmt.Fprintln(out, "Uploading the pack and deploying it...")
-	if err := gitops.Deploy(ctx, client, res, gitops.ReleaseOf(b, b.Values, res)); err != nil {
-		return err
-	}
-	fmt.Fprintf(out, "[OK] Release %q successfully deployed in %dms!\n", b.ReleaseName, time.Since(start).Milliseconds())
+	fmt.Fprintf(out, "[OK] %s, in %dms\n", res, time.Since(start).Milliseconds())
 	return nil
 }
 
@@ -337,7 +353,7 @@ func (f *daemonFlags) run(cmd *cobra.Command) error {
 	fmt.Fprintf(out, "Endpoints:  POST /v1/gitops/webhook, GET /v1/gitops/logs, GET /v1/gitops/status\n")
 	fmt.Fprintf(out, "Bindings registered: %d\n", len(bindings))
 	for _, b := range bindings {
-		fmt.Fprintf(out, "  - %s: %s (%s, %s)\n", b.Name, b.ReleaseName, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
+		fmt.Fprintf(out, "  - %s: namespace %q, mode %s (%s, %s)\n", b.Name, b.Namespace, b.Mode(), b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -454,17 +470,25 @@ func (f *logsFlags) run(cmd *cobra.Command, binding string) error {
 	}
 }
 
+// stackDir names the directory of a stack in its repository.
+func stackDir(subpath string) string {
+	if subpath == "" {
+		return "the root of the repository"
+	}
+	return subpath
+}
+
 func newGitOpsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gitops",
-		Short: "In-memory GitOps deployments, webhook daemon and log viewer",
+		Short: "Rigger stacks applied from Git repositories: one run, the webhook daemon and its logs",
 	}
 
 	// 1. norca-deployer gitops run
 	run := &runFlags{}
 	runCmd := &cobra.Command{
 		Use:   "run",
-		Short: "Execute an immediate in-memory Git fetch and deployment to the cluster",
+		Short: "Fetch a stack directory into memory and have the servers plan and apply it",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run.run(cmd)
 		},
@@ -478,7 +502,7 @@ func newGitOpsCmd() *cobra.Command {
 	f.StringVar(&run.ref, "ref", "", "Any revision to fetch")
 	f.StringVar(&run.commit, "commit", "", "Commit to fetch")
 	f.StringVar(&run.provider, "provider", "", "Git provider (forgejo, gitea, github, gitlab)")
-	f.StringVar(&run.subpath, "subpath", "", "Pack subpath within the repository")
+	f.StringVar(&run.subpath, "subpath", "", "Directory of the stack within the repository (it has the stack.hcl)")
 	f.StringVar(&run.token, "token", "", "Git token, or !enc:v1:... (prefer --token-env: arguments are visible to other processes)")
 	f.StringVar(&run.tokenEnv, "token-env", "", "Environment variable containing the Git token")
 	f.StringVar(&run.username, "username", "", "Git username")
@@ -488,13 +512,13 @@ func newGitOpsCmd() *cobra.Command {
 	f.StringVar(&run.apiURL, "api-url", "", "API URL of a GitHub Enterprise Server or a GitLab instance")
 	f.StringVar(&run.caCert, "ca-cert", "", "CA bundle file of the Git host")
 	f.BoolVar(&run.insecure, "insecure-skip-tls-verify", false, "Do not verify the certificate of the Git host")
-	f.StringVar(&run.name, "name", "", "Release name in the Norca cluster")
-	f.StringVar(&run.namespace, "namespace", "", "Release namespace")
-	f.StringVar(&run.region, "region", "", "Region of the release")
-	f.BoolVar(&run.atomic, "atomic", true, "Automatically rollback on health check failure")
-	f.StringArrayVar(&run.vars, "var", nil, "Pack variable as name=value (can be repeated)")
+	f.StringVar(&run.namespace, "namespace", "", "Namespace of the stack: the one its rigger block names")
+	f.StringVar(&run.region, "region", "", "Region of the stack: the one its rigger block names")
+	f.StringVar(&run.mode, "mode", "", "apply: the servers apply the stack; plan-only: they plan it (default: the binding's, else apply)")
+	f.BoolVar(&run.prune, "prune", false, "Uninstall the releases the stack owns and no longer has")
+	f.StringArrayVar(&run.vars, "var", nil, "Variable of the stack as name=value (can be repeated)")
 	f.StringArrayVar(&run.verifyKeys, "verify-key-file", nil, "Armored PGP public key file: require a commit or tag signed with it (can be repeated)")
-	f.BoolVar(&run.noVerify, "no-verify", false, "Do not verify signatures, even if the binding requires it")
+	f.BoolVar(&run.noVerify, "no-verify", false, "Do not verify signatures, even if the binding requires it (with --mode plan-only)")
 	runCmd.MarkFlagsMutuallyExclusive("verify-key-file", "no-verify")
 
 	// 2. norca-deployer gitops daemon
@@ -533,7 +557,8 @@ func newGitOpsCmd() *cobra.Command {
 			for _, b := range bindings {
 				repo := b.EffectiveRepo()
 				fmt.Fprintf(out, "Binding:   %s\n", b.Name)
-				fmt.Fprintf(out, "  Release: %s (Namespace: %s, Atomic: %t)\n", b.ReleaseName, b.Namespace, b.Atomic)
+				fmt.Fprintf(out, "  Stack:   %s (Namespace: %s, Region: %s)\n", stackDir(repo.Subpath), b.Namespace, b.Region)
+				fmt.Fprintf(out, "  Policy:  mode: %s, prune: %t, verify: %t\n", b.Mode(), b.Prune(), b.Verify.Active())
 				fmt.Fprintf(out, "  Repo:    %s (%s, branch: %s)\n", gitops.SanitizeURL(repo.URL), b.EffectiveProvider(), repo.Branch)
 				if b.Webhook != nil && len(b.Webhook.Events) > 0 {
 					fmt.Fprintf(out, "  Webhook: events: %v, branches: %v\n", b.Webhook.Events, b.Webhook.FilterBranches)

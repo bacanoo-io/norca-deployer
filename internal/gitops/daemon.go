@@ -248,22 +248,29 @@ func (d *Daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		recent := d.logger.Tail(1, b.Name)
 		lastStatus := "Idle"
 		lastTrigger := ""
-		lastCommit := ""
+		lastCommit, lastStack, lastOperation := "", "", ""
 		if len(recent) > 0 {
 			lastStatus = recent[0].Phase
 			lastTrigger = recent[0].Timestamp.Format(time.RFC3339)
 			lastCommit = recent[0].CommitSHA
+			lastStack, lastOperation = recent[0].Stack, recent[0].Operation
 		}
 
 		status = append(status, map[string]any{
-			"name":         b.Name,
-			"release_name": b.ReleaseName,
-			"provider":     b.EffectiveProvider(),
-			"url":          SanitizeURL(repo.URL),
-			"branch":       repo.Branch,
-			"status":       lastStatus,
-			"last_sync":    lastTrigger,
-			"last_commit":  lastCommit,
+			"name":           b.Name,
+			"namespace":      b.Namespace,
+			"region":         b.Region,
+			"mode":           b.Mode(),
+			"prune":          b.Prune(),
+			"provider":       b.EffectiveProvider(),
+			"url":            SanitizeURL(repo.URL),
+			"branch":         repo.Branch,
+			"subpath":        repo.Subpath,
+			"status":         lastStatus,
+			"last_sync":      lastTrigger,
+			"last_commit":    lastCommit,
+			"last_stack":     lastStack,
+			"last_operation": lastOperation,
 		})
 	}
 

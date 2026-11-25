@@ -17,7 +17,7 @@ A single-binary installer and lifecycle tool for [Norca](https://github.com/baca
 - **Bootstrap secrets and policies:** after the cluster is up, the namespaces (always `norca-system`, where the operator packs run and keep their tokens, and those of the plan), secrets of the built-in secret store and Variables (plain, encrypted, from files, or generated once: passwords, NATS NKeys) and ACL policies bound to jobs.
 - **Packs:** creates pack registries and installs packs with the server-side `deploy-pack`. A pack is deployed again only when its settings changed.
 - **Rigger stacks:** applies a stack of Rigger modules with `norca rigger stack apply` on the first server, which sends it to the servers to apply; or with a `rigger` program on the operator machine, against the cluster API served on a local port through the first server.
-- **GitOps:** deploys packs straight from Forgejo, Gitea, GitHub and GitLab repositories, read into memory: once with `gitops run`, on every `apply`, and on every push with the `gitops daemon` webhook listener (HMAC-verified, debounced). Bindings can require a signed commit or tag.
+- **GitOps:** applies Rigger stacks straight from Forgejo, Gitea, GitHub and GitLab repositories, read into memory: once with `gitops run`, on every `apply`, and on every push with the `gitops daemon` webhook listener (HMAC-verified, debounced). The servers plan the stack and apply it as an operation that the deployer follows; a binding that applies requires a signed commit or tag, one that only plans does not.
 - **SSH host keys:** trust on first use (`tofu`), `strict` or `off`.
 
 ## Build

@@ -444,8 +444,10 @@ func namespaceMatches(live map[string]any, want *config.NamespaceConfig) bool {
 	return true
 }
 
-// deployGitOps deploys the GitOps bindings: every apply fetches them, and a
-// marker skips the deployment of a pack and values that were deployed before.
+// deployGitOps runs the GitOps bindings: every apply fetches the stack of
+// each and has the servers plan it. They compare it with the releases of
+// the cluster, so the deployer keeps no marker: a stack that is in sync is
+// left alone, another is applied (or, by its policy, only planned).
 func (r *Runner) deployGitOps(first *target, token string) error {
 	if len(r.plan.AllGitOpsBindings()) == 0 {
 		return nil
@@ -455,73 +457,49 @@ func (r *Runner) deployGitOps(first *target, token string) error {
 		return err
 	}
 	if r.plan.Security.ACL != nil && r.plan.Security.ACL.Enabled && token == "" {
-		fmt.Printf("    [WARN] No management token: %d GitOps binding(s) not deployed\n", len(bindings))
+		fmt.Printf("    [WARN] No management token: %d GitOps binding(s) not run\n", len(bindings))
 		return nil
 	}
 	cli := first.cli(r, token)
 	if cli.isWindows() {
-		return fmt.Errorf("gitops: a pack archive can't be sent through a Windows server; run the first master on Linux or use gitops run")
+		return fmt.Errorf("gitops: a stack can't be sent through a Windows server; run the first master on Linux or use gitops run")
 	}
-	api := remoteAPI{cli}
+	runner := gitops.Runner{Client: remoteAPI{cli}, Report: func(e gitops.Event) {
+		fmt.Printf("    [%s] %s\n", e.Phase, e.Details)
+	}}
 
 	for i := range bindings {
 		b := &bindings[i]
 		resolved, err := r.resolveValues(b.Values)
 		if err != nil {
-			return fmt.Errorf("gitops %q values: %w", b.Name, err)
+			return fmt.Errorf("gitops binding %s: values: %w", b.Name, err)
 		}
 		values, _ := resolved.(map[string]any)
 
 		if err := gitops.CheckBinding(b); err != nil {
 			return err
 		}
-		fmt.Printf("    Fetching GitOps pack %s (%s, %s)...\n", b.Name, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL))
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		res, err := gitops.FetchPackInMemory(ctx, gitops.FetchOptionsFor(b))
-		cancel()
+		fmt.Printf("    Running the GitOps binding %s (%s, %s, mode %s)...\n",
+			b.Name, b.EffectiveProvider(), gitops.SanitizeURL(b.EffectiveRepo().URL), b.Mode())
+		// The errors of a run name the binding, the stack, the commit and
+		// the operation.
+		res, err := runner.Run(r.abortCtx(), b, gitops.FetchOptionsFor(b), values)
 		if err != nil {
-			return fmt.Errorf("gitops %q in-memory fetch: %w", b.Name, err)
+			return err
 		}
-
-		if res.Signer != "" {
-			fmt.Printf("    [OK] GitOps binding %s verified: %s\n", b.Name, res.Signer)
-		}
-
-		rel := gitops.ReleaseOf(b, values, res)
-		summary, err := json.Marshal(map[string]any{
-			"Pack":       gitops.PackDigest(res.PackFiles),
-			"Release":    rel.Name,
-			"Namespace":  rel.Namespace,
-			"Region":     rel.Region,
-			"Values":     rel.Values,
-			"Atomic":     rel.Atomic,
-			"MaxHistory": rel.MaxHistory,
-		})
-		if err != nil {
-			return fmt.Errorf("gitops %q: %w", b.Name, err)
-		}
-		sum := sha256.Sum256(summary)
-		marker := r.store.Path(filepath.Join("gitops", b.Name+".sha256"))
-		if prev, err := os.ReadFile(marker); err == nil && strings.TrimSpace(string(prev)) == hex.EncodeToString(sum[:]) {
-			fmt.Printf("    GitOps binding %s unchanged (skipped)\n", b.Name)
-			continue
-		}
-
-		if err := gitops.Deploy(context.Background(), api, res, rel); err != nil {
-			return fmt.Errorf("gitops %q: %w", b.Name, err)
-		}
-		if err := os.MkdirAll(filepath.Dir(marker), 0700); err == nil {
-			_ = os.WriteFile(marker, []byte(hex.EncodeToString(sum[:])+"\n"), 0600)
-		}
-		fmt.Printf("    [OK] GitOps binding %s deployed (release %s, %s)\n", b.Name, b.ReleaseName, res.CommitSHA)
+		fmt.Printf("    [OK] GitOps binding %s: %s\n", b.Name, res)
 	}
 
 	return nil
 }
 
-// remoteAPI calls the cluster through the CLI of a server.
+// remoteAPI calls the cluster through the CLI of a server. A call that has
+// started is not cut by its context; one is not started with a done one.
 type remoteAPI struct{ cli *remoteCLI }
 
-func (a remoteAPI) API(_ context.Context, method, path string, body []byte) (int, string, error) {
+func (a remoteAPI) API(ctx context.Context, method, path string, body []byte) (int, string, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, "", err
+	}
 	return a.cli.api(method, path, body)
 }

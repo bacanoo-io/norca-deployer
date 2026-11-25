@@ -13,7 +13,8 @@ import (
 // RiggerConfig is the rigger section of a plan: a stack of Rigger (design of
 // Rigger, section 13.1), applied by the rigger program after the packs. The
 // stack is a directory next to the plan (stack), or its stack.hcl written in
-// the plan (stack_hcl).
+// the plan (stack_hcl). The section also holds the GitOps bindings, which
+// apply stacks of repositories (gitops); it may hold them alone.
 type RiggerConfig struct {
 	// Stack is the directory of the stack, relative to the plan: its
 	// stack.hcl, own modules, values and rigger.lock.hcl.
@@ -42,6 +43,9 @@ type RiggerConfig struct {
 	// this order. The servers fetch the modules of a stack only from a
 	// registry they have synced, and a new cluster has synced none.
 	SyncRegistries []string `yaml:"sync_registries,omitempty" json:"sync_registries,omitempty"`
+	// GitOps are the GitOps bindings: stacks in repositories, apart from
+	// the stack of the plan and its settings above.
+	GitOps *GitOpsConfig `yaml:"gitops,omitempty" json:"gitops,omitempty"`
 }
 
 // The values of rigger.run_on.
@@ -55,6 +59,19 @@ const (
 	RiggerEmbedded   = "embedded"
 	RiggerStandalone = "standalone"
 )
+
+// HasStack reports whether the section has a stack of the plan; one with
+// GitOps bindings only has none.
+func (r *RiggerConfig) HasStack() bool { return r.Stack != "" || r.StackHCL != "" }
+
+// onlyGitOps reports a section of GitOps bindings without a stack of the
+// plan and without a setting of one. run_on and mode count when they are
+// not their defaults, which a loaded plan has written out.
+func (r *RiggerConfig) onlyGitOps() bool {
+	return r.GitOps != nil && !r.HasStack() &&
+		len(r.Values) == 0 && len(r.Vars) == 0 && !r.Prune && r.Binary == "" && len(r.SyncRegistries) == 0 &&
+		r.RunsOnServer() && r.Embedded()
+}
 
 // RunsOnServer reports whether norca rigger on the first server applies the
 // stack, which is the default.
@@ -80,6 +97,8 @@ func (p *DeploymentPlan) validateRigger() error {
 	}
 
 	switch {
+	case r.onlyGitOps():
+		return nil
 	case r.Stack == "" && r.StackHCL == "":
 		return errors.New("rigger: stack or stack_hcl is required")
 	case r.Stack != "" && r.StackHCL != "":
