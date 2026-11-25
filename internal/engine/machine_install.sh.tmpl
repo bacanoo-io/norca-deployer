@@ -32,10 +32,6 @@ die() {
 }
 
 [ "$(id -u)" -eq 0 ] || die "run this script as root"
-for tool in sha256sum tar install cmp stat mktemp base64 find; do
-  command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
-done
-
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -194,6 +190,9 @@ case $os_family in
 {{.Families}}) log "family $os_family (${os_id})" ;;
 *) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: {{.Families}}" ;;
 esac
+for tool in sha256sum tar install cmp stat mktemp base64 find; do
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
+done
 {{- if .Packages}}
 
 # Host packages (host_packages for a client), per family
