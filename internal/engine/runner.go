@@ -126,6 +126,15 @@ type target struct {
 
 func (t *target) isWindows() bool { return strings.ToLower(t.node.Platform) == "windows" }
 
+// scriptTarget is the node for the scripts of the plan.
+func (t *target) scriptTarget() scripts.Target {
+	st := scripts.Target{Node: t.node, IsMaster: t.isMaster}
+	if t.facts != nil {
+		st.Family = string(t.facts.Family)
+	}
+	return st
+}
+
 // needsClient reports whether the node runs the client (clients and masters
 // with client settings).
 func (t *target) needsClient() bool { return !t.isMaster || t.node.ClientSettings != nil }
@@ -306,19 +315,19 @@ func (r *Runner) prepareNode(t *target) error {
 	binaryBefore := r.binaryDigest(t)
 
 	// 0. Scripts of phase pre_install
-	if err := scripts.Run(conn, r.plan, config.PhasePreInstall, node, t.isMaster, r.resolveSecret); err != nil {
+	if err := scripts.Run(conn, r.plan, config.PhasePreInstall, t.scriptTarget(), r.resolveSecret); err != nil {
 		return err
 	}
 
 	// 0b. Debian packages from APT repositories or local .deb files
-	if sel := packages.Select(r.plan.HostPackages, node, t.isMaster); !sel.Empty() {
+	if sel := packages.Select(r.plan.AptPackages(), node, t.isMaster); !sel.Empty() {
 		if isWin {
 			fmt.Printf("    [WARN] [%s] host_packages skipped on a Windows node\n", node.Host)
 		} else if err := packages.Apply(conn, r.plan, sel, node, r.resolveSecret); err != nil {
 			return fmt.Errorf("host packages: %w", err)
 		}
 	}
-	if err := scripts.Run(conn, r.plan, config.PhasePostPackages, node, t.isMaster, r.resolveSecret); err != nil {
+	if err := scripts.Run(conn, r.plan, config.PhasePostPackages, t.scriptTarget(), r.resolveSecret); err != nil {
 		return err
 	}
 
@@ -486,7 +495,7 @@ func (r *Runner) restartMasters(ctx context.Context, masters []*target) error {
 	}
 
 	for _, t := range masters {
-		if err := scripts.Run(t.conn, r.plan, config.PhasePostInstall, t.node, true, r.resolveSecret); err != nil {
+		if err := scripts.Run(t.conn, r.plan, config.PhasePostInstall, t.scriptTarget(), r.resolveSecret); err != nil {
 			return fmt.Errorf("node [%s]: %w", t.node.Host, err)
 		}
 	}
@@ -529,7 +538,7 @@ func (r *Runner) restartClients(ctx context.Context, clients []*target) error {
 						return
 					}
 				}
-				t.err = scripts.Run(t.conn, r.plan, config.PhasePostInstall, t.node, false, r.resolveSecret)
+				t.err = scripts.Run(t.conn, r.plan, config.PhasePostInstall, t.scriptTarget(), r.resolveSecret)
 			}(t)
 		}
 		wg.Wait()

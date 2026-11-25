@@ -197,7 +197,7 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		data.Join.SHA256 = strings.ToLower(machine.JoinDownload.ChecksumSHA256)
 	}
 
-	sel := packages.Select(plan.HostPackages, node, false)
+	sel := packages.Select(plan.AptPackages(), node, false)
 	pkgs, err := machinePackages(plan, sel, arch, boot, func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) })
 	if err != nil {
 		return "", err

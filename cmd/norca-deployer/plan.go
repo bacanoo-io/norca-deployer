@@ -82,7 +82,7 @@ func newPlanCmd() *cobra.Command {
 				lo, hi := plan.DynamicPortRange()
 				fmt.Fprintf(out, "Dynamic Ports:   %d-%d\n", lo, hi)
 			}
-			if hp := plan.HostPackages; hp != nil {
+			if hp := plan.AptPackages(); hp != nil {
 				fmt.Fprintf(out, "APT Repositories (%d):\n", len(hp.Repositories))
 				for _, r := range hp.Repositories {
 					fmt.Fprintf(out, "  - %s: %s %s %v %s\n", r.Name, r.URI, r.Suite, r.Components, rolesLabel(r.Roles, nil))

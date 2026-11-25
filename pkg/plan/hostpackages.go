@@ -115,6 +115,25 @@ func DebArch(goArch string) string {
 	}
 }
 
+// The interpreters of a script.
+const (
+	InterpreterBash = "bash"
+	InterpreterSh   = "sh"
+)
+
+// FamilyWindows is the family of a Windows node, for the families of a
+// script.
+const FamilyWindows = "windows"
+
+// ScriptInterpreter returns the interpreter of a script on Linux: bash
+// when the plan names none.
+func ScriptInterpreter(s *ScriptConfig) string {
+	if s.Interpreter == "" {
+		return InterpreterBash
+	}
+	return s.Interpreter
+}
+
 // ScriptBody returns the content of a script.
 func (p *DeploymentPlan) ScriptBody(s *ScriptConfig) (string, error) {
 	if s.Inline != "" {
@@ -136,19 +155,47 @@ func validateRoles(what string, roles []string) error {
 	return nil
 }
 
+// AptPackages returns the apt block of host_packages, or nil.
+func (p *DeploymentPlan) AptPackages() *AptPackages {
+	if p.HostPackages == nil {
+		return nil
+	}
+	return p.HostPackages.Apt
+}
+
 func (p *DeploymentPlan) validateHostPackages() error {
 	hp := p.HostPackages
 	if hp == nil {
 		return nil
 	}
+	if hp.MovedRepositories != nil || hp.MovedInstall != nil {
+		return fmt.Errorf("host_packages.repositories and host_packages.install moved into host_packages.apt: " +
+			"the packages of the nodes whose package manager is apt (Debian, Ubuntu) are written as " +
+			"host_packages: {apt: {repositories: [...], install: [...]}}")
+	}
+	if hp.Dnf != nil {
+		return fmt.Errorf("host_packages.dnf is not supported yet: the packages of RHEL nodes (dnf) follow in a later phase (F2) of the host platform work")
+	}
+	if hp.Apk != nil {
+		return fmt.Errorf("host_packages.apk is not supported yet: the packages of Alpine nodes (apk) follow in a later phase (F3) of the host platform work")
+	}
 	if hp.LockTimeout < 0 {
 		return fmt.Errorf("host_packages.lock_timeout must not be negative")
 	}
+	if hp.Apt == nil {
+		return nil
+	}
+	return p.validateAptPackages(hp.Apt)
+}
 
+// validateAptPackages checks the apt block with the rules of Debian: the
+// names and versions of Debian policy, deb822 sources, OpenPGP keys and
+// .deb files.
+func (p *DeploymentPlan) validateAptPackages(apt *AptPackages) error {
 	repoNames := map[string]bool{}
-	for i := range hp.Repositories {
-		r := &hp.Repositories[i]
-		what := fmt.Sprintf("host_packages.repositories[%d]", i)
+	for i := range apt.Repositories {
+		r := &apt.Repositories[i]
+		what := fmt.Sprintf("host_packages.apt.repositories[%d]", i)
 		if !repoNameRe.MatchString(r.Name) {
 			return fmt.Errorf("%s: name %q must be lower case letters, digits and '-'", what, r.Name)
 		}
@@ -222,9 +269,9 @@ func (p *DeploymentPlan) validateHostPackages() error {
 	}
 
 	pkgNames := map[string]bool{}
-	for i := range hp.Install {
-		pkg := &hp.Install[i]
-		what := fmt.Sprintf("host_packages.install[%d]", i)
+	for i := range apt.Install {
+		pkg := &apt.Install[i]
+		what := fmt.Sprintf("host_packages.apt.install[%d]", i)
 		if !debPackageNameRe.MatchString(pkg.Name) {
 			return fmt.Errorf("%s: invalid Debian package name %q", what, pkg.Name)
 		}
@@ -302,6 +349,20 @@ func (p *DeploymentPlan) validateScripts() error {
 		default:
 			return fmt.Errorf("%s: phase %q must be one of %s, %s, %s", what, s.Phase,
 				PhasePreInstall, PhasePostPackages, PhasePostInstall)
+		}
+		switch s.Interpreter {
+		case "", InterpreterBash, InterpreterSh:
+		case "powershell":
+			return fmt.Errorf("%s: interpreter powershell is not supported yet (scripts of Windows nodes follow in a later phase)", what)
+		default:
+			return fmt.Errorf("%s: interpreter %q must be bash or sh", what, s.Interpreter)
+		}
+		for _, f := range s.Families {
+			switch f {
+			case FamilyDebian, FamilyRHEL, FamilyAlpine, FamilyWindows:
+			default:
+				return fmt.Errorf("%s: family %q must be debian, rhel, alpine or windows", what, f)
+			}
 		}
 		if (s.Path == "") == (s.Inline == "") {
 			return fmt.Errorf("%s: exactly one of path or inline is required", what)

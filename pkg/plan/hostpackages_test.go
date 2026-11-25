@@ -12,13 +12,13 @@ const testKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nxyz\n-----END PGP PUBLIC 
 func validPlan() *DeploymentPlan {
 	p := &DeploymentPlan{
 		Inventory: InventoryConfig{Masters: []NodeConfig{{Host: "10.0.0.1"}}},
-		HostPackages: &HostPackages{
+		HostPackages: &HostPackages{Apt: &AptPackages{
 			Repositories: []AptRepository{{
 				Name: "internal", URI: "https://apt.example.com/debian", Suite: "bookworm",
 				Components: []string{"main"}, Key: testKey,
 			}},
 			Install: []HostPackage{{Name: "norca-redis", Version: "1:8.0.2-1norca1~bpo12+1"}},
-		},
+		}},
 		Scripts: []ScriptConfig{{Name: "prep", Phase: PhasePreInstall, Inline: "true"}},
 	}
 	p.SetDefaults()
@@ -34,17 +34,17 @@ func TestValidateHostPackagesAndScripts(t *testing.T) {
 		mutate func(p *DeploymentPlan)
 		err    string
 	}{
-		"package name": {func(p *DeploymentPlan) { p.HostPackages.Install[0].Name = "Redis; rm -rf /" }, "invalid Debian package name"},
-		"version":      {func(p *DeploymentPlan) { p.HostPackages.Install[0].Version = "8.0 && reboot" }, "invalid Debian version"},
+		"package name": {func(p *DeploymentPlan) { p.HostPackages.Apt.Install[0].Name = "Redis; rm -rf /" }, "invalid Debian package name"},
+		"version":      {func(p *DeploymentPlan) { p.HostPackages.Apt.Install[0].Version = "8.0 && reboot" }, "invalid Debian version"},
 		"duplicate pkg": {func(p *DeploymentPlan) {
-			p.HostPackages.Install = append(p.HostPackages.Install, p.HostPackages.Install[0])
+			p.HostPackages.Apt.Install = append(p.HostPackages.Apt.Install, p.HostPackages.Apt.Install[0])
 		}, "more than once"},
-		"uri scheme":      {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].URI = "file:///srv/repo" }, "http(s) URL"},
-		"no key":          {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].Key = "" }, "exactly one of key or key_file"},
-		"not armored":     {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].Key = "AAAA" }, "ASCII-armored"},
-		"no components":   {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].Components = nil }, "components are required"},
-		"flat components": {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].Suite = "./" }, "takes no components"},
-		"repo role":       {func(p *DeploymentPlan) { p.HostPackages.Repositories[0].Roles = []string{"worker"} }, "unknown role"},
+		"uri scheme":      {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].URI = "file:///srv/repo" }, "http(s) URL"},
+		"no key":          {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].Key = "" }, "exactly one of key or key_file"},
+		"not armored":     {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].Key = "AAAA" }, "ASCII-armored"},
+		"no components":   {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].Components = nil }, "components are required"},
+		"flat components": {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].Suite = "./" }, "takes no components"},
+		"repo role":       {func(p *DeploymentPlan) { p.HostPackages.Apt.Repositories[0].Roles = []string{"worker"} }, "unknown role"},
 		"script phase":    {func(p *DeploymentPlan) { p.Scripts[0].Phase = "later" }, "phase"},
 		"script source":   {func(p *DeploymentPlan) { p.Scripts[0].Path = "x.sh" }, "exactly one of path or inline"},
 		"script name":     {func(p *DeploymentPlan) { p.Scripts[0].Name = "../x" }, "name"},
@@ -79,14 +79,15 @@ inventory:
   masters:
     - host: 10.0.0.1
 host_packages:
-  repositories:
-    - name: internal
-      uri: https://apt.example.com/debian
-      suite: bookworm
-      components: [main]
-      key_file: repo.asc
-  install:
-    - name: jq
+  apt:
+    repositories:
+      - name: internal
+        uri: https://apt.example.com/debian
+        suite: bookworm
+        components: [main]
+        key_file: repo.asc
+    install:
+      - name: jq
 scripts:
   - name: prep
     phase: pre_install
@@ -102,7 +103,7 @@ scripts:
 	if body != "echo hi\n" {
 		t.Fatalf("script body = %q", body)
 	}
-	key, err := plan.RepositoryKey(&plan.HostPackages.Repositories[0])
+	key, err := plan.RepositoryKey(&plan.HostPackages.Apt.Repositories[0])
 	must(err)
 	if string(key) != testKey {
 		t.Fatalf("key = %q", key)

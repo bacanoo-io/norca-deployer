@@ -123,7 +123,7 @@ The master key is a 256-bit AES key. It is looked up in this order:
 `norca-deployer secret encrypt '<value>'` prints an `!enc:v1:aes-gcm:...` value (AES-256-GCM). These fields accept encrypted values:
 
 - `connection.ssh_password`, `ssh_key_passphrase`, `ssh_private_key`, `become_password`
-- `host_packages.repositories[].auth.password`
+- `host_packages.apt.repositories[].auth.password`
 - `scripts[].env` values
 - `security.gossip_encryption_key`
 

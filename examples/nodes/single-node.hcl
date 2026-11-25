@@ -71,20 +71,22 @@ security {
 }
 
 host_packages {
-  install {
-    name = "jq"                        # From the APT sources already configured on the node.
+  apt {                                # Nodes whose package manager is apt (Debian, Ubuntu).
+    install {
+      name = "jq"                        # From the APT sources already configured on the node.
+    }
+    install {
+      name = "curl"
+      hold = true                        # apt-mark hold.
+    }
+    # Norca itself as a Debian package (with release.source = "host-package"):
+    # install {
+    #   name    = "norca"
+    #   version = "0.2.0-1"
+    #   hold    = true
+    #   # file  = "debs/norca_0.2.0-1_{arch}.deb"   # or a local .deb
+    # }
   }
-  install {
-    name = "curl"
-    hold = true                        # apt-mark hold.
-  }
-  # Norca itself as a Debian package (with release.source = "host-package"):
-  # install {
-  #   name    = "norca"
-  #   version = "0.2.0-1"
-  #   hold    = true
-  #   # file  = "debs/norca_0.2.0-1_{arch}.deb"   # or a local .deb
-  # }
 }
 
 scripts {

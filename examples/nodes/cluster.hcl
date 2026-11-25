@@ -163,41 +163,43 @@ host_packages {
   update_cache = true
   lock_timeout = 300
 
-  repositories {
-    name          = "docker"           # -> /etc/apt/sources.list.d/norca-docker.sources
-    uri           = "https://download.docker.com/linux/debian"
-    suite         = "bookworm"
-    components    = ["stable"]
-    architectures = ["amd64"]
-    key_file      = "keys/docker.asc"  # Signed-By keyring uploaded from the deployer machine.
-    pin_priority  = 600
-    roles         = ["client"]         # Only on the clients.
-  }
+  apt {                                # Nodes whose package manager is apt (Debian, Ubuntu).
+    repositories {
+      name          = "docker"           # -> /etc/apt/sources.list.d/norca-docker.sources
+      uri           = "https://download.docker.com/linux/debian"
+      suite         = "bookworm"
+      components    = ["stable"]
+      architectures = ["amd64"]
+      key_file      = "keys/docker.asc"  # Signed-By keyring uploaded from the deployer machine.
+      pin_priority  = 600
+      roles         = ["client"]         # Only on the clients.
+    }
 
-  # With release.source host-package: Norca itself as a Debian package.
-  # install {
-  #   name    = "norca"
-  #   version = "0.2.0-1"
-  #   hold    = true
-  #   # file  = "debs/norca_0.2.0-1_{arch}.deb"   # or a local .deb
-  # }
-  install {
-    name  = "docker-ce"
-    roles = ["client"]
-  }
-  install {
-    name  = "docker-ce-cli"
-    roles = ["client"]
-  }
-  install {
-    name  = "containerd.io"
-    roles = ["client"]
-  }
-  install {
-    name = "chrony"                    # Time sync on every node.
-  }
-  install {
-    name = "ufw"                       # Firewall for default_deny.
+    # With release.source host-package: Norca itself as a Debian package.
+    # install {
+    #   name    = "norca"
+    #   version = "0.2.0-1"
+    #   hold    = true
+    #   # file  = "debs/norca_0.2.0-1_{arch}.deb"   # or a local .deb
+    # }
+    install {
+      name  = "docker-ce"
+      roles = ["client"]
+    }
+    install {
+      name  = "docker-ce-cli"
+      roles = ["client"]
+    }
+    install {
+      name  = "containerd.io"
+      roles = ["client"]
+    }
+    install {
+      name = "chrony"                    # Time sync on every node.
+    }
+    install {
+      name = "ufw"                       # Firewall for default_deny.
+    }
   }
 }
 

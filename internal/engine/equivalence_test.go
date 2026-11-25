@@ -294,8 +294,8 @@ func roleOf(isMaster bool) string {
 
 // equivHostPackages are the packages of the plan, of every package manager.
 func equivHostPackages(plan *config.DeploymentPlan) []config.HostPackage {
-	if plan.HostPackages == nil {
-		return nil
+	if apt := plan.AptPackages(); apt != nil {
+		return apt.Install
 	}
-	return plan.HostPackages.Install
+	return nil
 }

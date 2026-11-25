@@ -129,8 +129,11 @@ func (p *DeploymentPlan) validateCluster() error {
 				return fmt.Errorf("release.source host-package cannot install Windows nodes (%s)", n.Host)
 			}
 		}
-		if !p.hostPackageCoversAllNodes(r.Package) {
-			return fmt.Errorf("release.source host-package: host_packages.install must install %q on every node", r.Package)
+		// Whether the block of every node's package manager installs it
+		// for the node is checked with the facts of the nodes, before the
+		// first change.
+		if !p.hostPackageListed(r.Package) {
+			return fmt.Errorf("release.source host-package: host_packages must install %q (in the block of the package manager of the nodes, e.g. host_packages.apt.install)", r.Package)
 		}
 	default:
 		return fmt.Errorf("release.source %q must be official, custom-url, local-path or host-package", r.Source)
@@ -239,31 +242,19 @@ func (p *DeploymentPlan) NodeDatacenter(n *NodeConfig) string {
 	return p.Metadata.Datacenter
 }
 
-// hostPackageCoversAllNodes reports whether a host package is installed on
-// every node of the inventory.
-func (p *DeploymentPlan) hostPackageCoversAllNodes(name string) bool {
-	if p.HostPackages == nil {
+// hostPackageListed reports whether a block of host_packages has the
+// package.
+func (p *DeploymentPlan) hostPackageListed(name string) bool {
+	apt := p.AptPackages()
+	if apt == nil {
 		return false
 	}
-	covers := func(n *NodeConfig, isMaster bool) bool {
-		for _, hp := range p.HostPackages.Install {
-			if hp.Name == name && AppliesTo(hp.Roles, hp.Hosts, n, isMaster) {
-				return true
-			}
-		}
-		return false
-	}
-	for i := range p.Inventory.Masters {
-		if !covers(&p.Inventory.Masters[i], true) {
-			return false
+	for _, hp := range apt.Install {
+		if hp.Name == name {
+			return true
 		}
 	}
-	for i := range p.Inventory.Clients {
-		if !covers(&p.Inventory.Clients[i], false) {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 // Escalation methods of connection.become_method.

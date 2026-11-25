@@ -23,7 +23,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 	node := &config.NodeConfig{Host: "10.0.0.1", Platform: "linux"}
 	conn := connector.NewFakeConnector()
 
-	if err := Run(conn, plan, config.PhasePreInstall, node, false, nil); err != nil {
+	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(conn.CommandsWithPrefix("set -a;")); got != 1 {
@@ -37,7 +37,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 	}
 
 	// Second apply with the same script and env: skipped.
-	if err := Run(conn, plan, config.PhasePreInstall, node, false, nil); err != nil {
+	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(conn.CommandsWithPrefix("set -a;")); got != 1 {
@@ -46,7 +46,7 @@ func TestRunOnceUntilChanged(t *testing.T) {
 
 	// A changed env value re-runs it.
 	plan.Scripts[0].Env["DEV"] = "/dev/sdc"
-	if err := Run(conn, plan, config.PhasePreInstall, node, false, nil); err != nil {
+	if err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := len(conn.CommandsWithPrefix("set -a;")); got != 2 {
@@ -60,7 +60,7 @@ func TestAlwaysAndRoles(t *testing.T) {
 	conn := connector.NewFakeConnector()
 
 	for range 2 {
-		if err := Run(conn, plan, config.PhasePostInstall, node, true, nil); err != nil {
+		if err := Run(conn, plan, config.PhasePostInstall, Target{Node: node, IsMaster: true, Family: "debian"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,7 +69,7 @@ func TestAlwaysAndRoles(t *testing.T) {
 	}
 
 	// redis-tune is client-only.
-	if err := Run(conn, plan, config.PhasePostPackages, node, true, nil); err != nil {
+	if err := Run(conn, plan, config.PhasePostPackages, Target{Node: node, IsMaster: true, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := conn.Files[ScriptPath("redis-tune")]; ok {
@@ -83,7 +83,7 @@ func TestFailureKeepsMarkerUnset(t *testing.T) {
 	conn := connector.NewFakeConnector()
 	conn.Failures["set -a;"] = errBoom{}
 
-	err := Run(conn, plan, config.PhasePreInstall, node, false, nil)
+	err := Run(conn, plan, config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil)
 	if err == nil || !strings.Contains(err.Error(), `script "disk" failed`) {
 		t.Fatalf("expected failure, got %v", err)
 	}
@@ -108,7 +108,7 @@ func TestCommandIsPortable(t *testing.T) {
 func TestWindowsSkipped(t *testing.T) {
 	conn := connector.NewFakeConnector()
 	node := &config.NodeConfig{Host: "10.0.0.9", Platform: "windows"}
-	if err := Run(conn, testPlan(), config.PhasePreInstall, node, false, nil); err != nil {
+	if err := Run(conn, testPlan(), config.PhasePreInstall, Target{Node: node, IsMaster: false, Family: "debian"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(conn.Commands) != 0 || len(conn.Files) != 0 {
@@ -140,3 +140,31 @@ func TestSecretEnv(t *testing.T) {
 type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
+
+// A script runs with its interpreter, and only on the nodes of its
+// families.
+func TestInterpreterAndFamilies(t *testing.T) {
+	sh := &Prepared{Config: &config.ScriptConfig{Name: "prep", Interpreter: config.InterpreterSh}}
+	if got := Command(sh, "/e"); !strings.HasSuffix(got, "timeout -k 10 600 sh '/var/lib/norca-deployer/scripts/prep.sh'") {
+		t.Fatalf("Command = %s", got)
+	}
+	all := []config.ScriptConfig{
+		{Name: "any", Phase: config.PhasePreInstall, Inline: "true"},
+		{Name: "rhel-only", Phase: config.PhasePreInstall, Inline: "true", Families: []string{config.FamilyRHEL}},
+		{Name: "debian-and-alpine", Phase: config.PhasePreInstall, Inline: "true", Families: []string{config.FamilyDebian, config.FamilyAlpine}},
+	}
+	node := &config.NodeConfig{Host: "10.0.0.1", Platform: "linux"}
+	names := func(family string) string {
+		var res []string
+		for _, s := range Select(all, config.PhasePreInstall, Target{Node: node, Family: family}) {
+			res = append(res, s.Name)
+		}
+		return strings.Join(res, ",")
+	}
+	if got := names(config.FamilyDebian); got != "any,debian-and-alpine" {
+		t.Errorf("debian: %s", got)
+	}
+	if got := names(config.FamilyRHEL); got != "any,rhel-only" {
+		t.Errorf("rhel: %s", got)
+	}
+}

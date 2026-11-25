@@ -35,7 +35,7 @@ An unknown key or a block repeated where only one is allowed is an error.
 | `bus` | | Settings of the system bus of the servers |
 | `federation` | | Multi-region settings |
 | `consul` | | A Consul agent on every node; without it the agents do not use Consul |
-| `host_packages` | | Debian packages |
+| `host_packages` | | Packages of the Linux nodes, one block per package manager (`apt`) |
 | `scripts` | | Bash scripts |
 | `client_defaults` | | Client settings merged into every node that runs a client |
 | `node_pools` | | Node pool descriptions |
@@ -247,10 +247,13 @@ See [DNS of the hosts: the consul domain](networking-and-tuning.md#dns-of-the-ho
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `update_cache` | `true` | `apt-get update` before installing |
-| `lock_timeout` | `300` | dpkg lock wait in seconds |
-| `repositories[]` | | `name`, `uri`, `suite`, `components`, `architectures`, `key` or `key_file`, `roles`, `pin_priority`, `pin_packages`, `pin_release`, `auth.username`, `auth.password` |
-| `install[]` | | `name`, `version`, `hold`, `file`, `sha256`, `roles`, `hosts` |
+| `update_cache` | `true` | Refresh the package index before installing (`apt-get update`) |
+| `lock_timeout` | `300` | Wait for the lock of the package manager in seconds |
+| `apt.repositories[]` | | `name`, `uri`, `suite`, `components`, `architectures`, `key` or `key_file`, `roles`, `pin_priority`, `pin_packages`, `pin_release`, `auth.username`, `auth.password` |
+| `apt.install[]` | | `name`, `version`, `hold`, `file`, `sha256`, `roles`, `hosts` |
+| `dnf`, `apk` | | Planned (RHEL, Alpine); refused for now |
+
+A node takes only the block of its package manager (`apt` on Debian and Ubuntu). The lists `repositories` and `install` directly under `host_packages` are refused: they belong into `apt`.
 
 See [Host packages and scripts](host-packages-and-scripts.md).
 
@@ -260,6 +263,8 @@ See [Host packages and scripts](host-packages-and-scripts.md).
 | --- | --- | --- |
 | `name` | | Unique name |
 | `phase` | | `pre_install`, `post_packages` or `post_install` |
+| `interpreter` | `bash` | `bash` or `sh`; a `bash` script on a node without bash is an error |
+| `families` | all | Only on nodes of these families: `debian`, `rhel`, `alpine`, `windows` |
 | `path` / `inline` | | Script file (relative to the plan) or body; exactly one |
 | `roles` | all | `master`, `client` |
 | `hosts` | all | Host addresses or hostnames |

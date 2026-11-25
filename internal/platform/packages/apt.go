@@ -113,6 +113,16 @@ func (s *Selection) Empty() bool {
 	return len(s.Repositories) == 0 && len(s.Packages) == 0
 }
 
+// Installs reports whether the selection installs a package.
+func (s *Selection) Installs(name string) bool {
+	for _, p := range s.Packages {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // NeedsIndex reports whether apt has to read repository indexes: true when
 // a repository is configured or a package is not a local file. Nodes without
 // any reachable repository can install local .deb files only.
@@ -128,18 +138,19 @@ func (s *Selection) NeedsIndex() bool {
 	return false
 }
 
-// Select filters the repositories and packages by the node's role and host.
-func Select(hp *config.HostPackages, node *config.NodeConfig, isMaster bool) *Selection {
+// Select filters the repositories and packages of the apt block by the
+// node's role and host.
+func Select(apt *config.AptPackages, node *config.NodeConfig, isMaster bool) *Selection {
 	sel := &Selection{}
-	if hp == nil {
+	if apt == nil {
 		return sel
 	}
-	for _, r := range hp.Repositories {
+	for _, r := range apt.Repositories {
 		if config.AppliesTo(r.Roles, nil, node, isMaster) {
 			sel.Repositories = append(sel.Repositories, r)
 		}
 	}
-	for _, p := range hp.Install {
+	for _, p := range apt.Install {
 		if config.AppliesTo(p.Roles, p.Hosts, node, isMaster) {
 			sel.Packages = append(sel.Packages, p)
 		}

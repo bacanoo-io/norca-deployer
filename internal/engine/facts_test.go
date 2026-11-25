@@ -96,7 +96,7 @@ func TestOpenNode(t *testing.T) {
 // the plan before anything is changed on any node.
 func TestCheckFacts(t *testing.T) {
 	plan := &config.DeploymentPlan{
-		HostPackages: &config.HostPackages{Install: []config.HostPackage{{Name: "jq", Roles: []string{config.RoleClient}}}},
+		HostPackages: &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{Name: "jq", Roles: []string{config.RoleClient}}}}},
 	}
 	node := func(probe string, isMaster bool) *target {
 		f, err := host.Parse(probe)
@@ -119,8 +119,66 @@ func TestCheckFacts(t *testing.T) {
 	noneClient := node(none, false)
 	noneClient.facts.Override(&config.HostFacts{PackageManager: config.PackageManagerNone})
 	err := r.checkFacts([]*target{node(debianProbe, false), noneClient})
-	if err == nil || !strings.Contains(err.Error(), "node [10.0.0.5]: the node uses the package manager none, but host_packages has packages for its roles only for apt") ||
+	if err == nil || !strings.Contains(err.Error(), "node [10.0.0.5]: the node uses none, but host_packages has packages for its roles only in apt") ||
 		!strings.Contains(err.Error(), "nothing was changed") {
 		t.Fatalf("a client without apt: %v", err)
+	}
+}
+
+// release.source host-package needs the package in the block of every
+// node's package manager, for that node.
+func TestCheckFactsHostPackageRelease(t *testing.T) {
+	plan := &config.DeploymentPlan{
+		Release: config.ReleaseConfig{Source: config.ReleaseHostPackage, Package: "norca"},
+		HostPackages: &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{
+			{Name: "norca", Roles: []string{config.RoleMaster}},
+		}}},
+	}
+	r := NewRunner(plan, nil)
+	facts, err := host.Parse(debianProbe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &target{node: &config.NodeConfig{Host: "10.0.0.1", Platform: "linux"}, isMaster: true, facts: facts}
+	client := &target{node: &config.NodeConfig{Host: "10.0.0.2", Platform: "linux"}, facts: facts}
+	if err := r.checkFacts([]*target{server}); err != nil {
+		t.Fatalf("the server has the package: %v", err)
+	}
+	err = r.checkFacts([]*target{server, client})
+	if err == nil || !strings.Contains(err.Error(), `node [10.0.0.2]: release.source host-package: the block of host_packages of the node's package manager (apt) does not install "norca"`) ||
+		strings.Contains(err.Error(), "10.0.0.1") {
+		t.Fatalf("the client without the package: %v", err)
+	}
+}
+
+// A bash script on a node without bash is an error of the node, unless the
+// packages that run before it install bash.
+func TestCheckFactsBash(t *testing.T) {
+	noBash, err := host.Parse(withProbe("bash\n", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := &config.NodeConfig{Host: "10.0.0.3", Platform: "linux"}
+	check := func(plan *config.DeploymentPlan) error {
+		return NewRunner(plan, nil).checkFacts([]*target{{node: node, facts: noBash}})
+	}
+	pre := config.ScriptConfig{Name: "pre", Phase: config.PhasePreInstall, Inline: "true"}
+	post := config.ScriptConfig{Name: "post", Phase: config.PhasePostPackages, Inline: "true"}
+	withBash := &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{Name: "bash"}}}}
+
+	if err := check(&config.DeploymentPlan{Scripts: []config.ScriptConfig{pre}}); err == nil ||
+		!strings.Contains(err.Error(), `script "pre" runs with bash, which the node does not have`) {
+		t.Fatalf("pre_install with bash: %v", err)
+	}
+	pre.Interpreter = config.InterpreterSh
+	if err := check(&config.DeploymentPlan{Scripts: []config.ScriptConfig{pre, post}, HostPackages: withBash}); err != nil {
+		t.Fatalf("sh, and bash from host_packages: %v", err)
+	}
+	if err := check(&config.DeploymentPlan{Scripts: []config.ScriptConfig{post}}); err == nil {
+		t.Fatal("post_packages with bash and no bash package")
+	}
+	post.Families = []string{config.FamilyRHEL}
+	if err := check(&config.DeploymentPlan{Scripts: []config.ScriptConfig{post}}); err != nil {
+		t.Fatalf("a script of another family: %v", err)
 	}
 }

@@ -1,5 +1,5 @@
-// Package scripts runs user-supplied bash scripts on Linux nodes at fixed
-// phases of the deployment.
+// Package scripts runs user-supplied scripts on Linux nodes at fixed phases
+// of the deployment, with bash (the default) or sh.
 package scripts
 
 import (
@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -82,8 +83,8 @@ func Command(p *Prepared, envFile string) string {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	return fmt.Sprintf("set -a; . %s; set +a; timeout -k 10 %d bash %s",
-		connector.ShellQuote(envFile), timeout, connector.ShellQuote(ScriptPath(p.Config.Name)))
+	return fmt.Sprintf("set -a; . %s; set +a; timeout -k 10 %d %s %s",
+		connector.ShellQuote(envFile), timeout, config.ScriptInterpreter(p.Config), connector.ShellQuote(ScriptPath(p.Config.Name)))
 }
 
 // RenderEnvFile renders KEY='value' lines for the environment file.
@@ -100,15 +101,28 @@ func RenderEnvFile(env map[string]string) string {
 	return sb.String()
 }
 
+// Target is the node the scripts of a phase run on.
+type Target struct {
+	Node     *config.NodeConfig
+	IsMaster bool
+	// Family is the family of the operating system of the node (its
+	// facts); a script with families runs only on the nodes of those.
+	Family string
+}
+
 // Select returns the scripts of a phase that apply to the node, in the order
 // of the configuration.
-func Select(all []config.ScriptConfig, phase string, node *config.NodeConfig, isMaster bool) []*config.ScriptConfig {
+func Select(all []config.ScriptConfig, phase string, t Target) []*config.ScriptConfig {
 	var res []*config.ScriptConfig
 	for i := range all {
 		s := &all[i]
-		if s.Phase == phase && config.AppliesTo(s.Roles, s.Hosts, node, isMaster) {
-			res = append(res, s)
+		if s.Phase != phase || !config.AppliesTo(s.Roles, s.Hosts, t.Node, t.IsMaster) {
+			continue
 		}
+		if len(s.Families) > 0 && !slices.Contains(s.Families, t.Family) {
+			continue
+		}
+		res = append(res, s)
 	}
 	return res
 }
@@ -116,13 +130,14 @@ func Select(all []config.ScriptConfig, phase string, node *config.NodeConfig, is
 // Run uploads and runs the scripts of a phase. A script runs when its digest
 // differs from the marker of its last successful run, or when it is marked
 // always. A failing script stops the deployment of the node.
-func Run(conn connector.Connector, plan *config.DeploymentPlan, phase string, node *config.NodeConfig, isMaster bool, resolve Resolver) error {
-	selected := Select(plan.Scripts, phase, node, isMaster)
+func Run(conn connector.Connector, plan *config.DeploymentPlan, phase string, t Target, resolve Resolver) error {
+	node := t.Node
+	selected := Select(plan.Scripts, phase, t)
 	if len(selected) == 0 {
 		return nil
 	}
 	if strings.ToLower(node.Platform) == "windows" {
-		fmt.Printf("    [WARN] [%s] %d bash script(s) of phase %s skipped on a Windows node\n", node.Host, len(selected), phase)
+		fmt.Printf("    [WARN] [%s] %d script(s) of phase %s skipped on a Windows node\n", node.Host, len(selected), phase)
 		return nil
 	}
 

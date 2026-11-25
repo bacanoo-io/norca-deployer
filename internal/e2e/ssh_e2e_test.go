@@ -107,7 +107,7 @@ func TestScriptsAndPackages(t *testing.T) {
 	}
 	node := &config.NodeConfig{Host: "e2e", Platform: "linux", Arch: "amd64"}
 	for i := 0; i < 2; i++ {
-		if err := scripts.Run(conn, plan, config.PhasePreInstall, node, false, nil); err != nil {
+		if err := scripts.Run(conn, plan, config.PhasePreInstall, scripts.Target{Node: node, Family: "debian"}, nil); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -129,7 +129,7 @@ func TestScriptsAndPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plan.HostPackages = &config.HostPackages{
+	plan.HostPackages = &config.HostPackages{Apt: &config.AptPackages{
 		Repositories: []config.AptRepository{{
 			Name: "backports", URI: "https://deb.debian.org/debian", Suite: "bookworm-backports",
 			Components: []string{"main"}, KeyFile: keyFile,
@@ -140,8 +140,8 @@ func TestScriptsAndPackages(t *testing.T) {
 			{Name: "jq"},
 			{Name: "norca-e2e", File: filepath.Join(dir, "norca-e2e_1.0-1_{arch}.deb"), Version: "1.0-1", Hold: true},
 		},
-	}
-	sel := packages.Select(plan.HostPackages, node, false)
+}}
+	sel := packages.Select(plan.AptPackages(), node, false)
 	if err := packages.Apply(conn, plan, sel, node, nil); err != nil {
 		t.Fatal(err)
 	}

@@ -43,21 +43,22 @@ tuning: {apply_sysctl: true, file_descriptor_limit: 100000}
 paths:
   linux: {config_dir: /etc/norca, tls_dir: /etc/norca/tls}
 host_packages:
-  repositories:
-    - name: docker
-      uri: https://download.docker.com/linux/debian
-      suite: bookworm
-      components: [stable]
-      key: |
-        -----BEGIN PGP PUBLIC KEY BLOCK-----
-        mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
-        -----END PGP PUBLIC KEY BLOCK-----
-      roles: [client]
-      pin_priority: 600
-  install:
-    - {name: docker-ce, version: "5:27.3.1-1~debian.12~bookworm", hold: true, roles: [client]}
-    - {name: jq}
-    - {name: etcd-only, roles: [master]}
+  apt:
+    repositories:
+      - name: docker
+        uri: https://download.docker.com/linux/debian
+        suite: bookworm
+        components: [stable]
+        key: |
+          -----BEGIN PGP PUBLIC KEY BLOCK-----
+          mQINBFit2ioBEADhWpZ8/wvZ6hUTiXOwQHXMAlaFHcPH9hAtr4F1y2+OYdbtMuth
+          -----END PGP PUBLIC KEY BLOCK-----
+        roles: [client]
+        pin_priority: 600
+    install:
+      - {name: docker-ce, version: "5:27.3.1-1~debian.12~bookworm", hold: true, roles: [client]}
+      - {name: jq}
+      - {name: etcd-only, roles: [master]}
 node_scaling:
   enabled: true
 ` + machine + `
@@ -205,7 +206,7 @@ func TestInstallScriptLocalPathAndHostPackage(t *testing.T) {
 	}
 
 	hp := loadPlan(t, strings.Replace(machinePlan(`release: {version: v0.3.0, source: host-package}`, ""),
-		"    - {name: jq}", "    - {name: jq}\n    - {name: norca}", 1))
+		"      - {name: jq}", "      - {name: jq}\n      - {name: norca}", 1))
 	script = generate(t, hp, MachineScriptOptions{})
 	for _, want := range []string{"check_package 'norca' ''", "found=$(command -v norca || true)",
 		"package norca did not install an executable norca binary"} {
@@ -232,15 +233,15 @@ func TestInstallScriptPackagesOutOfReach(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(debs, "tool_amd64.deb"), []byte("deb"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	yaml := strings.Replace(machinePlan(officialRelease, ""), "    - {name: jq}",
-		"    - {name: jq}\n    - {name: tool, file: '"+filepath.ToSlash(debs)+"/tool_{arch}.deb', version: 1.0-1}", 1)
+	yaml := strings.Replace(machinePlan(officialRelease, ""), "      - {name: jq}",
+		"      - {name: jq}\n      - {name: tool, file: '"+filepath.ToSlash(debs)+"/tool_{arch}.deb', version: 1.0-1}", 1)
 	script := generate(t, loadPlan(t, yaml), MachineScriptOptions{})
 	if !strings.Contains(script, "require_package 'tool' '1.0-1' 'tool_amd64.deb'") || strings.Contains(script, debs) {
 		t.Fatal("a local .deb is not checked")
 	}
 
-	auth := strings.Replace(machinePlan(officialRelease, "  machine: {install: boot}"), "      pin_priority: 600",
-		"      pin_priority: 600\n      auth: {username: u, password: secret-pass}", 1)
+	auth := strings.Replace(machinePlan(officialRelease, "  machine: {install: boot}"), "        pin_priority: 600",
+		"        pin_priority: 600\n        auth: {username: u, password: secret-pass}", 1)
 	plan := loadPlan(t, auth)
 	if _, err := GenerateInstallScript(context.Background(), plan, artifacts.NewResolver(plan, t.TempDir()), MachineScriptOptions{}); err == nil ||
 		!strings.Contains(err.Error(), "install: image") {
@@ -479,9 +480,9 @@ func TestWriteInstallScripts(t *testing.T) {
 		"boot":     machinePlan(officialRelease, "  machine: {install: boot}"),
 		"local":    machinePlan(`release: {version: v0.3.0, source: local-path, local_binary_path: ./norca}`, ""),
 		"host-package": strings.Replace(machinePlan(`release: {version: v0.3.0, source: host-package}`, ""),
-			"    - {name: jq}", "    - {name: jq}\n    - {name: norca}", 1),
-		"auth": strings.Replace(machinePlan(officialRelease, ""), "      pin_priority: 600",
-			"      pin_priority: 600\n      auth: {username: u, password: p}", 1),
+			"      - {name: jq}", "      - {name: jq}\n      - {name: norca}", 1),
+		"auth": strings.Replace(machinePlan(officialRelease, ""), "        pin_priority: 600",
+			"        pin_priority: 600\n        auth: {username: u, password: p}", 1),
 		"consul-dns": consulDNSMachinePlan(),
 	}
 	for name, yaml := range plans {

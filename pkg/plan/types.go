@@ -78,15 +78,36 @@ const (
 	PhasePostInstall  = "post_install"  // after the Norca service is (re)started
 )
 
-// HostPackages installs Debian packages from APT repositories on Debian-based
-// Linux nodes before the Norca agent is configured.
+// HostPackages installs packages on the Linux nodes before the Norca agent is
+// configured: one block per package manager. A node takes only the block of
+// its package manager (detected, or host_facts.package_manager).
 type HostPackages struct {
+	// UpdateCache refreshes the package index before installing (default
+	// true).
+	UpdateCache *bool `yaml:"update_cache,omitempty" json:"update_cache,omitempty"`
+	// LockTimeout is the wait for the lock of the package manager in
+	// seconds (default 300).
+	LockTimeout int `yaml:"lock_timeout,omitempty" json:"lock_timeout,omitempty"`
+
+	// Apt are the packages of the nodes whose package manager is apt
+	// (Debian, Ubuntu).
+	Apt *AptPackages `yaml:"apt,omitempty" json:"apt,omitempty"`
+
+	// The keys below are refused by Validate, with the reason: the lists
+	// of earlier plans moved into apt, and the blocks of dnf and apk are
+	// not supported yet. They are fields so that YAML and HCL do not drop
+	// them silently.
+	MovedRepositories []any `yaml:"repositories,omitempty" json:"repositories,omitempty"`
+	MovedInstall      []any `yaml:"install,omitempty" json:"install,omitempty"`
+	Dnf               any   `yaml:"dnf,omitempty" json:"dnf,omitempty"`
+	Apk               any   `yaml:"apk,omitempty" json:"apk,omitempty"`
+}
+
+// AptPackages are the APT repositories and the packages of the nodes whose
+// package manager is apt.
+type AptPackages struct {
 	Repositories []AptRepository `yaml:"repositories,omitempty" json:"repositories,omitempty"`
 	Install      []HostPackage   `yaml:"install,omitempty" json:"install,omitempty"`
-	// UpdateCache runs apt-get update before installing (default true).
-	UpdateCache *bool `yaml:"update_cache,omitempty" json:"update_cache,omitempty"`
-	// LockTimeout is the dpkg lock wait in seconds (default 300).
-	LockTimeout int `yaml:"lock_timeout,omitempty" json:"lock_timeout,omitempty"`
 }
 
 // AptRepository is written as a deb822 source with its own keyring
@@ -121,11 +142,11 @@ type AptAuth struct {
 	Password string `yaml:"password" json:"password"` // may be an !enc:v1 secret
 }
 
-// HostPackage is installed from the APT repositories, or from a local .deb
-// file that the deployer copies to the node (File).
+// HostPackage is installed from the repositories of its block, or from a
+// local package file that the deployer copies to the node (File).
 type HostPackage struct {
 	Name    string   `yaml:"name" json:"name"`
-	File    string   `yaml:"file,omitempty" json:"file,omitempty"`       // local .deb on the deployer machine ({arch} is replaced)
+	File    string   `yaml:"file,omitempty" json:"file,omitempty"`       // local .deb on the deployer machine ({arch} is replaced by the name of the manager)
 	SHA256  string   `yaml:"sha256,omitempty" json:"sha256,omitempty"`   // expected digest of File
 	Version string   `yaml:"version,omitempty" json:"version,omitempty"` // exact Debian version; empty = candidate version
 	Hold    bool     `yaml:"hold,omitempty" json:"hold,omitempty"`       // apt-mark hold after install
@@ -133,17 +154,22 @@ type HostPackage struct {
 	Hosts   []string `yaml:"hosts,omitempty" json:"hosts,omitempty"`     // host or hostname; empty = all nodes of the roles
 }
 
-// ScriptConfig is a bash script run on Linux nodes at a given phase.
+// ScriptConfig is a script run on the Linux nodes at a given phase.
 type ScriptConfig struct {
-	Name    string            `yaml:"name" json:"name"`
-	Phase   string            `yaml:"phase" json:"phase"`                         // pre_install, post_packages, post_install
-	Path    string            `yaml:"path,omitempty" json:"path,omitempty"`       // local file, relative to the configuration file
-	Inline  string            `yaml:"inline,omitempty" json:"inline,omitempty"`   // script body
-	Roles   []string          `yaml:"roles,omitempty" json:"roles,omitempty"`     // "master", "client"; empty = all nodes
-	Hosts   []string          `yaml:"hosts,omitempty" json:"hosts,omitempty"`     // host or hostname; empty = all nodes of the roles
-	Env     map[string]string `yaml:"env,omitempty" json:"env,omitempty"`         // values may be !enc:v1 secrets
-	Always  bool              `yaml:"always,omitempty" json:"always,omitempty"`   // run on every apply, not only when the script or env changed
-	Timeout int               `yaml:"timeout,omitempty" json:"timeout,omitempty"` // seconds (default 600)
+	Name  string `yaml:"name" json:"name"`
+	Phase string `yaml:"phase" json:"phase"` // pre_install, post_packages, post_install
+	// Interpreter runs the script: bash (the default) or sh.
+	Interpreter string `yaml:"interpreter,omitempty" json:"interpreter,omitempty"`
+	// Families limits the script to nodes of these families (debian, rhel,
+	// alpine, windows); empty: every node.
+	Families []string          `yaml:"families,omitempty" json:"families,omitempty"`
+	Path     string            `yaml:"path,omitempty" json:"path,omitempty"`       // local file, relative to the configuration file
+	Inline   string            `yaml:"inline,omitempty" json:"inline,omitempty"`   // script body
+	Roles    []string          `yaml:"roles,omitempty" json:"roles,omitempty"`     // "master", "client"; empty = all nodes
+	Hosts    []string          `yaml:"hosts,omitempty" json:"hosts,omitempty"`     // host or hostname; empty = all nodes of the roles
+	Env      map[string]string `yaml:"env,omitempty" json:"env,omitempty"`         // values may be !enc:v1 secrets
+	Always   bool              `yaml:"always,omitempty" json:"always,omitempty"`   // run on every apply, not only when the script or env changed
+	Timeout  int               `yaml:"timeout,omitempty" json:"timeout,omitempty"` // seconds (default 600)
 }
 
 type MetadataConfig struct {

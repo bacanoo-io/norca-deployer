@@ -158,46 +158,47 @@ bus:                                # The same bus block on every server (the sy
 host_packages:
   update_cache: true                # apt-get update before installing (skipped on offline nodes).
   lock_timeout: 300                 # Seconds to wait for the dpkg lock.
-  repositories:
-    - name: docker                  # -> /etc/apt/sources.list.d/norca-docker.sources
-      uri: https://download.docker.com/linux/debian
-      suite: bookworm               # Distribution codename.
-      components: [stable]
-      architectures: [amd64]
-      key_file: keys/docker.asc     # Signing key, uploaded as /etc/apt/keyrings/norca-docker.asc (Signed-By).
-      pin_priority: 600             # Prefer this repository for its packages.
-      roles: [client]               # Configure the repository on the clients only.
-    # A private repository with credentials and an exact pin:
-    # - name: internal
-    #   uri: https://apt.example.com/debian
-    #   suite: bookworm
-    #   components: [main]
-    #   key_file: keys/internal.gpg
-    #   pin_priority: 990
-    #   pin_packages: ["mycorp-*"]
-    #   pin_release: o=MyCorp       # Without it the pin applies to every repository on the host.
-    #   auth:                       # Written to /etc/apt/auth.conf.d/norca-internal.conf (0600).
-    #     username: deploy
-    #     password: "!enc:v1:aes-gcm:..."
-  install:
-    # With release.source host-package: Norca itself as a Debian package.
-    # - name: norca
-    #   version: "0.2.0-1"          # Pin the version; upgrades are plan changes.
-    #   hold: true
-    # - name: norca                 # ...or a local .deb copied by the deployer:
-    #   file: debs/norca_0.2.0-1_{arch}.deb
-    - name: docker-ce               # Docker engine for the docker driver.
-      roles: [client]
-    - name: docker-ce-cli
-      roles: [client]
-    - name: containerd.io
-      roles: [client]
-    - name: chrony                  # Time sync on every node (Raft and TLS need correct clocks).
-    - name: ufw                     # Firewall for tuning.firewall.default_deny.
-    # - name: mycorp-agent
-    #   version: "2.4.1-1"          # Exact Debian version; empty = candidate version.
-    #   hold: true
-    #   hosts: [norca-worker-01]    # Only on these nodes (host or hostname).
+  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); dnf and apk follow.
+    repositories:
+      - name: docker                  # -> /etc/apt/sources.list.d/norca-docker.sources
+        uri: https://download.docker.com/linux/debian
+        suite: bookworm               # Distribution codename.
+        components: [stable]
+        architectures: [amd64]
+        key_file: keys/docker.asc     # Signing key, uploaded as /etc/apt/keyrings/norca-docker.asc (Signed-By).
+        pin_priority: 600             # Prefer this repository for its packages.
+        roles: [client]               # Configure the repository on the clients only.
+      # A private repository with credentials and an exact pin:
+      # - name: internal
+      #   uri: https://apt.example.com/debian
+      #   suite: bookworm
+      #   components: [main]
+      #   key_file: keys/internal.gpg
+      #   pin_priority: 990
+      #   pin_packages: ["mycorp-*"]
+      #   pin_release: o=MyCorp       # Without it the pin applies to every repository on the host.
+      #   auth:                       # Written to /etc/apt/auth.conf.d/norca-internal.conf (0600).
+      #     username: deploy
+      #     password: "!enc:v1:aes-gcm:..."
+    install:
+      # With release.source host-package: Norca itself as a Debian package.
+      # - name: norca
+      #   version: "0.2.0-1"          # Pin the version; upgrades are plan changes.
+      #   hold: true
+      # - name: norca                 # ...or a local .deb copied by the deployer:
+      #   file: debs/norca_0.2.0-1_{arch}.deb
+      - name: docker-ce               # Docker engine for the docker driver.
+        roles: [client]
+      - name: docker-ce-cli
+        roles: [client]
+      - name: containerd.io
+        roles: [client]
+      - name: chrony                  # Time sync on every node (Raft and TLS need correct clocks).
+      - name: ufw                     # Firewall for tuning.firewall.default_deny.
+      # - name: mycorp-agent
+      #   version: "2.4.1-1"          # Exact Debian version; empty = candidate version.
+      #   hold: true
+      #   hosts: [norca-worker-01]    # Only on these nodes (host or hostname).
 
 scripts:
   - name: prepare-data-disk

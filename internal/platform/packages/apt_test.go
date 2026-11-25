@@ -15,7 +15,7 @@ import (
 const testKey = "-----BEGIN PGP PUBLIC KEY BLOCK-----\nxyz\n-----END PGP PUBLIC KEY BLOCK-----\n"
 
 func testHostPackages() *config.HostPackages {
-	return &config.HostPackages{
+	return &config.HostPackages{Apt: &config.AptPackages{
 		Repositories: []config.AptRepository{{
 			Name:          "internal",
 			URI:           "https://apt.example.com/debian",
@@ -28,13 +28,13 @@ func testHostPackages() *config.HostPackages {
 			{Name: "norca-redis", Version: "8.0.2-1norca1", Hold: true, Roles: []string{config.RoleClient}},
 			{Name: "jq"},
 		},
-	}
+	}}
 }
 
 var testNode = &config.NodeConfig{Host: "10.0.0.1", Arch: "amd64", Platform: "linux"}
 
 func TestRenderSource(t *testing.T) {
-	repo := &testHostPackages().Repositories[0]
+	repo := &testHostPackages().Apt.Repositories[0]
 	want := "# Managed by norca-deployer. Do not edit.\n" +
 		"Types: deb\n" +
 		"URIs: https://apt.example.com/debian\n" +
@@ -74,20 +74,20 @@ func TestSelectByRole(t *testing.T) {
 	hp := testHostPackages()
 	node := &config.NodeConfig{Host: "10.0.0.1"}
 
-	master := Select(hp, node, true)
+	master := Select(hp.Apt, node, true)
 	if len(master.Packages) != 1 || master.Packages[0].Name != "jq" {
 		t.Fatalf("master packages = %+v, want only jq", master.Packages)
 	}
-	client := Select(hp, node, false)
+	client := Select(hp.Apt, node, false)
 	if len(client.Packages) != 2 {
 		t.Fatalf("client packages = %+v, want 2", client.Packages)
 	}
 
-	hp.Install[1].Hosts = []string{"worker-7"}
-	if sel := Select(hp, &config.NodeConfig{Host: "10.0.0.2", Hostname: "worker-7"}, false); len(sel.Packages) != 2 {
+	hp.Apt.Install[1].Hosts = []string{"worker-7"}
+	if sel := Select(hp.Apt, &config.NodeConfig{Host: "10.0.0.2", Hostname: "worker-7"}, false); len(sel.Packages) != 2 {
 		t.Fatalf("hostname filter: got %+v", sel.Packages)
 	}
-	if sel := Select(hp, node, false); len(sel.Packages) != 1 {
+	if sel := Select(hp.Apt, node, false); len(sel.Packages) != 1 {
 		t.Fatalf("host filter must exclude other nodes: got %+v", sel.Packages)
 	}
 }
@@ -110,14 +110,14 @@ func TestInstallCommand(t *testing.T) {
 
 func TestApply(t *testing.T) {
 	hp := testHostPackages()
-	hp.Repositories[0].PinPriority = 900
-	hp.Repositories[0].Auth = &config.AptAuth{Username: "u", Password: "!enc:secret"}
+	hp.Apt.Repositories[0].PinPriority = 900
+	hp.Apt.Repositories[0].Auth = &config.AptAuth{Username: "u", Password: "!enc:secret"}
 	plan := &config.DeploymentPlan{HostPackages: hp}
 	conn := connector.NewFakeConnector()
 	conn.Responses["dpkg-query"] = "norca-redis 8.0.2-1norca1\njq 1.6-2.1\n"
 	resolve := func(v string) (string, error) { return strings.TrimPrefix(v, "!enc:"), nil }
 
-	sel := Select(hp, testNode, false)
+	sel := Select(hp.Apt, testNode, false)
 	if err := Apply(conn, plan, sel, testNode, resolve); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -146,11 +146,11 @@ func TestApply(t *testing.T) {
 func TestBinaryKey(t *testing.T) {
 	hp := testHostPackages()
 	binKey := []byte{0x99, 0x01, 0x0d, 0x04} // old-format public key packet
-	hp.Repositories[0].Key = string(binKey)
-	hp.Install = nil
+	hp.Apt.Repositories[0].Key = string(binKey)
+	hp.Apt.Install = nil
 	conn := connector.NewFakeConnector()
 
-	sel := Select(hp, testNode, false)
+	sel := Select(hp.Apt, testNode, false)
 	if err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, sel, testNode, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -173,15 +173,15 @@ func TestLocalDebWithoutRepository(t *testing.T) {
 	}
 	sum, _ := artifacts.FileSHA256(deb)
 
-	hp := &config.HostPackages{Install: []config.HostPackage{{
+	hp := &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{
 		Name: "norca-redis", File: filepath.Join(dir, "norca-redis_8.0.2-1norca1_{arch}.deb"), Version: "8.0.2-1norca1",
-	}}}
+	}}}}
 	plan := &config.DeploymentPlan{HostPackages: hp}
 	conn := connector.NewFakeConnector()
 	conn.Responses["dpkg-deb -f"] = "Package: norca-redis\nVersion: 8.0.2-1norca1\n"
 	conn.Responses["dpkg-query"] = "norca-redis 8.0.2-1norca1\n"
 
-	sel := Select(hp, testNode, false)
+	sel := Select(hp.Apt, testNode, false)
 	if err := Apply(conn, plan, sel, testNode, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -213,11 +213,11 @@ func TestLocalDebWrongPackage(t *testing.T) {
 	dir := t.TempDir()
 	deb := filepath.Join(dir, "x.deb")
 	os.WriteFile(deb, []byte("x"), 0644)
-	hp := &config.HostPackages{Install: []config.HostPackage{{Name: "norca-redis", File: deb}}}
+	hp := &config.HostPackages{Apt: &config.AptPackages{Install: []config.HostPackage{{Name: "norca-redis", File: deb}}}}
 	conn := connector.NewFakeConnector()
 	conn.Responses["dpkg-deb -f"] = "Package: other\nVersion: 1\n"
 
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp, testNode, false), testNode, nil)
+	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
 	if err == nil || !strings.Contains(err.Error(), `contains package "other"`) {
 		t.Fatalf("expected a package name error, got %v", err)
 	}
@@ -231,7 +231,7 @@ func TestApplyVersionMismatch(t *testing.T) {
 	conn := connector.NewFakeConnector()
 	conn.Responses["dpkg-query"] = "norca-redis 8.0.1-1norca1\njq 1.6-2.1\n"
 
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp, testNode, false), testNode, nil)
+	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
 	if err == nil || !strings.Contains(err.Error(), "8.0.1-1norca1 installed") {
 		t.Fatalf("expected version mismatch error, got %v", err)
 	}
@@ -242,7 +242,7 @@ func TestApplyNotDebian(t *testing.T) {
 	conn := connector.NewFakeConnector()
 	conn.Failures["command -v apt-get"] = errors.New("exit 1")
 
-	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp, testNode, false), testNode, nil)
+	err := Apply(conn, &config.DeploymentPlan{HostPackages: hp}, Select(hp.Apt, testNode, false), testNode, nil)
 	if err == nil || !strings.Contains(err.Error(), "Debian-based") {
 		t.Fatalf("expected a Debian check error, got %v", err)
 	}

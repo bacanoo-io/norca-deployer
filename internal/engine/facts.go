@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -9,6 +10,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
 
@@ -90,8 +92,16 @@ func (r *Runner) checkFacts(ts []*target) error {
 		if t.facts == nil {
 			continue
 		}
-		if err := r.checkNodeFacts(t); err != nil {
-			problems = append(problems, fmt.Sprintf("node [%s]: %v", t.node.Host, err))
+		err := r.checkNodeFacts(t)
+		if err == nil {
+			continue
+		}
+		errs := []error{err}
+		if joined, ok := err.(interface{ Unwrap() []error }); ok {
+			errs = joined.Unwrap()
+		}
+		for _, e := range errs {
+			problems = append(problems, fmt.Sprintf("node [%s]: %v", t.node.Host, e))
 		}
 	}
 	if len(problems) > 0 {
@@ -100,21 +110,42 @@ func (r *Runner) checkFacts(ts []*target) error {
 	return nil
 }
 
-// checkNodeFacts checks the plan against the facts of one node.
+// checkNodeFacts checks the plan against the facts of one node: the block
+// of host_packages of its package manager, the package of release.source
+// host-package, and the interpreters of its scripts.
 func (r *Runner) checkNodeFacts(t *target) error {
 	f := t.facts
 	if f.Platform == "windows" {
 		return nil
 	}
+	var errs []error
+	// The node takes only the block of its package manager. A block of
+	// another manager that selects packages for it, while its own manager
+	// has no block, is a block the plan forgot.
+	own := packages.Select(r.plan.AptPackages(), t.node, t.isMaster)
 	if f.PackageManager != config.PackageManagerApt {
-		if sel := packages.Select(r.plan.HostPackages, t.node, t.isMaster); !sel.Empty() {
-			return fmt.Errorf("the node uses the package manager %s, but host_packages has packages for its roles only for apt",
-				f.PackageManager)
-		}
-		if r.plan.Release.Source == config.ReleaseHostPackage {
-			return fmt.Errorf("release.source host-package: the node uses the package manager %s, but host_packages installs %q only with apt",
-				f.PackageManager, r.plan.Release.Package)
+		own = &packages.Selection{}
+		if apt := packages.Select(r.plan.AptPackages(), t.node, t.isMaster); !apt.Empty() {
+			errs = append(errs, fmt.Errorf("the node uses %s, but host_packages has packages for its roles only in apt",
+				f.PackageManager))
 		}
 	}
-	return nil
+	if r.plan.Release.Source == config.ReleaseHostPackage && !own.Installs(r.plan.Release.Package) {
+		errs = append(errs, fmt.Errorf("release.source host-package: the block of host_packages of the node's package manager (%s) does not install %q on it",
+			f.PackageManager, r.plan.Release.Package))
+	}
+	if !f.HasBash {
+		for _, phase := range []string{config.PhasePreInstall, config.PhasePostPackages, config.PhasePostInstall} {
+			for _, s := range scripts.Select(r.plan.Scripts, phase, t.scriptTarget()) {
+				// bash installed by host_packages is there for the
+				// scripts after the packages.
+				installed := phase != config.PhasePreInstall && own.Installs("bash")
+				if config.ScriptInterpreter(s) == config.InterpreterBash && !installed {
+					errs = append(errs, fmt.Errorf("script %q runs with bash, which the node does not have: install bash with host_packages (for a script after pre_install) or set interpreter: sh",
+						s.Name))
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
 }

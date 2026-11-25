@@ -66,21 +66,22 @@ security:
         rules_file: policies/events-reader.hcl   # (written for eu-central: use eu here).
 
 host_packages:
-  repositories:
-    - name: docker
-      uri: https://download.docker.com/linux/debian
-      suite: bookworm
-      components: [stable]
-      architectures: [amd64]
-      key_file: keys/docker.asc     # https://download.docker.com/linux/debian/gpg
-      pin_priority: 600
-      roles: [client]
-  install:
-    - {name: docker-ce, roles: [client]}
-    - {name: docker-ce-cli, roles: [client]}
-    - {name: containerd.io, roles: [client]}
-    - name: chrony                  # Correct clocks for Raft, TLS and JetStream.
-    - name: ufw
+  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); dnf and apk follow.
+    repositories:
+      - name: docker
+        uri: https://download.docker.com/linux/debian
+        suite: bookworm
+        components: [stable]
+        architectures: [amd64]
+        key_file: keys/docker.asc     # https://download.docker.com/linux/debian/gpg
+        pin_priority: 600
+        roles: [client]
+    install:
+      - {name: docker-ce, roles: [client]}
+      - {name: docker-ce-cli, roles: [client]}
+      - {name: containerd.io, roles: [client]}
+      - name: chrony                  # Correct clocks for Raft, TLS and JetStream.
+      - name: ufw
 
 # Every client: Docker and exec, the VPN interface for allocation addresses,
 # resources kept for the OS. The datacenter is a node attribute of its own
