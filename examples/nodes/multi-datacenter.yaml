@@ -110,7 +110,7 @@ secrets:
 # The NATS cluster is a Rigger stack with one module, written in the plan.
 rigger:
   sync_registries: [global]         # The servers sync the global registry before they fetch the module.
-  stack_hcl: |
+  stack: |
     rigger {
       name   = "base"                  # Recorded in every release as its owner.
       region = "eu"                    # The region of this plan (metadata.region).
@@ -162,7 +162,7 @@ inventory:
         # to another one. The grace keeps these healthy nodes from being
         # marked down, which would replace their allocations (NATS servers).
         # A failed node is noticed this much later.
-        extra_hcl: |
+        extra: |
           heartbeat_grace = "60s"
     - host: 198.51.100.21
       hostname: eu-b-server

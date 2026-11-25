@@ -14,26 +14,30 @@ func TestValidateRigger(t *testing.T) {
 		rigger *RiggerConfig
 		want   string
 	}{
-		{name: "a directory", rigger: &RiggerConfig{Stack: "stacks/platform", Vars: map[string]string{"count": "3"}}},
-		{name: "a stack in the plan", rigger: &RiggerConfig{StackHCL: "rigger {}"}},
-		{name: "no stack", rigger: &RiggerConfig{}, want: "stack or stack_hcl is required"},
+		{name: "a directory", rigger: &RiggerConfig{StackDir: "stacks/platform", Vars: map[string]string{"count": "3"}}},
+		{name: "a stack in the plan", rigger: &RiggerConfig{Stack: "rigger {}"}},
+		{name: "a stack of one attribute", rigger: &RiggerConfig{Stack: `x = 1`}},
+		{name: "no stack", rigger: &RiggerConfig{}, want: "stack or stack_dir is required"},
 		{name: "bindings without a stack of the plan", rigger: &RiggerConfig{GitOps: &GitOpsConfig{}, RunOn: RiggerOnServer, Mode: RiggerEmbedded}},
-		{name: "bindings beside a stack of the plan", rigger: &RiggerConfig{Stack: "a", GitOps: &GitOpsConfig{}}},
-		{name: "bindings and a setting of a stack", rigger: &RiggerConfig{GitOps: &GitOpsConfig{}, Vars: map[string]string{"count": "3"}}, want: "stack or stack_hcl is required"},
-		{name: "bindings and where a stack runs", rigger: &RiggerConfig{GitOps: &GitOpsConfig{}, RunOn: RiggerOnLocal}, want: "stack or stack_hcl is required"},
-		{name: "both forms", rigger: &RiggerConfig{Stack: "a", StackHCL: "b"}, want: "exclude each other"},
-		{name: "values with stack_hcl", rigger: &RiggerConfig{StackHCL: "b", Values: []string{"v.hcl"}}, want: "with stack_hcl give vars"},
-		{name: "name of a variable", rigger: &RiggerConfig{Stack: "a", Vars: map[string]string{"Count": "3"}}, want: `"Count" is not the name of a variable`},
-		{name: "the program of this machine", rigger: &RiggerConfig{Stack: "a", RunOn: RiggerOnLocal, Mode: RiggerStandalone, Binary: "/opt/rigger"}},
-		{name: "the defaults written out", rigger: &RiggerConfig{Stack: "a", RunOn: RiggerOnServer, Mode: RiggerEmbedded}},
-		{name: "unknown run_on", rigger: &RiggerConfig{Stack: "a", RunOn: "host"}, want: `run_on "host"`},
-		{name: "unknown mode", rigger: &RiggerConfig{Stack: "a", Mode: "remote"}, want: `mode "remote"`},
-		{name: "binary on the server", rigger: &RiggerConfig{Stack: "a", Binary: "/opt/rigger"}, want: "binary is the program of run_on: local"},
-		{name: "registries the servers sync", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"global", "team-modules"}}},
-		{name: "a registry without a name", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{""}}, want: `sync_registries: "" is not the name of a registry`},
-		{name: "a registry that reads as a flag", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"-region"}}, want: `sync_registries: "-region" is not the name of a registry`},
-		{name: "a registry named twice", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"global", "global"}}, want: `sync_registries: "global" is named twice`},
-		{name: "registries where the program applies", rigger: &RiggerConfig{Stack: "a", Mode: RiggerStandalone, SyncRegistries: []string{"global"}}, want: "sync_registries is of mode: embedded"},
+		{name: "bindings beside a stack of the plan", rigger: &RiggerConfig{StackDir: "a", GitOps: &GitOpsConfig{}}},
+		{name: "bindings and a setting of a stack", rigger: &RiggerConfig{GitOps: &GitOpsConfig{}, Vars: map[string]string{"count": "3"}}, want: "stack or stack_dir is required"},
+		{name: "bindings and where a stack runs", rigger: &RiggerConfig{GitOps: &GitOpsConfig{}, RunOn: RiggerOnLocal}, want: "stack or stack_dir is required"},
+		{name: "both forms", rigger: &RiggerConfig{StackDir: "a", Stack: "rigger {}"}, want: "stack and stack_dir exclude each other"},
+		{name: "values with stack", rigger: &RiggerConfig{Stack: "rigger {}", Values: []string{"v.hcl"}}, want: "values files belong to stack_dir; with stack give vars"},
+		{name: "values with stack_dir", rigger: &RiggerConfig{StackDir: "a", Values: []string{"v.hcl"}}},
+		{name: "a directory as stack", rigger: &RiggerConfig{Stack: "stacks/platform"}, want: `"stacks/platform" looks like a directory: a directory is stack_dir`},
+		{name: "the plan directory as stack", rigger: &RiggerConfig{Stack: " ./stack "}, want: "a directory is stack_dir"},
+		{name: "name of a variable", rigger: &RiggerConfig{StackDir: "a", Vars: map[string]string{"Count": "3"}}, want: `"Count" is not the name of a variable`},
+		{name: "the program of this machine", rigger: &RiggerConfig{StackDir: "a", RunOn: RiggerOnLocal, Mode: RiggerStandalone, Binary: "/opt/rigger"}},
+		{name: "the defaults written out", rigger: &RiggerConfig{StackDir: "a", RunOn: RiggerOnServer, Mode: RiggerEmbedded}},
+		{name: "unknown run_on", rigger: &RiggerConfig{StackDir: "a", RunOn: "host"}, want: `run_on "host"`},
+		{name: "unknown mode", rigger: &RiggerConfig{StackDir: "a", Mode: "remote"}, want: `mode "remote"`},
+		{name: "binary on the server", rigger: &RiggerConfig{StackDir: "a", Binary: "/opt/rigger"}, want: "binary is the program of run_on: local"},
+		{name: "registries the servers sync", rigger: &RiggerConfig{StackDir: "a", SyncRegistries: []string{"global", "team-modules"}}},
+		{name: "a registry without a name", rigger: &RiggerConfig{StackDir: "a", SyncRegistries: []string{""}}, want: `sync_registries: "" is not the name of a registry`},
+		{name: "a registry that reads as a flag", rigger: &RiggerConfig{StackDir: "a", SyncRegistries: []string{"-region"}}, want: `sync_registries: "-region" is not the name of a registry`},
+		{name: "a registry named twice", rigger: &RiggerConfig{StackDir: "a", SyncRegistries: []string{"global", "global"}}, want: `sync_registries: "global" is named twice`},
+		{name: "registries where the program applies", rigger: &RiggerConfig{StackDir: "a", Mode: RiggerStandalone, SyncRegistries: []string{"global"}}, want: "sync_registries is of mode: embedded"},
 	}
 
 	for _, tt := range tests {
@@ -53,9 +57,9 @@ func TestRiggerConfigDefaults(t *testing.T) {
 		wantOnServer bool
 		wantEmbedded bool
 	}{
-		{name: "nothing said", section: "  stack: stacks/platform\n", wantOnServer: true, wantEmbedded: true},
-		{name: "the program of this machine", section: "  stack: stacks/platform\n  run_on: local\n", wantEmbedded: true},
-		{name: "the program applies", section: "  stack: stacks/platform\n  mode: standalone\n", wantOnServer: true},
+		{name: "nothing said", section: "  stack_dir: stacks/platform\n", wantOnServer: true, wantEmbedded: true},
+		{name: "the program of this machine", section: "  stack_dir: stacks/platform\n  run_on: local\n", wantEmbedded: true},
+		{name: "the program applies", section: "  stack_dir: stacks/platform\n  mode: standalone\n", wantOnServer: true},
 	}
 
 	for _, tt := range tests {
@@ -85,8 +89,8 @@ func TestRiggerConfigDefaults(t *testing.T) {
 func TestDecodeHCLRigger(t *testing.T) {
 	src := `
 rigger {
-  stack  = "stacks/platform"
-  values = ["stacks/platform/values/prod.vars.hcl"]
+  stack_dir = "stacks/platform"
+  values    = ["stacks/platform/values/prod.vars.hcl"]
   vars = {
     count = "3"
   }
@@ -99,11 +103,11 @@ rigger {
 `
 
 	var p DeploymentPlan
-	if err := decodeHCL([]byte(src), &p); err != nil {
+	if err := decodeHCL([]byte(src), "", &p); err != nil {
 		t.Fatal(err)
 	}
 
-	if p.Rigger == nil || p.Rigger.Stack != "stacks/platform" || len(p.Rigger.Values) != 1 || p.Rigger.Vars["count"] != "3" || !p.Rigger.Prune {
+	if p.Rigger == nil || p.Rigger.StackDir != "stacks/platform" || len(p.Rigger.Values) != 1 || p.Rigger.Vars["count"] != "3" || !p.Rigger.Prune {
 		t.Fatalf("rigger = %+v", p.Rigger)
 	}
 

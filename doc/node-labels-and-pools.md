@@ -132,13 +132,24 @@ Without it the agents keep their default range 20000-32000 and the configuration
 
 ## Settings the deployer does not model
 
-`client_settings.extra_hcl` and `server_settings.extra_hcl` are appended inside the client or server block of `norca.hcl`, for keys such as `max_kill_timeout`, `cpu_total_compute` or `num_schedulers`:
+`client_settings.extra` and `server_settings.extra` are appended inside the client or server block of `norca.hcl`, for keys such as `max_kill_timeout`, `cpu_total_compute` or `num_schedulers`:
 
 ```yaml
 client_settings:
-  extra_hcl: |
+  extra: |
     max_kill_timeout  = "60s"
     cpu_total_compute = 8000
+```
+
+In an HCL plan the settings are the body of an `extra` block ([content keys](configuration.md#content-and-reference-keys)):
+
+```hcl
+client_settings {
+  extra {
+    max_kill_timeout  = "60s"
+    cpu_total_compute = 8000
+  }
+}
 ```
 
 The deployer does not check these lines; a mistake shows up when the agent starts (and stops the rollout).

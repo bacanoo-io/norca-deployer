@@ -16,7 +16,7 @@ func TestDecodeHCLErrors(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			err := decodeHCL([]byte(tc.src), &DeploymentPlan{})
+			err := decodeHCL([]byte(tc.src), "", &DeploymentPlan{})
 			if err == nil {
 				t.Fatal("expected an error")
 			}
@@ -44,7 +44,7 @@ gitops {
   }
 }`
 	var p DeploymentPlan
-	if err := decodeHCL([]byte(src), &p); err != nil {
+	if err := decodeHCL([]byte(src), "", &p); err != nil {
 		t.Fatal(err)
 	}
 	bindings := p.AllGitOpsBindings()

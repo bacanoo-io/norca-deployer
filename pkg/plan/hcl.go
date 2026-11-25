@@ -1,6 +1,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
@@ -14,11 +15,32 @@ import (
 // returns every block as a list of objects, so the result is first shaped
 // after the plan types and then decoded through the YAML decoder, which keeps
 // one decoding path (and its defaults and checks) for both formats.
-func decodeHCL(data []byte, plan *DeploymentPlan) error {
-	var raw map[string]any
-	if err := hcl.Decode(&raw, string(data)); err != nil {
+//
+// The text of a content key (rigger.stack, extra, rules) may be a block,
+// whose body is the text: such blocks are cut out first (cutContentBlocks)
+// and their texts put back after the decoder. filename names the plan in the
+// errors about them.
+func decodeHCL(data []byte, filename string, plan *DeploymentPlan) error {
+	if filename == "" {
+		filename = "plan"
+	}
+
+	cut, err := cutContentBlocks(data, filename)
+	if err != nil {
 		return err
 	}
+
+	var raw map[string]any
+	if err := hcl.Decode(&raw, string(cut.src)); err != nil {
+		if cut.notHCL2 != nil {
+			return fmt.Errorf("%w; as HCL2 syntax, which the blocks of text (stack, extra, rules) need: %w", err, cut.notHCL2)
+		}
+
+		return err
+	}
+
+	restoreTexts(raw, cut.texts)
+
 	// The packs key is no key of the plan any more. It is noted and left
 	// out here, so that Validate refuses the plan with its reason and the
 	// shaping does not call it an unknown key.
@@ -28,6 +50,11 @@ func decodeHCL(data []byte, plan *DeploymentPlan) error {
 	}
 	shaped, err := shape(raw, reflect.TypeOf(plan).Elem(), "")
 	if err != nil {
+		var form *contentFormError
+		if cut.notHCL2 != nil && errors.As(err, &form) {
+			return fmt.Errorf("%w; a block of text needs a plan of HCL2 syntax, and this one is not: %w", err, cut.notHCL2)
+		}
+
 		return err
 	}
 	out, err := yaml.Marshal(shaped)
@@ -53,6 +80,9 @@ func shape(v any, t reflect.Type, path string) (any, error) {
 			f, ok := fieldByTag(t, key)
 			if !ok {
 				return nil, fmt.Errorf("%s: unknown key %q", where(path), key)
+			}
+			if _, isText := val.(string); isContent(f) && !isText {
+				return nil, &contentFormError{path: join(path, key)}
 			}
 			s, err := shape(val, f.Type, join(path, key))
 			if err != nil {

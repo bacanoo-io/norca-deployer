@@ -212,13 +212,13 @@ func TestGenerateClientLabels(t *testing.T) {
 			NodePool: "apps",
 		},
 		Inventory: config.InventoryConfig{
-			Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "s1", ServerSettings: &config.ServerSettings{ExtraHCL: "num_schedulers = 2"}}},
+			Masters: []config.NodeConfig{{Host: "10.0.0.1", Hostname: "s1", ServerSettings: &config.ServerSettings{Extra: "num_schedulers = 2"}}},
 			Clients: []config.NodeConfig{{Host: "10.0.1.1", Hostname: "w1", ClientSettings: &config.ClientSettings{
 				NodeClass:       "gpu",
 				HostNetworks:    []config.HostNetworkConfig{{Name: "public", Interface: "eth0", ReservedPorts: "22"}},
 				Reserved:        &config.ReservedConfig{CPU: 200, Memory: 256, ReservedPorts: "22"},
 				DrainOnShutdown: &config.DrainOnShutdownConfig{Force: true},
-				ExtraHCL:        "max_kill_timeout = \"60s\"",
+				Extra:           "max_kill_timeout = \"60s\"",
 			}}},
 		},
 	}
@@ -245,7 +245,7 @@ func TestGenerateClientLabels(t *testing.T) {
 	server := &plan.Inventory.Masters[0]
 	hcl = GenerateNorcaConfig(server, plan, storage.ResolveNodePaths(server, plan), true, GenOptions{})
 	if !strings.Contains(hcl, "  num_schedulers = 2") || strings.Contains(hcl, "client {") {
-		t.Errorf("server config: extra_hcl missing or a client block on a server only node:\n%s", hcl)
+		t.Errorf("server config: extra missing or a client block on a server only node:\n%s", hcl)
 	}
 
 	// Without network.dynamic_ports the agent default stays (no restart of

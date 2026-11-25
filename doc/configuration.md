@@ -13,8 +13,33 @@ Complete examples: [single-node.yaml](../examples/nodes/single-node.yaml), [clus
 | `drivers: [docker, exec]` | `drivers = ["docker", "exec"]` |
 | `env: {A: "1"}` | `env { A = "1" }` |
 | `inline: \|` block text | `inline = <<EOT ... EOT` heredoc |
+| `extra: \|` text of a content key | `extra { ... }` block, or `extra = <<EOT ... EOT` |
 
 An unknown key or a block repeated where only one is allowed is an error.
+
+## Content and reference keys
+
+A key whose value is a text in a language of its own (the `stack.hcl` of a Rigger stack, settings of the agent, the rules of an ACL policy) has the plain name. A key that names a file or a directory ends in `_file` or `_dir`.
+
+| Content | Reference | Text |
+| --- | --- | --- |
+| `rigger.stack` | `rigger.stack_dir` | A `stack.hcl` (a directory: `stack.hcl`, own modules, lock file) |
+| `security.acl.policies[].rules` | `security.acl.policies[].rules_file` | An ACL policy |
+| `server_settings.extra`, `client_settings.extra`, `client_defaults.extra`, `node_scaling.client.extra` | | HCL inside the server or client block of `norca.hcl` |
+
+The scripts keep `inline` and `path`, as in Terraform and Packer.
+
+In YAML and JSON the content is a string (`stack: |`). In an HCL plan it is a string, usually a heredoc, or a block of the key, whose body is the text:
+
+```hcl
+server_settings {
+  extra {
+    heartbeat_grace = "60s"   # the clients' RPC timeout is about 30s
+  }
+}
+```
+
+The body of the block is taken as it is written, one level of indentation less: comments, heredocs, `${...}`, `$${...}` and `%{...}` stay unchanged. The key given as a block and as `key = ...`, a block given twice, a block with labels and an empty block are errors that name the plan file and the line. A block needs the whole plan to be HCL2 syntax; HCL v1 accepts a few things HCL2 does not, such as a shell `${VAR:-default}` in a script written in the plan. Such a plan still loads, but its blocks of text are refused with the place HCL2 stops at; write the text as a heredoc string there.
 
 ## Top level
 
@@ -141,7 +166,7 @@ See [Networking and tuning](networking-and-tuning.md#firewall) for the firewall 
 | `acl.enabled` | `false` | Enable ACLs |
 | `acl.auto_bootstrap` | `false` | Bootstrap once and store the token |
 | `acl.management_token_output` | `.norca-deployer/management-token` | Token file |
-| `acl.policies[]` | | `name`, `description`, `rules` or `rules_file`, `job` (`namespace`, `job_id`, `group`, `task`); see [ACL policies](secrets-and-policies.md#acl-policies) |
+| `acl.policies[]` | | `name`, `description`, `rules` (the policy; a block in HCL) or `rules_file`, `job` (`namespace`, `job_id`, `group`, `task`); see [ACL policies](secrets-and-policies.md#acl-policies) |
 | `auto_generate_certificates` | | Reserved; certificates are always generated when TLS is on |
 
 See [Security](security.md).
@@ -192,7 +217,7 @@ Settings of the system bus of the servers (the embedded NATS). The deployer writ
 | `consul_kv_max_bytes` | `256MiB` | Size limit of the bucket of the Consul KV of the Consul-compatible API on the bus (`512MiB`, `1GiB`). A write beyond it fails; no key is dropped |
 | `leafnodes` | `false` | Turn on the leaf node listener of the servers (`ports.bus_leafnode`, 4652): NATS servers outside the cluster attach with an ACL token whose `cdc` rule has `leaf = true` and read the changes of the region, one way ([change data capture](https://bacanoo-io.github.io/norca-doc/docs/features/change-data-capture)). With `apply_firewall_rules` the servers open the port to `firewall.leafnode_cidrs` (default `api_cidrs`) |
 
-The plan checks that the value is a size. Whether it fits into the storage of the bus (4 GiB by default) together with the events and the usage reports is checked by Norca at start, which names what each takes. **Do not set a `bus` block in `server_settings.extra_hcl` as well**: the server block would have two. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). See the [`bus` block](https://bacanoo-io.github.io/norca-doc/docs/configuration/bus) of Norca.
+The plan checks that the value is a size. Whether it fits into the storage of the bus (4 GiB by default) together with the events and the usage reports is checked by Norca at start, which names what each takes. **Do not set a `bus` block in `server_settings.extra` as well**: the server block would have two. A changed value is a changed configuration: `apply` restarts the servers one by one ([How apply works](how-apply-works.md)). See the [`bus` block](https://bacanoo-io.github.io/norca-doc/docs/configuration/bus) of Norca.
 
 ```yaml
 bus:
@@ -297,18 +322,18 @@ See [Namespaces](secrets-and-policies.md#namespaces).
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `stack` | | Directory of the stack (`stack.hcl`, `rigger.lock.hcl`), relative to the plan |
-| `stack_hcl` | | The stack written in the plan; excludes `stack` |
-| `values` | | Values files (`-f`), relative to the plan; only with `stack` |
+| `stack_dir` | | Directory of the stack (`stack.hcl`, `rigger.lock.hcl`), relative to the plan |
+| `stack` | | The `stack.hcl` written in the plan (a `stack { ... }` block in HCL); excludes `stack_dir` |
+| `values` | | Values files (`-f`), relative to the plan; only with `stack_dir` |
 | `vars` | | Variables (`-var name=value`) |
 | `prune` | `false` | Destroy the releases removed from the stack |
 | `run_on` | `server` | Where the program runs: `server`, `norca rigger` on the first server, on a copy of the stack; `local`, the `rigger` program on the operator machine |
 | `mode` | `embedded` | Who applies the stack: `embedded`, the servers, to which the program sends it (`-server`); `standalone`, the program |
 | `binary` | `rigger` | The rigger program of `run_on: local`; refused with `run_on: server` |
 | `sync_registries` | | Rigger registries of the cluster that the servers sync before the stack is applied (`global` is the global registry); only with `mode: embedded` |
-| `gitops` | | GitOps bindings: stacks of repositories, see [gitops](#gitops). The section may hold them alone, without `stack` or `stack_hcl` |
+| `gitops` | | GitOps bindings: stacks of repositories, see [gitops](#gitops). The section may hold them alone, without `stack` or `stack_dir` |
 
-The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. `stack` is a directory of its own, not the one of the plan. See [Rigger stacks](rigger.md).
+The stack is applied in the region its own `rigger` block names (`global` when it names none), so a plan of another region needs it there. `stack_dir` is a directory of its own, not the one of the plan. See [Rigger stacks](rigger.md).
 
 ## gitops
 
@@ -354,7 +379,7 @@ deployer writes, after `apply`, what the operator needs:
 | `enabled` | `false` | Write the Variables |
 | `namespace` | `norca-system` | Namespace of the Variables, the one the `nodescaler-operator` module reads them from (its `variables_namespace`, by default the namespace of its job). The bootstrap holds the key of the node CA: give read access to the operator only |
 | `validity` | `60d` | Validity of a node certificate, in days (`60d`) or hours (`720h`); the node CA ends it at the latest |
-| `client` | | Client settings of a scaled node (drivers, `enable_raw_exec`, `extra_hcl`, reserved resources, host networks), over `client_defaults` |
+| `client` | | Client settings of a scaled node (drivers, `enable_raw_exec`, `extra`, reserved resources, host networks), over `client_defaults` |
 | `machine` | | What a scaled machine needs on its disk, see below |
 
 `node_scaling.machine` describes the install script of a scaled machine
@@ -471,7 +496,7 @@ Nodes to take out of the cluster and uninstall; see [Adding and removing nodes](
 | `bootstrap_expect` | number of masters with the role `voter` | Must equal the number of masters with the role `voter` |
 | `raft_multiplier` | `1` | Raft timing multiplier |
 | `log_level` | `INFO` | Agent log level |
-| `extra_hcl` | | Lines appended inside the server block |
+| `extra` | | HCL appended inside the server block (an `extra { ... }` block in HCL) |
 
 ### client_settings
 
@@ -490,7 +515,7 @@ Nodes to take out of the cluster and uninstall; see [Adding and removing nodes](
 | `host_networks[]` | | `name`, `interface` or `cidr`, `reserved_ports` |
 | `reserved` | | `cpu`, `memory`, `disk`, `reserved_ports` |
 | `drain_on_shutdown` | | `deadline` (default 1h), `force`, `ignore_system_jobs` |
-| `extra_hcl` | | Lines appended inside the client block |
+| `extra` | | HCL appended inside the client block (an `extra { ... }` block in HCL) |
 | `cni_subnet`, `cni_plugins` | | Reserved; not applied yet |
 
 `client_defaults` takes the same keys; see [Node labels, pools and resources](node-labels-and-pools.md).

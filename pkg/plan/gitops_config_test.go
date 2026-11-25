@@ -95,7 +95,7 @@ rigger {
 }
 `
 	var plan DeploymentPlan
-	if err := decodeHCL([]byte(hclData), &plan); err != nil {
+	if err := decodeHCL([]byte(hclData), "", &plan); err != nil {
 		t.Fatalf("failed to decode HCL: %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestGitOpsUnderRiggerNeedsNoStackOfThePlan(t *testing.T) {
   gitops:
     enabled: true
 `))
-	if err == nil || !strings.Contains(err.Error(), "stack or stack_hcl is required") {
+	if err == nil || !strings.Contains(err.Error(), "stack or stack_dir is required") {
 		t.Fatalf("got %v", err)
 	}
 }

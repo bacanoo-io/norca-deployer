@@ -85,7 +85,7 @@ func TestDeployRiggerAgainstAgent(t *testing.T) {
 			name := "deployer-e2e-" + runOn + "-" + mode
 
 			t.Run(runOn+"/"+mode+"/stack in the plan", func(t *testing.T) {
-				section := section + `  stack_hcl: |
+				section := section + `  stack: |
     rigger {
       name      = "` + name + `"
       region    = "` + region + `"
@@ -120,7 +120,7 @@ func TestDeployRiggerAgainstAgent(t *testing.T) {
 
 			t.Run(runOn+"/"+mode+"/stack directory", func(t *testing.T) {
 				name := name + "-dir"
-				section := section + "  stack: stacks/platform\n  values: [site/e2e.vars.hcl]\n  vars: {node_pool: default}\n  prune: true\n"
+				section := section + "  stack_dir: stacks/platform\n  values: [site/e2e.vars.hcl]\n  vars: {node_pool: default}\n  prune: true\n"
 
 				r, first, conn := agentRunner(t, norca, region, section)
 				stack := filepath.Join(r.plan.BaseDir(), "stacks", "platform")

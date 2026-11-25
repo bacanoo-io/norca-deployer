@@ -166,7 +166,7 @@ func (r *Runner) deployRigger(first *target, token string) error {
 		return nil
 	}
 
-	dir, err := r.riggerStackDir(rc.Stack, rc.StackHCL)
+	dir, err := r.riggerStackDir(rc.StackDir, rc.Stack)
 	if err != nil {
 		return err
 	}
@@ -200,7 +200,7 @@ func (r *Runner) deployRigger(first *target, token string) error {
 
 	// A stack written in the plan has its lock in the state of the
 	// deployer: sync keeps its versions from one apply to the next.
-	if rc.StackHCL != "" {
+	if rc.Stack != "" {
 		if err := prog.sync(dir); err != nil {
 			return err
 		}
@@ -527,9 +527,9 @@ func riggerEnv(env []string) []string {
 // The directory of the plan is not in it. Every file of the directory of a
 // stack is copied to the first server, or sent to the servers by the
 // program, and next to the plan are the keys of the cluster (certs/).
-func (r *Runner) riggerStackDir(stack, stackHCL string) (string, error) {
-	if stack != "" {
-		dir, err := filepath.Abs(r.plan.ResolveLocalPath(stack))
+func (r *Runner) riggerStackDir(stackDir, stack string) (string, error) {
+	if stackDir != "" {
+		dir, err := filepath.Abs(r.plan.ResolveLocalPath(stackDir))
 		if err != nil {
 			return "", err
 		}
@@ -559,7 +559,7 @@ func (r *Runner) riggerStackDir(stack, stackHCL string) (string, error) {
 		return "", err
 	}
 
-	if err := os.WriteFile(filepath.Join(dir, "stack.hcl"), []byte(stackHCL), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "stack.hcl"), []byte(stack), 0o600); err != nil {
 		return "", err
 	}
 

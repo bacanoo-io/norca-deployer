@@ -86,7 +86,7 @@ security:
     policies:
       - name: events-reader
         description: Reads the event stream from the system bus
-        rules_file: policies/events-reader.hcl  # or rules: | inline
+        rules_file: policies/events-reader.hcl  # or rules: | with the policy itself
         job:                                    # optional: bind to a job
           namespace: default
           job_id: audit

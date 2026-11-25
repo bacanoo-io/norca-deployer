@@ -206,7 +206,7 @@ func fileNames(conn *connector.FakeConnector) []string {
 func TestDeployRiggerOnServer(t *testing.T) {
 	plan := bootstrapPlan + `
 rigger:
-  stack: stacks/platform
+  stack_dir: stacks/platform
   values: [stacks/platform/values/prod.vars.hcl, site/prod.vars.hcl]
   vars: {count: "3", api_count: "2"}
   prune: true
@@ -278,7 +278,7 @@ rigger:
 }
 
 func TestDeployRiggerOnServerStandalone(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  mode: standalone\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n  mode: standalone\n")
 	writeStack(t, r, "stacks/platform")
 
 	server := newRiggerServer(t, first)
@@ -296,7 +296,7 @@ func TestDeployRiggerOnServerStandalone(t *testing.T) {
 // lock file comes back into the state of the deployer, from where the next
 // apply takes it.
 func TestDeployRiggerOnServerInlineStack(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_hcl: |\n    rigger {\n      name = \"platform\"\n    }\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: |\n    rigger {\n      name = \"platform\"\n    }\n")
 
 	server := newRiggerServer(t, first)
 	server.lock = "lock 1"
@@ -335,7 +335,7 @@ func TestDeployRiggerOnServerInlineStack(t *testing.T) {
 }
 
 func TestDeployRiggerOnServerFailure(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n")
 	writeStack(t, r, "stacks/platform")
 
 	server := newRiggerServer(t, first)
@@ -355,7 +355,7 @@ func TestDeployRiggerOnServerFailure(t *testing.T) {
 // synced, and a new cluster has synced none: the registries of
 // sync_registries are synced before the stack is applied.
 func TestDeployRiggerOnServerSyncsRegistries(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  sync_registries: [global, team-modules]\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n  sync_registries: [global, team-modules]\n")
 	writeStack(t, r, "stacks/platform")
 
 	server := newRiggerServer(t, first)
@@ -372,7 +372,7 @@ func TestDeployRiggerOnServerSyncsRegistries(t *testing.T) {
 
 // A registry that does not sync stops the apply: the stack is not sent.
 func TestDeployRiggerOnServerRegistrySyncFailure(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  sync_registries: [global]\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n  sync_registries: [global]\n")
 	writeStack(t, r, "stacks/platform")
 
 	server := newRiggerServer(t, first)
@@ -393,7 +393,7 @@ func TestDeployRiggerOnServerRegistrySyncFailure(t *testing.T) {
 }
 
 func TestDeployRiggerOnWindowsServer(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n")
 	writeStack(t, r, "stacks/platform")
 
 	server := newRiggerServer(t, first)
@@ -414,7 +414,7 @@ func TestDeployRiggerOnWindowsServer(t *testing.T) {
 // of the cluster in certs/, is never the stack or inside it.
 func TestDeployRiggerRefusesStackAroundThePlan(t *testing.T) {
 	for _, mode := range []string{"", "  run_on: local\n  mode: standalone\n"} {
-		r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: .\n"+mode)
+		r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: .\n"+mode)
 		writeStack(t, r, ".")
 
 		server := newRiggerServer(t, first)
@@ -466,7 +466,7 @@ func TestDeployRiggerLocal(t *testing.T) {
 
 	plan := bootstrapPlan + `
 rigger:
-  stack: stacks/platform
+  stack_dir: stacks/platform
   values: [stacks/platform/values/prod.vars.hcl]
   vars: {count: "3", api_count: "2"}
   prune: true
@@ -516,7 +516,7 @@ rigger:
 func TestDeployRiggerLocalEmbedded(t *testing.T) {
 	binary, record := fakeRigger(t)
 
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  run_on: local\n  binary: "+binary+"\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n  run_on: local\n  binary: "+binary+"\n")
 	dir := writeStack(t, r, "stacks/platform")
 
 	t.Setenv("RIGGER_SERVER", "0")
@@ -536,7 +536,7 @@ func TestDeployRiggerLocalEmbedded(t *testing.T) {
 func TestDeployRiggerLocalSyncsRegistries(t *testing.T) {
 	binary, record := fakeRigger(t)
 
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  run_on: local\n  sync_registries: [global]\n  binary: "+binary+"\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n  run_on: local\n  sync_registries: [global]\n  binary: "+binary+"\n")
 	dir := writeStack(t, r, "stacks/platform")
 
 	if err := r.deployRigger(first, "token"); err != nil {
@@ -556,7 +556,7 @@ func TestDeployRiggerLocalSyncsRegistries(t *testing.T) {
 // of the global registry (stacks/platform: the stack platform of the
 // namespace stacks), which it would fetch and apply.
 func TestDeployRiggerRefusesMissingStackDirectory(t *testing.T) {
-	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n")
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack_dir: stacks/platform\n")
 	server := newRiggerServer(t, first)
 
 	err := r.deployRigger(first, "token")
@@ -580,7 +580,7 @@ func TestRiggerStackDirIsAbsolute(t *testing.T) {
 metadata: {name: dev, region: eu}
 release: {version: v0.2.0}
 rigger:
-  stack: stacks/platform
+  stack_dir: stacks/platform
 inventory:
   masters:
     - {host: 10.0.0.1, hostname: s1}
@@ -602,7 +602,7 @@ inventory:
 		t.Fatal(err)
 	}
 
-	got, err := r.riggerStackDir(p.Rigger.Stack, "")
+	got, err := r.riggerStackDir(p.Rigger.StackDir, "")
 	if err != nil || got != want {
 		t.Fatalf("riggerStackDir = %q, %v, want %q", got, err, want)
 	}
@@ -618,7 +618,7 @@ func TestDeployRiggerLocalInlineStackSyncsFirst(t *testing.T) {
 
 	plan := bootstrapPlan + `
 rigger:
-  stack_hcl: |
+  stack: |
     rigger {
       name = "platform"
     }

@@ -47,7 +47,7 @@ Raft needs a majority of the servers to answer quickly; across long distances us
 - Every node names its datacenter (`datacenter: eu-b`). `metadata.datacenter` is the default for nodes without one.
 - `cluster_address` is the node's address on the network between the datacenters (usually a VPN); `network.interface_prefix: wg` makes the agents listen on and advertise the VPN interface. All servers join each other over it.
 - `raft_multiplier` above 1 relaxes the Raft timing when the datacenters are farther apart than a LAN.
-- **`heartbeat_grace`** on the servers (`server_settings.extra_hcl: heartbeat_grace = "60s"`): when a datacenter is lost with its server, the clients that talked to that server wait for the RPC timeout (about 30s) before they heartbeat to another one. Without a grace longer than that, these healthy nodes are marked down and their allocations replaced; a NATS server replaced this way starts with an empty store. The price is that a really failed node is noticed later.
+- **`heartbeat_grace`** on the servers (`server_settings.extra: heartbeat_grace = "60s"`): when a datacenter is lost with its server, the clients that talked to that server wait for the RPC timeout (about 30s) before they heartbeat to another one. Without a grace longer than that, these healthy nodes are marked down and their allocations replaced; a NATS server replaced this way starts with an empty store. The price is that a really failed node is noticed later.
 - Common client settings go into `client_defaults`; per-node labels such as the rack into the node's `client_settings.meta` ([node labels](node-labels-and-pools.md)).
 
 ## Firewall
@@ -148,7 +148,7 @@ The leader publishes the event stream of the region (jobs, deployments, evaluati
 
 - **Subjects:** `norca.<region>.<namespace>.<topic>`, e.g. `norca.eu.default.Allocation` (`_` for events without a namespace, such as `norca.eu._.Node`).
 - **Stream:** `NORCA_EVENTS_<region>` with one replica per server (up to three), so the event history survives the loss of a datacenter. Delivery is at least once, with a stable message id for deduplication; a new leader continues after the newest event of the stream.
-- **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra_hcl`).
+- **Limits:** 72 hours and 1 GiB by default, oldest events dropped first, S2 compressed (the `bus` block of the servers; set it with `extra`).
 - **Ports:** the routes between the servers use `network.ports.bus_cluster` (4650), consumers connect to `network.ports.bus` (4649); with `apply_firewall_rules` both are opened to `cluster_cidrs`.
 - **Access:** a consumer needs an ACL token whose policy has a `cdc` rule, for example [events-reader.hcl](../examples/nodes/policies/events-reader.hcl).
 

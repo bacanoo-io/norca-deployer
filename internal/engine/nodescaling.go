@@ -116,7 +116,7 @@ func GenerateNodeTemplate(plan *config.DeploymentPlan) string {
 		sb.WriteString(fmt.Sprintf("    \"driver.allowlist\" = %q\n", strings.Join(drivers, ",")))
 		sb.WriteString("  }\n")
 	}
-	writeExtraHCL(&sb, cs.ExtraHCL)
+	writeExtra(&sb, cs.Extra)
 	sb.WriteString("}\n")
 
 	writeRawExecPlugin(&sb, cs)

@@ -256,10 +256,10 @@ rigger:                             # A Rigger stack, applied after the secrets:
   sync_registries: [global]         # The servers sync the global registry before the stack: they
                                     # fetch modules only from a registry they have synced.
   # prune: true                     # Uninstall the releases that were removed from the stack.
-  # The stack.hcl, written in the plan (or stack: <directory> for a stack with
-  # files of its own). Its lock file is kept in .norca-deployer/rigger-stack/,
+  # The stack.hcl, written in the plan (or stack_dir: <directory> for a stack
+  # with files of its own). Its lock file is kept in .norca-deployer/rigger-stack/,
   # so the versions stay from one apply to the next.
-  stack_hcl: |
+  stack: |
     rigger {
       name   = "base"                  # Recorded in every release as its owner.
       region = "eu-central"            # The region of this plan (metadata.region).
@@ -436,7 +436,7 @@ inventory:
         node_class: windows
         native_app_volumes:
           enable_defaults: true     # C:\norca\apps\bin, work, config, data
-        # extra_hcl: |              # Settings the deployer does not model, inside the client block.
+        # extra: |                  # Settings the deployer does not model, inside the client block.
         #   max_kill_timeout = "60s"
 
 # Multi-region: a plan per region. A replica region adds this block; ACLs are

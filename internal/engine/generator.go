@@ -179,7 +179,7 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 		}
 		writeMetricsStore(&sb, plan.MetricsStore)
 		writeBus(&sb, plan.Bus)
-		writeExtraHCL(&sb, node.ServerSettings.ExtraHCL)
+		writeExtra(&sb, node.ServerSettings.Extra)
 
 		sb.WriteString("}\n\n")
 	}
@@ -230,7 +230,7 @@ func GenerateNorcaConfig(node *config.NodeConfig, plan *config.DeploymentPlan, p
 
 		// Host volumes including native application directories
 		sb.WriteString(paths.GenerateHostVolumeBlocks(node.ClientSettings))
-		writeExtraHCL(&sb, cs.ExtraHCL)
+		writeExtra(&sb, cs.Extra)
 
 		sb.WriteString("}\n")
 
@@ -448,13 +448,13 @@ func writeClientLabels(sb *strings.Builder, cs *config.ClientSettings) {
 	}
 }
 
-// writeExtraHCL appends the operator's own settings inside a block.
-func writeExtraHCL(sb *strings.Builder, extra string) {
+// writeExtra appends the operator's own settings (extra) inside a block.
+func writeExtra(sb *strings.Builder, extra string) {
 	extra = strings.TrimSpace(extra)
 	if extra == "" {
 		return
 	}
-	sb.WriteString("\n  # extra_hcl from the plan\n")
+	sb.WriteString("\n  # extra from the plan\n")
 	for line := range strings.SplitSeq(extra, "\n") {
 		sb.WriteString("  " + line + "\n")
 	}

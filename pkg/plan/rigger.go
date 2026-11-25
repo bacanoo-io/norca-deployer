@@ -6,22 +6,26 @@ package plan
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"slices"
+	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // RiggerConfig is the rigger section of a plan: a stack of Rigger (design of
 // Rigger, section 13.1), applied by the rigger program. The stack is a
-// directory next to the plan (stack), or its stack.hcl written in the plan
-// (stack_hcl). The section also holds the GitOps bindings, which apply
+// directory next to the plan (stack_dir), or its stack.hcl written in the
+// plan (stack). The section also holds the GitOps bindings, which apply
 // stacks of repositories (gitops); it may hold them alone.
 type RiggerConfig struct {
-	// Stack is the directory of the stack, relative to the plan: its
+	// StackDir is the directory of the stack, relative to the plan: its
 	// stack.hcl, own modules, values and rigger.lock.hcl.
-	Stack string `yaml:"stack,omitempty" json:"stack,omitempty"`
-	// StackHCL is the content of a stack.hcl, for a stack of modules from
+	StackDir string `yaml:"stack_dir,omitempty" json:"stack_dir,omitempty"`
+	// Stack is the text of a stack.hcl, for a stack of modules from
 	// registries only, written in the plan.
-	StackHCL string `yaml:"stack_hcl,omitempty" json:"stack_hcl,omitempty"`
+	Stack string `yaml:"stack,omitempty" json:"stack,omitempty" plan:"content"`
 	// Values are value files of the stack, relative to the plan.
 	Values []string `yaml:"values,omitempty" json:"values,omitempty"`
 	// Vars are values of variables of the stack, as rigger's -var.
@@ -62,7 +66,19 @@ const (
 
 // HasStack reports whether the section has a stack of the plan; one with
 // GitOps bindings only has none.
-func (r *RiggerConfig) HasStack() bool { return r.Stack != "" || r.StackHCL != "" }
+func (r *RiggerConfig) HasStack() bool { return r.StackDir != "" || r.Stack != "" }
+
+// UnmarshalYAML reads the section and refuses a key it does not have: a
+// key that is ignored would leave out a stack or a setting of it.
+func (r *RiggerConfig) UnmarshalYAML(node *yaml.Node) error {
+	if err := knownKeys(node, reflect.TypeFor[RiggerConfig](), "rigger"); err != nil {
+		return err
+	}
+
+	type plain RiggerConfig
+
+	return node.Decode((*plain)(r))
+}
 
 // onlyGitOps reports a section of GitOps bindings without a stack of the
 // plan and without a setting of one. run_on and mode count when they are
@@ -80,6 +96,14 @@ func (r *RiggerConfig) RunsOnServer() bool { return r.RunOn != RiggerOnLocal }
 // Embedded reports whether the servers apply the stack, which is the
 // default.
 func (r *RiggerConfig) Embedded() bool { return r.Mode != RiggerStandalone }
+
+// looksLikeDirectory reports a stack that is a name rather than the text of
+// a stack.hcl: one line, without a block or an attribute.
+func looksLikeDirectory(stack string) bool {
+	s := strings.TrimSpace(stack)
+
+	return s != "" && !strings.ContainsAny(s, "\n{=")
+}
 
 var riggerVarName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
 
@@ -99,12 +123,14 @@ func (p *DeploymentPlan) validateRigger() error {
 	switch {
 	case r.onlyGitOps():
 		return nil
-	case r.Stack == "" && r.StackHCL == "":
-		return errors.New("rigger: stack or stack_hcl is required")
-	case r.Stack != "" && r.StackHCL != "":
-		return errors.New("rigger: stack and stack_hcl exclude each other")
-	case r.StackHCL != "" && len(r.Values) > 0:
-		return errors.New("rigger: values files belong to a stack directory; with stack_hcl give vars")
+	case r.StackDir == "" && r.Stack == "":
+		return errors.New("rigger: stack or stack_dir is required")
+	case r.StackDir != "" && r.Stack != "":
+		return errors.New("rigger: stack and stack_dir exclude each other")
+	case looksLikeDirectory(r.Stack):
+		return fmt.Errorf("rigger: stack is the text of a stack.hcl, and %q looks like a directory: a directory is stack_dir", r.Stack)
+	case r.Stack != "" && len(r.Values) > 0:
+		return errors.New("rigger: values files belong to stack_dir; with stack give vars")
 	}
 
 	switch r.RunOn {

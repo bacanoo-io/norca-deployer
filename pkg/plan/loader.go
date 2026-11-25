@@ -41,7 +41,7 @@ func LoadFromFile(path string) (*DeploymentPlan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to read configuration file (%s): %w", path, err)
 	}
-	return Parse(data, FormatOf(path), filepath.Dir(path))
+	return parse(data, FormatOf(path), filepath.Dir(path), path)
 }
 
 // Parse reads a plan from memory, applies the defaults and validates it:
@@ -50,10 +50,16 @@ func LoadFromFile(path string) (*DeploymentPlan, error) {
 // directory relative paths of the plan are resolved against ("" for the
 // working directory).
 func Parse(data []byte, format Format, baseDir string) (*DeploymentPlan, error) {
+	return parse(data, format, baseDir, "")
+}
+
+// parse is Parse of a plan that filename names in the errors that have a
+// line ("" when it is no file).
+func parse(data []byte, format Format, baseDir, filename string) (*DeploymentPlan, error) {
 	plan := &DeploymentPlan{}
 	switch format {
 	case FormatHCL:
-		if err := decodeHCL(data, plan); err != nil {
+		if err := decodeHCL(data, filename, plan); err != nil {
 			return nil, fmt.Errorf("invalid HCL syntax: %w", err)
 		}
 	case FormatYAML, FormatJSON, "":

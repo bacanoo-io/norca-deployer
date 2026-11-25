@@ -468,7 +468,7 @@ type ACLPolicyConfig struct {
 	Name        string `yaml:"name" json:"name"`
 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
 	// Rules inline, or RulesFile relative to the plan.
-	Rules     string        `yaml:"rules,omitempty" json:"rules,omitempty"`
+	Rules     string        `yaml:"rules,omitempty" json:"rules,omitempty" plan:"content"`
 	RulesFile string        `yaml:"rules_file,omitempty" json:"rules_file,omitempty"`
 	Job       *ACLPolicyJob `yaml:"job,omitempty" json:"job,omitempty"`
 }
@@ -835,8 +835,8 @@ type ServerSettings struct {
 	BootstrapExpect int    `yaml:"bootstrap_expect" json:"bootstrap_expect"`
 	RaftMultiplier  int    `yaml:"raft_multiplier,omitempty" json:"raft_multiplier,omitempty"`
 	LogLevel        string `yaml:"log_level,omitempty" json:"log_level,omitempty"`
-	// ExtraHCL is appended inside the server block of norca.hcl.
-	ExtraHCL string `yaml:"extra_hcl,omitempty" json:"extra_hcl,omitempty"`
+	// Extra is HCL appended inside the server block of norca.hcl.
+	Extra string `yaml:"extra,omitempty" json:"extra,omitempty" plan:"content"`
 }
 
 type ClientSettings struct {
@@ -865,9 +865,9 @@ type ClientSettings struct {
 	// services outside Norca.
 	Reserved        *ReservedConfig        `yaml:"reserved,omitempty" json:"reserved,omitempty"`
 	DrainOnShutdown *DrainOnShutdownConfig `yaml:"drain_on_shutdown,omitempty" json:"drain_on_shutdown,omitempty"`
-	// ExtraHCL is appended inside the client block of norca.hcl, for
+	// Extra is HCL appended inside the client block of norca.hcl, for
 	// settings the deployer does not model.
-	ExtraHCL string `yaml:"extra_hcl,omitempty" json:"extra_hcl,omitempty"`
+	Extra string `yaml:"extra,omitempty" json:"extra,omitempty" plan:"content"`
 }
 
 // HostNetworkConfig is a client host_network block.
@@ -939,7 +939,7 @@ type NodeScalingConfig struct {
 	Validity string `yaml:"validity,omitempty" json:"validity,omitempty"`
 
 	// Client are the client settings of a scaled node (drivers, raw_exec,
-	// extra_hcl, reserved resources, host networks), over client_defaults.
+	// extra, reserved resources, host networks), over client_defaults.
 	// The node pool, class and meta come from the node group.
 	Client *ClientSettings `yaml:"client,omitempty" json:"client,omitempty"`
 

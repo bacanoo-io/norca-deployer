@@ -103,7 +103,7 @@ A node whose agent is not running is always started. Successfully provisioned no
 | `.norca-deployer/management-token` | ACL management token |
 | `.norca-deployer/nodes-<region>.json` | Installed nodes with role, node definition and release (encrypted when a master key exists) |
 | `.norca-deployer/known_hosts` | Host keys trusted on first use |
-| `.norca-deployer/rigger-stack/` | The stack of `rigger.stack_hcl` and its lock file |
+| `.norca-deployer/rigger-stack/` | The stack of `rigger.stack` (the `stack.hcl` written in the plan) and its lock file |
 | `.norca-deployer/generated/`, `nkeys/` | Generated values and NATS NKey seeds (encrypted when a master key exists) |
 | `.norca-deployer/secrets/`, `acl-policies/`, `namespaces/` | Digests of the written secrets and policies and of the namespace entries |
 | `.norca-deployer/cache/` | Downloaded Norca and CNI artifacts |

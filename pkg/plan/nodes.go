@@ -5,10 +5,13 @@ import (
 	"maps"
 	"net"
 	"path"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 // Default range of the dynamic allocation ports.
@@ -57,6 +60,29 @@ func (p *DeploymentPlan) applyClientDefaults() {
 	}
 }
 
+// UnmarshalYAML reads server settings and refuses a key they do not have: a
+// setting that is ignored would be missing from the agent.
+func (s *ServerSettings) UnmarshalYAML(node *yaml.Node) error {
+	if err := knownKeys(node, reflect.TypeFor[ServerSettings](), "server_settings"); err != nil {
+		return err
+	}
+
+	type plain ServerSettings
+
+	return node.Decode((*plain)(s))
+}
+
+// UnmarshalYAML reads client settings and refuses a key they do not have.
+func (c *ClientSettings) UnmarshalYAML(node *yaml.Node) error {
+	if err := knownKeys(node, reflect.TypeFor[ClientSettings](), "client settings"); err != nil {
+		return err
+	}
+
+	type plain ClientSettings
+
+	return node.Decode((*plain)(c))
+}
+
 // MergeClientSettings returns n with the defaults d where n has none, as
 // client_defaults are merged into the settings of a node.
 func MergeClientSettings(d, n *ClientSettings) *ClientSettings { return mergeClientSettings(d, n) }
@@ -72,7 +98,7 @@ func mergeClientSettings(d, n *ClientSettings) *ClientSettings {
 	str(&r.CNISubnet, d.CNISubnet)
 	str(&r.NodeClass, d.NodeClass)
 	str(&r.NodePool, d.NodePool)
-	str(&r.ExtraHCL, d.ExtraHCL)
+	str(&r.Extra, d.Extra)
 	if r.GCDiskUsageThreshold == 0 {
 		r.GCDiskUsageThreshold = d.GCDiskUsageThreshold
 	}
@@ -164,8 +190,8 @@ func (p *DeploymentPlan) validateNodeSettings() error {
 				return fmt.Errorf("%s: drain_on_shutdown.deadline: %w", what, err)
 			}
 		}
-		if strings.Contains(cs.ExtraHCL, "\x00") {
-			return fmt.Errorf("%s: extra_hcl contains a NUL byte", what)
+		if strings.Contains(cs.Extra, "\x00") {
+			return fmt.Errorf("%s: extra contains a NUL byte", what)
 		}
 		for _, dev := range cs.RawExecAllowedDevices {
 			if dev != "*" && !strings.HasPrefix(path.Clean(dev), "/dev/") {
