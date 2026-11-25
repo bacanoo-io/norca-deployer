@@ -230,8 +230,10 @@ func (Apk) Steps(sel *Selection, c Context) ([]step.Step, error) {
 	steps := []step.Step{{
 		Name: "apk",
 		Apply: "if ! command -v apk >/dev/null 2>&1; then\n  die \"host_packages.apk need a node with apk\"\nfi\n" +
-			"for apk_tag in $(sed -n 's/^[^@=<>~]*@\\(norca-[a-z0-9-]*\\).*/\\1/p' " + apkWorld + " 2>/dev/null | sort -u); do\n" +
-			"  case ' " + strings.Join(tags, " ") + " ' in\n" +
+			"apk_tags=' " + strings.Join(tags, " ") + " '\n" +
+			"apk_world_tags=$(sed -n 's/^[^@=<>~]*@\\(norca-[a-z0-9-]*\\).*/\\1/p' " + apkWorld + " 2>/dev/null | sort -u)\n" +
+			"for apk_tag in $apk_world_tags; do\n" +
+			"  case $apk_tags in\n" +
 			"  *\" $apk_tag \"*) ;;\n" +
 			"  *) die \"/etc/apk/world takes packages from the tagged repository @$apk_tag, which host_packages.apk no longer gives the node: keep the repository, or remove its packages (apk del) first\" ;;\n" +
 			"  esac\ndone",

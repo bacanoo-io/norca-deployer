@@ -9,8 +9,10 @@ die() {
 if ! command -v apk >/dev/null 2>&1; then
   die "host_packages.apk need a node with apk"
 fi
-for apk_tag in $(sed -n 's/^[^@=<>~]*@\(norca-[a-z0-9-]*\).*/\1/p' /etc/apk/world 2>/dev/null | sort -u); do
-  case ' norca-mine ' in
+apk_tags=' norca-mine '
+apk_world_tags=$(sed -n 's/^[^@=<>~]*@\(norca-[a-z0-9-]*\).*/\1/p' /etc/apk/world 2>/dev/null | sort -u)
+for apk_tag in $apk_world_tags; do
+  case $apk_tags in
   *" $apk_tag "*) ;;
   *) die "/etc/apk/world takes packages from the tagged repository @$apk_tag, which host_packages.apk no longer gives the node: keep the repository, or remove its packages (apk del) first" ;;
   esac
