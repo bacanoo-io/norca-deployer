@@ -114,12 +114,13 @@ func TestRenderNFTablesRefusesOtherWords(t *testing.T) {
 }
 
 // nftNode is a fake node: which firewall tools it has, whether ufw is
-// active and firewalld runs, systemd, and whether nft -f fails.
+// active and firewalld runs, systemd (or OpenRC), and whether nft -f fails.
 type nftNode struct {
 	tools          []string
 	ufwActive      bool
 	firewalldOn    bool
 	noSystemd      bool
+	openrc         bool
 	nftFails       bool
 	removeAnswered string
 }
@@ -152,6 +153,11 @@ func (n nftNode) fake() *connector.FakeConnector {
 			return "", nil, true
 		case strings.HasPrefix(cmd, "[ -d /run/systemd/system ]"):
 			if n.noSystemd {
+				return "", errors.New("exit status 1"), true
+			}
+			return "", nil, true
+		case strings.HasPrefix(cmd, "[ -d /run/openrc ]"):
+			if !n.openrc {
 				return "", errors.New("exit status 1"), true
 			}
 			return "", nil, true
@@ -248,8 +254,8 @@ func withDetectedSSH(s Spec) Spec {
 }
 
 // A ruleset nft refuses fails the node with default_deny and is a warning
-// without it; without systemd the file is not loaded at boot (warning);
-// without default_deny the accept policy is named.
+// without it; without systemd and OpenRC the file is not loaded at boot
+// (warning); without default_deny the accept policy is named.
 func TestNFTablesFailuresAndWarnings(t *testing.T) {
 	s := nftSpec()
 	if _, err := Configure(nftNode{tools: []string{"nft"}, nftFails: true}.fake(), s); err == nil || !strings.Contains(err.Error(), "default_deny: nft -f") {
@@ -261,9 +267,47 @@ func TestNFTablesFailuresAndWarnings(t *testing.T) {
 		t.Fatalf("%v %v", res, err)
 	}
 	res, err = Configure(nftNode{tools: []string{"nft"}, noSystemd: true}.fake(), s)
-	if err != nil || !strings.Contains(strings.Join(res.Warnings, "\n"), "no systemd") ||
+	if err != nil || !strings.Contains(strings.Join(res.Warnings, "\n"), "neither systemd nor OpenRC runs") ||
 		!strings.Contains(strings.Join(res.Warnings, "\n"), "policy of the nftables table inet norca is accept") {
 		t.Fatalf("%v %v", res, err)
+	}
+}
+
+// On an OpenRC host (Alpine) a service of the boot runlevel loads the
+// table at boot, after the nftables service of Alpine (whose ruleset may
+// flush) and before the network; the nftables service itself is not
+// enabled. A second apply writes nothing new.
+func TestNFTablesOpenRC(t *testing.T) {
+	c := nftNode{tools: []string{"nft"}, noSystemd: true, openrc: true}.fake()
+	s := nftSpec()
+	res, err := Configure(c, s)
+	if err != nil || res.Backend != "nftables" || len(res.Warnings) != 0 {
+		t.Fatalf("%v %v", res, err)
+	}
+	script := string(c.Files[NFTInitScriptPath])
+	for _, w := range []string{"#!/sbin/openrc-run\n", "after nftables iptables ip6tables\n", "before net\n",
+		"/usr/sbin/nft -f " + NFTRulesetPath + "\n"} {
+		if !strings.Contains(script, w) {
+			t.Errorf("no %q in the service:\n%s", w, script)
+		}
+	}
+	if c.Modes[NFTInitScriptPath] != 0o755 {
+		t.Errorf("mode of the service %o", c.Modes[NFTInitScriptPath])
+	}
+	enable := "[ -e /etc/runlevels/boot/norca-nftables ] || rc-update add norca-nftables boot >/dev/null"
+	cmds := strings.Join(c.Commands, "\n")
+	if !strings.Contains(cmds, enable) || strings.Contains(cmds, "systemctl enable") || strings.Contains(cmds, "rc-update add nftables") {
+		t.Fatalf("commands:\n%s", cmds)
+	}
+	c.Commands = nil
+	if _, err := Configure(c, s); err != nil {
+		t.Fatal(err)
+	}
+	if again := strings.Join(c.Commands, "\n"); !strings.Contains(again, enable) || !strings.Contains(again, "nft -f "+NFTRulesetPath) {
+		t.Fatalf("second apply:\n%s", again)
+	}
+	if !strings.Contains(RemoveNFTablesCommand, "rc-update del norca-nftables boot") || !strings.Contains(RemoveNFTablesCommand, "rm -f "+NFTInitScriptPath) {
+		t.Fatalf("the removal leaves the OpenRC service:\n%s", RemoveNFTablesCommand)
 	}
 }
 

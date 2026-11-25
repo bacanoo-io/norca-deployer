@@ -12,8 +12,9 @@ import (
 // owns. Every apply writes the whole table into NFTRulesetPath and loads
 // it with one nft -f, an atomic transaction: the file deletes the table it
 // replaces, so no rule of an earlier plan stays and no other table is
-// touched. A boot unit (NFTUnitPath, systemd hosts) loads the file again
-// at boot.
+// touched. A boot unit (NFTUnitPath, systemd hosts) or an OpenRC service
+// of the boot runlevel (NFTInitScriptPath, Alpine) loads the file again at
+// boot.
 //
 // The input chain holds the rules of the spec; with default_deny its
 // policy is drop and it lets in what a host needs (loopback, replies, ICMP,
@@ -31,7 +32,11 @@ const (
 	// NFTUnitPath loads NFTRulesetPath at boot.
 	NFTUnitPath = "/etc/systemd/system/" + nftUnit
 	nftUnit     = "norca-nftables.service"
-	nftDir      = "/etc/nftables.d"
+	// NFTInitScriptPath loads NFTRulesetPath at boot on OpenRC hosts; it is
+	// a service of the boot runlevel.
+	NFTInitScriptPath = "/etc/init.d/" + nftService
+	nftService        = "norca-nftables"
+	nftDir            = "/etc/nftables.d"
 )
 
 var (
@@ -147,9 +152,33 @@ WantedBy=sysinit.target
 `
 }
 
+// nftInitScript is the OpenRC service that loads the ruleset at boot:
+// before the network, and after the nftables service, whose ruleset starts
+// with flush ruleset. The deployer does not enable the nftables service of
+// Alpine: its default ruleset drops what it does not list, SSH included.
+func nftInitScript(nft string) string {
+	return `#!/sbin/openrc-run
+# Managed by norca-deployer. Do not edit.
+description="Norca firewall rules (nftables table ` + NFTTable + `)"
+
+depend() {
+	need localmount
+	after nftables iptables ip6tables
+	before net
+}
+
+start() {
+	ebegin "Loading the nftables table ` + NFTTable + `"
+	` + nft + ` -f ` + NFTRulesetPath + `
+	eend $?
+}
+`
+}
+
 // configureNFTables writes and loads the table of the spec and makes the
-// boot unit load it again. A ruleset that cannot be loaded fails the node
-// with default_deny and is a warning otherwise.
+// boot unit (systemd) or the boot service (OpenRC) load it again. A ruleset
+// that cannot be loaded fails the node with default_deny and is a warning
+// otherwise.
 func configureNFTables(conn connector.Connector, s Spec, nft string) (*Result, error) {
 	res := &Result{Backend: "nftables"}
 	ruleset, err := RenderNFTables(s)
@@ -181,8 +210,13 @@ func configureNFTables(conn connector.Connector, s Spec, nft string) (*Result, e
 			res.run(conn, "systemctl daemon-reload")
 		}
 		res.run(conn, "systemctl is-enabled --quiet "+nftUnit+" || systemctl enable --quiet "+nftUnit)
+	} else if _, err := conn.ExecuteCommand("[ -d /run/openrc ] && command -v rc-update >/dev/null"); err == nil {
+		if _, err := connector.SyncFile(conn, NFTInitScriptPath, []byte(nftInitScript(nft)), 0o755); err != nil {
+			return nil, err
+		}
+		res.run(conn, "[ -e /etc/runlevels/boot/"+nftService+" ] || rc-update add "+nftService+" boot >/dev/null")
 	} else {
-		res.Warnings = append(res.Warnings, "no systemd: "+NFTRulesetPath+" is not loaded at boot by the deployer")
+		res.Warnings = append(res.Warnings, "neither systemd nor OpenRC runs: "+NFTRulesetPath+" is not loaded at boot by the deployer")
 	}
 	if !s.DefaultDeny {
 		res.Warnings = append(res.Warnings, "the input policy of the nftables table "+NFTTable+" is accept, so its rules restrict nothing; "+
@@ -191,8 +225,9 @@ func configureNFTables(conn connector.Connector, s Spec, nft string) (*Result, e
 	return res, nil
 }
 
-// RemoveNFTablesCommand removes the table, the ruleset and the boot unit of
-// the nftables backend; it prints "removed" when there was something.
+// RemoveNFTablesCommand removes the table, the ruleset and the boot unit or
+// service of the nftables backend; it prints "removed" when there was
+// something.
 const RemoveNFTablesCommand = `if command -v nft >/dev/null 2>&1 && nft list table ` + NFTTable + ` >/dev/null 2>&1; then
   nft delete table ` + NFTTable + `
   echo removed
@@ -201,6 +236,11 @@ if [ -e ` + NFTUnitPath + ` ]; then
   systemctl disable --quiet ` + nftUnit + ` >/dev/null 2>&1 || true
   rm -f ` + NFTUnitPath + `
   systemctl daemon-reload >/dev/null 2>&1 || true
+  echo removed
+fi
+if [ -e ` + NFTInitScriptPath + ` ]; then
+  rc-update del ` + nftService + ` boot >/dev/null 2>&1 || true
+  rm -f ` + NFTInitScriptPath + `
   echo removed
 fi
 if [ -e ` + NFTRulesetPath + ` ]; then
