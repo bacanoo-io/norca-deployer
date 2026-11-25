@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 )
 
 // RiggerConfig is the rigger section of a plan: a stack of Rigger (design of
@@ -36,6 +37,11 @@ type RiggerConfig struct {
 	// Binary is the rigger program of run_on local; rigger on the PATH by
 	// default.
 	Binary string `yaml:"binary,omitempty" json:"binary,omitempty"`
+	// SyncRegistries are the Rigger registries of the cluster that the
+	// servers sync before the stack is applied (rigger registry sync), in
+	// this order. The servers fetch the modules of a stack only from a
+	// registry they have synced, and a new cluster has synced none.
+	SyncRegistries []string `yaml:"sync_registries,omitempty" json:"sync_registries,omitempty"`
 }
 
 // The values of rigger.run_on.
@@ -59,6 +65,10 @@ func (r *RiggerConfig) RunsOnServer() bool { return r.RunOn != RiggerOnLocal }
 func (r *RiggerConfig) Embedded() bool { return r.Mode != RiggerStandalone }
 
 var riggerVarName = regexp.MustCompile(`^[a-z_][a-z0-9_]*$`)
+
+// riggerRegistryName is the name of a registry as an argument of the
+// program: it does not read as a flag.
+var riggerRegistryName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // validateRigger checks the rigger section: one form of the stack, names of
 // variables, where the program runs and who applies. An empty run_on or
@@ -97,6 +107,20 @@ func (p *DeploymentPlan) validateRigger() error {
 	for name := range r.Vars {
 		if !riggerVarName.MatchString(name) {
 			return fmt.Errorf("rigger: %q is not the name of a variable", name)
+		}
+	}
+
+	if len(r.SyncRegistries) > 0 && !r.Embedded() {
+		return errors.New("rigger: sync_registries is of mode: embedded, where the servers fetch the modules; with standalone the program fetches them")
+	}
+
+	for i, name := range r.SyncRegistries {
+		if !riggerRegistryName.MatchString(name) {
+			return fmt.Errorf("rigger: sync_registries: %q is not the name of a registry", name)
+		}
+
+		if slices.Contains(r.SyncRegistries[:i], name) {
+			return fmt.Errorf("rigger: sync_registries: %q is named twice", name)
 		}
 	}
 

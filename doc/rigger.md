@@ -10,6 +10,7 @@ rigger:
   prune: true                                  # destroy releases removed from the stack
   run_on: server                               # server (default) | local
   mode: embedded                               # embedded (default) | standalone
+  sync_registries: [global]                    # registries the servers sync before the apply
 ```
 
 The same in HCL:
@@ -54,6 +55,28 @@ The stack is applied with the command `stack apply` of Rigger. Two settings choo
 | `standalone` | The program. It fetches and evaluates the modules where it runs, and sends the resources of each release to the cluster (`stack apply -server=false`) |
 
 The four combinations work. The deployer always gives `-server` or `-server=false`, so `RIGGER_SERVER` of an environment never chooses.
+
+## Modules of a registry
+
+With `embedded` the servers fetch the modules of the stack, and they fetch only from a registry they have synced: its modules are what it offered at the commit of its last sync. A new cluster has synced none, so a stack with a module of the global registry (`source = "norca/nats"`) stops there:
+
+```text
+Unexpected response code: 409 (the registry "global" has not been synced: sync it first (rigger registry sync global))
+```
+
+`sync_registries` names the registries the servers sync before the stack is applied, in the order of the list:
+
+```yaml
+rigger:
+  stack: stacks/platform
+  sync_registries: [global]
+```
+
+- `global` is the global registry, which every cluster has. Another name is a registry of the cluster (an object of the kind `rigger.norca.io/Registry`), which must exist: the deployer does not create it.
+- The program runs `registry sync <name>` for each name where it runs (`run_on`), against the region of the first server. A sync that fails stops the apply, before the stack is sent.
+- The registries are synced at every apply, so the servers move to what a registry offers now. The versions of the stack do not move with it: its lock file names them.
+- A stack of `builtin/` modules and of modules of its own directory needs no registry.
+- With `standalone` the program fetches the modules itself, and the key is refused.
 
 ## What happens
 

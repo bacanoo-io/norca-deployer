@@ -125,8 +125,10 @@ type riggerServer struct {
 	// lock is what a sync writes; lockAtSync what it found.
 	lock       string
 	lockAtSync string
-	// fail is a stack command that fails ("apply").
-	fail string
+	// fail is a stack command that fails ("apply"), failRegistry a registry
+	// whose sync fails.
+	fail         string
+	failRegistry string
 	// removed counts the rm -rf of the copy.
 	removed int
 }
@@ -174,6 +176,10 @@ func newRiggerServer(t *testing.T, first *target) *riggerServer {
 		switch {
 		case s.fail != "" && strings.HasPrefix(args, "stack "+s.fail+" "):
 			return "Error: Module not loaded", errors.New("exit status 1 (output: Error: Module not loaded)"), true
+		case s.failRegistry != "" && args == "registry sync "+s.failRegistry:
+			return "Error: repository not reached", errors.New("exit status 1 (output: Error: repository not reached)"), true
+		case strings.HasPrefix(args, "registry sync "):
+			return "synced " + strings.TrimPrefix(args, "registry sync ") + ": commit 0123abc, 19 modules, 0 stacks", nil, true
 		case strings.HasPrefix(args, "stack sync "):
 			s.lockAtSync = s.staged[testStage+"/stack/rigger.lock.hcl"]
 			conn.Files[testStage+"/stack/rigger.lock.hcl"] = []byte(s.lock)
@@ -345,6 +351,47 @@ func TestDeployRiggerOnServerFailure(t *testing.T) {
 	}
 }
 
+// The servers fetch the modules of a stack only from a registry they have
+// synced, and a new cluster has synced none: the registries of
+// sync_registries are synced before the stack is applied.
+func TestDeployRiggerOnServerSyncsRegistries(t *testing.T) {
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  sync_registries: [global, team-modules]\n")
+	writeStack(t, r, "stacks/platform")
+
+	server := newRiggerServer(t, first)
+
+	if err := r.deployRigger(first, "token"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"registry sync global", "registry sync team-modules", "stack apply " + testStage + "/stack -server"}
+	if !slices.Equal(server.runs, want) {
+		t.Fatalf("norca rigger was run as %q, want %q", server.runs, want)
+	}
+}
+
+// A registry that does not sync stops the apply: the stack is not sent.
+func TestDeployRiggerOnServerRegistrySyncFailure(t *testing.T) {
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  sync_registries: [global]\n")
+	writeStack(t, r, "stacks/platform")
+
+	server := newRiggerServer(t, first)
+	server.failRegistry = "global"
+
+	err := r.deployRigger(first, "token")
+	if err == nil || !strings.Contains(err.Error(), "norca rigger registry sync") || !strings.Contains(err.Error(), "repository not reached") {
+		t.Fatalf("deployRigger = %v, want the error of norca rigger registry sync with its output", err)
+	}
+
+	if want := []string{"registry sync global"}; !slices.Equal(server.runs, want) {
+		t.Errorf("norca rigger was run as %q, want %q: no apply after a failed sync", server.runs, want)
+	}
+
+	if left := server.left(); len(left) != 0 {
+		t.Errorf("%v left on the server after a failed sync", left)
+	}
+}
+
 func TestDeployRiggerOnWindowsServer(t *testing.T) {
 	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n")
 	writeStack(t, r, "stacks/platform")
@@ -481,6 +528,27 @@ func TestDeployRiggerLocalEmbedded(t *testing.T) {
 	calls, _ := os.ReadFile(record)
 	if got := strings.TrimSpace(string(calls)); !strings.HasPrefix(got, "addr=http://127.0.0.1:") || !strings.HasSuffix(got, " stack apply "+dir+" -server") {
 		t.Fatalf("rigger was run as %q, want stack apply %s -server against the local port", got, dir)
+	}
+}
+
+// The rigger program of this machine asks the servers for the sync of the
+// registries as well, through the same local port.
+func TestDeployRiggerLocalSyncsRegistries(t *testing.T) {
+	binary, record := fakeRigger(t)
+
+	r, first, _ := bootstrapRunner(t, bootstrapPlan+"\nrigger:\n  stack: stacks/platform\n  run_on: local\n  sync_registries: [global]\n  binary: "+binary+"\n")
+	dir := writeStack(t, r, "stacks/platform")
+
+	if err := r.deployRigger(first, "token"); err != nil {
+		t.Fatal(err)
+	}
+
+	calls, _ := os.ReadFile(record)
+
+	lines := strings.Split(strings.TrimSpace(string(calls)), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "addr=http://127.0.0.1:") || !strings.HasSuffix(lines[0], " registry sync global") ||
+		!strings.HasSuffix(lines[1], " stack apply "+dir+" -server") {
+		t.Fatalf("rigger was run as %q, want registry sync global, then stack apply %s -server, against the local port", lines, dir)
 	}
 }
 

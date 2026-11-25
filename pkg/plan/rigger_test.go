@@ -25,6 +25,11 @@ func TestValidateRigger(t *testing.T) {
 		{name: "unknown run_on", rigger: &RiggerConfig{Stack: "a", RunOn: "host"}, want: `run_on "host"`},
 		{name: "unknown mode", rigger: &RiggerConfig{Stack: "a", Mode: "remote"}, want: `mode "remote"`},
 		{name: "binary on the server", rigger: &RiggerConfig{Stack: "a", Binary: "/opt/rigger"}, want: "binary is the program of run_on: local"},
+		{name: "registries the servers sync", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"global", "team-modules"}}},
+		{name: "a registry without a name", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{""}}, want: `sync_registries: "" is not the name of a registry`},
+		{name: "a registry that reads as a flag", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"-region"}}, want: `sync_registries: "-region" is not the name of a registry`},
+		{name: "a registry named twice", rigger: &RiggerConfig{Stack: "a", SyncRegistries: []string{"global", "global"}}, want: `sync_registries: "global" is named twice`},
+		{name: "registries where the program applies", rigger: &RiggerConfig{Stack: "a", Mode: RiggerStandalone, SyncRegistries: []string{"global"}}, want: "sync_registries is of mode: embedded"},
 	}
 
 	for _, tt := range tests {
@@ -85,6 +90,7 @@ rigger {
   run_on = "local"
   mode   = "standalone"
   binary = "/usr/local/bin/rigger"
+  sync_registries = ["global", "team-modules"]
 }
 `
 
@@ -99,5 +105,9 @@ rigger {
 
 	if p.Rigger.RunsOnServer() || p.Rigger.Embedded() || p.Rigger.Binary != "/usr/local/bin/rigger" {
 		t.Fatalf("rigger = %+v, want the program of this machine, standalone", p.Rigger)
+	}
+
+	if got := p.Rigger.SyncRegistries; len(got) != 2 || got[0] != "global" || got[1] != "team-modules" {
+		t.Fatalf("sync_registries = %q, want global and team-modules", got)
 	}
 }

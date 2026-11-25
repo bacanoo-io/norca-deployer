@@ -187,6 +187,16 @@ func (r *Runner) deployRigger(first *target, token string) error {
 	}
 	defer prog.close()
 
+	// The servers fetch the modules of a stack only from a registry they
+	// have synced.
+	for _, name := range rc.SyncRegistries {
+		fmt.Printf("    Syncing the Rigger registry %s (%s)...\n", name, prog.name)
+
+		if err := prog.run("registry", "sync", name); err != nil {
+			return err
+		}
+	}
+
 	// A stack written in the plan has its lock in the state of the
 	// deployer: sync keeps its versions from one apply to the next.
 	if rc.StackHCL != "" {
