@@ -23,9 +23,9 @@ import (
 // The install script of a scaled machine: one POSIX sh script, generated
 // from the plan, that puts on a machine what the bootstrap of the node
 // scaling operator expects there: the norca binary, the CNI plugins,
-// norca-join, the directories and the systemd unit of the agent, and the
-// host packages, the sysctl tuning and the DNS forwarding of the consul
-// domain of a client. It runs when the image of the provider is built
+// norca-join, the directories and the service of the agent, and the host
+// packages, the sysctl tuning and the DNS forwarding of the consul domain
+// of a client. It runs when the image of the provider is built
 // (node_scaling.machine.install = image) or at the first boot, from the
 // bootstrap (boot). It renders the steps prepareNode runs on a client of
 // the inventory (the drivers of packages, service and tuning, the
@@ -33,8 +33,9 @@ import (
 // certificates and the firewall: the bootstrap writes the first two, the
 // cloud does the third. The machine is a machine the deployer never sees,
 // so the script finds out its family at run time and runs the steps of
-// that family: the host packages and the service of Debian (apt) and RHEL
-// (dnf, with the SELinux labels restored).
+// that family: the host packages and the service of Debian (apt, systemd),
+// RHEL (dnf, systemd, with the SELinux labels restored) and Alpine (apk,
+// OpenRC, its tuning and the musl build of norca).
 
 //go:embed machine_install.sh.tmpl
 var machineScriptText string
@@ -76,6 +77,9 @@ type machineScriptData struct {
 	// HasPackages: a family has host packages; HasRHEL: the RHEL family is
 	// one of them (the SELinux warning).
 	HasPackages, HasRHEL bool
+	// TuningByFamily and BinaryByFamily: the families have a tuning or a
+	// norca binary of their own (in their parts), not the common one.
+	TuningByFamily, BinaryByFamily bool
 	// Functions are the functions of the steps.
 	Functions string
 	// The rendered steps common to the families.
@@ -84,30 +88,41 @@ type machineScriptData struct {
 }
 
 // machineFamily is the part of the install script of one family: its host
-// packages and the service of the agent.
+// packages and the service of the agent, and its tuning and norca binary
+// when they differ between the families.
 type machineFamily struct {
-	Name, Manager, Packages, Service string
+	Name, Manager, Packages, Service, Tuning, Binary string
 }
 
-// machineFamilies are the families of the install script and the managers
-// of their packages.
+// machineFamilies are the families of the install script: the manager of
+// their packages, their init system, their tuning and the C library of
+// their norca binary.
 var machineFamilies = []struct {
 	family  string
 	manager string
 	driver  packages.Manager
+	service service.Manager
+	tuner   tuning.Tuner
+	libc    string
 }{
-	{config.FamilyDebian, config.PackageManagerApt, packages.Apt{}},
-	{config.FamilyRHEL, config.PackageManagerDnf, packages.Dnf{}},
+	{config.FamilyDebian, config.PackageManagerApt, packages.Apt{}, service.Systemd{}, tuning.Linux{}, artifacts.LibcGlibc},
+	{config.FamilyRHEL, config.PackageManagerDnf, packages.Dnf{}, service.Systemd{}, tuning.Linux{}, artifacts.LibcGlibc},
+	{config.FamilyAlpine, config.PackageManagerApk, packages.Apk{}, service.OpenRC{}, tuning.OpenRC{}, artifacts.LibcMusl},
 }
 
 // scriptFamilies returns the families the install script installs on, as
 // apply does for a client: a family whose manager has no block in
 // host_packages while another block selects packages for a client is left
-// out (the script stops on such a machine, as apply stops on such a node).
+// out (the script stops on such a machine, as apply stops on such a node),
+// and so is an OpenRC family when the plan forwards the consul domain
+// (consul.dns_forwarding needs systemd).
 func scriptFamilies(plan *config.DeploymentPlan, node *config.NodeConfig) []int {
 	var res []int
 	for i, f := range machineFamilies {
 		if _, has := packages.Block(plan.HostPackages, f.manager, node, false); !has && otherBlockSelects(plan, node, f.manager) {
+			continue
+		}
+		if _, openrc := f.service.(service.OpenRC); openrc && plan.Consul.DNSForwardingEnabled() {
 			continue
 		}
 		res = append(res, i)
@@ -168,8 +183,10 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	}
 
 	// Per family: the host packages of a client with the manager of the
-	// family, and the service (on RHEL with the SELinux labels).
+	// family, the service (on RHEL with the SELinux labels), the tuning and
+	// the norca binary.
 	var names []string
+	tunings, binaries := map[string]bool{}, map[string]bool{}
 	for _, i := range scriptFamilies(plan, node) {
 		f := machineFamilies[i]
 		sel, _ := packages.Block(plan.HostPackages, f.manager, node, false)
@@ -182,7 +199,7 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		if part.Packages, err = render(pkgSteps); err != nil {
 			return "", fmt.Errorf("host_packages.%s: %w", f.manager, err)
 		}
-		svc := service.Systemd{}.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)
+		svc := f.service.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)
 		if f.family == config.FamilyRHEL {
 			svc = append(svc, selinux.RestoreStep(selinux.NodePaths(paths), true))
 			data.HasRHEL = true
@@ -190,18 +207,40 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		if part.Service, err = render(svc); err != nil {
 			return "", err
 		}
+		if plan.Tuning.ApplySysctl {
+			if part.Tuning, err = render(f.tuner.Steps()); err != nil {
+				return "", err
+			}
+		}
+		bin, err := machineBinaryStep(ctx, plan, res, paths, arch, boot, f.libc)
+		if err != nil {
+			return "", err
+		}
+		if part.Binary, err = render([]step.Step{bin}); err != nil {
+			return "", err
+		}
+		tunings[part.Tuning], binaries[part.Binary] = true, true
 		data.HasPackages = data.HasPackages || part.Packages != ""
 		data.Parts = append(data.Parts, part)
 		names = append(names, f.family)
 	}
+	if len(names) == 0 {
+		return "", fmt.Errorf("the install script has no family to install on: every family's package manager lacks its block " +
+			"of host_packages while another block selects packages for a client, or (Alpine) consul.dns_forwarding needs systemd")
+	}
 	data.Families, data.FamilyPattern = strings.Join(names, ", "), strings.Join(names, " | ")
-
-	var err error
-	if plan.Tuning.ApplySysctl {
-		if data.Tuning, err = render(tuning.Linux{}.Steps()); err != nil {
-			return "", err
+	// A tuning or a binary that every family shares is rendered once.
+	data.TuningByFamily, data.BinaryByFamily = len(tunings) > 1, len(binaries) > 1
+	for i := range data.Parts {
+		if !data.TuningByFamily {
+			data.Tuning, data.Parts[i].Tuning = data.Parts[i].Tuning, ""
+		}
+		if !data.BinaryByFamily {
+			data.Binary, data.Parts[i].Binary = data.Parts[i].Binary, ""
 		}
 	}
+
+	var err error
 	if plan.Consul.DNSForwardingEnabled() {
 		dnsSteps, err := dns.Steps(plan.Consul.DNSForwarding)
 		if err != nil {
@@ -216,14 +255,6 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	// state directory of the script.
 	dirs := append(nodeDirs(node, paths, true), step.Dir{Path: cliStateDir, Mode: 0o700})
 	if data.Dirs, err = render([]step.Step{dirsStep(dirs)}); err != nil {
-		return "", err
-	}
-
-	bin, err := machineBinaryStep(ctx, plan, res, paths, arch, boot)
-	if err != nil {
-		return "", err
-	}
-	if data.Binary, err = render([]step.Step{bin}); err != nil {
 		return "", err
 	}
 
@@ -252,10 +283,10 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 
 // machineBinaryStep installs the norca binary on a machine: from the package
 // of release.source host-package (the step of the SSH path), from the file
-// the image build names (local-path), or from the release archive the
-// machine downloads and checks.
+// the image build names (local-path), or from the release archive of the C
+// library of the family (libc) that the machine downloads and checks.
 func machineBinaryStep(ctx context.Context, plan *config.DeploymentPlan, res *artifacts.Resolver, paths *storage.ResolvedPaths,
-	arch string, boot bool) (step.Step, error) {
+	arch string, boot bool, libc string) (step.Step, error) {
 	q := connector.ShellQuote
 	bin := paths.BinDir + "/norca"
 	switch plan.Release.Source {
@@ -282,7 +313,7 @@ func machineBinaryStep(ctx context.Context, plan *config.DeploymentPlan, res *ar
 				"put_file " + q(bin) + " 0755 <\"$norca_src\"",
 		}, nil
 	}
-	d, err := res.ReleaseDownload(ctx, "linux", arch, artifacts.LibcGlibc)
+	d, err := res.ReleaseDownload(ctx, "linux", arch, libc)
 	if err != nil {
 		return step.Step{}, fmt.Errorf("norca release: %w", err)
 	}

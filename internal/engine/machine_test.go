@@ -577,8 +577,11 @@ func TestInstallScriptFamilies(t *testing.T) {
 		{name: "apt only", plan: base, families: "debian"},
 		{name: "apt and dnf", plan: rhelMachinePlan(), families: "debian, rhel"},
 		{name: "dnf only", plan: dnfOnly, families: "rhel"},
-		{name: "no host packages", plan: noPackages, families: "debian, rhel"},
+		{name: "no host packages", plan: noPackages, families: "debian, rhel, alpine"},
 		{name: "an apt block of the servers only", plan: aptServersOnly, families: "debian, rhel"},
+		{name: "apt and apk", plan: alpineMachinePlan(), families: "debian, alpine"},
+		{name: "consul dns forwarding leaves alpine out", plan: strings.Replace(noPackages, "security:", "consul:\n  dns_forwarding: {enabled: true}\nsecurity:", 1),
+			families: "debian, rhel"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -598,11 +601,104 @@ func TestInstallScriptFamilies(t *testing.T) {
 	}
 }
 
+// apkBlock is an apk block for machinePlan: a tagged repository with its
+// key and a held package for the clients, a package of the servers.
+const apkBlock = `  apk:
+    repositories:
+      - name: mine
+        url: https://apk.example.com/v3.22/main
+        key_name: packager-6b0763be.rsa.pub
+        key: |
+          -----BEGIN PUBLIC KEY-----
+          MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAutQkua2CAig4VFSJ7v54
+          ALyu/J1WB3oni7qwCZD3veURw7HxpNAj9hR+S5N/pNeZgubQvJWyaPuQDm7PTs1+
+          tFGiYNfAsiibX6Rv0wci3M+z2XEVAeR9Vzg6v4qoofDyoTbovn2LztaNEjTkB+oK
+          tlvpNhg1zhou0jDVYFniEXvzjckxswHVb8cT0OMTKHALyLPrPOJzVtM9C1ew2Nnc
+          3848xLiApMu3NBk0JqfcS3Bo5Y2b1FRVBvdt+2gFoKZix1MnZdAEZ8xQzL/a0YS5
+          Hd0wj5+EEKHfOd3A75uPa/WQmA+o0cBFfrzm69QDcSJSwGpzWrD1ScH3AK8nWvoj
+          v7e9gukK/9yl1b4fQQ00vttwJPSgm9EnfPHLAtgXkRloI27H6/PuLoNvSAMQwuCD
+          hQRlyGLPBETKkHeodfLoULjhDi1K2gKJTMhtbnUcAA7nEphkMhPWkBpgFdrH+5z4
+          Lxy+3ek0cqcI7K68EtrffU8jtUj9LFTUC8dERaIBs7NgQ/LfDbDfGh9g6qVj1hZl
+          k9aaIPTm/xsi8v3u+0qaq7KzIBc9s59JOoA8TlpOaYdVgSQhHHLBaahOuAigH+VI
+          isbC9vmqsThF2QdDtQt37keuqoda2E6sL7PUvIyVXDRfwX7uMDjlzTxHTymvq2Ck
+          htBqojBnThmjJQFgZXocHG8CAwEAAQ==
+          -----END PUBLIC KEY-----
+        tagged: true
+        roles: [client]
+    install:
+      - {name: containerd, version: "1.7.27-r0", hold: true, roles: [client]}
+      - {name: norca-tools, repository: mine, roles: [client]}
+      - {name: jq}
+      - {name: etcd-only, roles: [master]}
+`
+
+// alpineMachinePlan is machinePlan with the apk block next to the apt
+// block.
+func alpineMachinePlan() string {
+	return strings.Replace(machinePlan(officialRelease, joinMachine), "node_scaling:", apkBlock+"node_scaling:", 1)
+}
+
+// The script of a plan with an apt and an apk block holds the packages, the
+// service, the tuning and the norca binary of both families: on Alpine the
+// apk steps, the OpenRC service, the tuning of OpenRC and the musl build of
+// the release.
+func TestInstallScriptAlpine(t *testing.T) {
+	script := generate(t, loadPlan(t, alpineMachinePlan()), MachineScriptOptions{})
+	for _, want := range []string{
+		"# Architecture: amd64. Families: debian, alpine.\n",
+		"debian | alpine) log \"family $os_family (${os_id})\" ;;",
+		"packages_alpine() {\n", "service_alpine() {\n", "tuning_alpine() {\n", "tuning_debian() {\n",
+		"binary_alpine() {\n", "binary_debian() {\n",
+		"debian) packages_debian ;;\nalpine) packages_alpine ;;\nesac",
+		"debian) service_debian ;;\nalpine) service_alpine ;;\nesac",
+		"debian) tuning_debian ;;\nalpine) tuning_alpine ;;\nesac",
+		"debian) binary_debian ;;\nalpine) binary_alpine ;;\nesac",
+		"put_file '/etc/apk/repositories.d/norca.list' 0644",
+		"@norca-mine https://apk.example.com/v3.22/main\n",
+		"put_file '/etc/apk/keys/packager-6b0763be.rsa.pub' 0644",
+		"apk --wait 300 add -q -U 'containerd=1.7.27-r0' 'norca-tools@norca-mine' 'jq'",
+		"apk_expect 'containerd' '1.7.27-r0'",
+		"put_file '/etc/init.d/norca' 0755",
+		"rc-update add norca default",
+		"sysctl -p /etc/sysctl.d/99-norca-production.conf",
+		"fetch 'https://mirror.example/norca/v0.3.0/norca_0.3.0_linux_amd64_musl.tar.gz' \"$work/norca.tar.gz\"",
+		"fetch 'https://mirror.example/norca/v0.3.0/norca_0.3.0_linux_amd64.tar.gz' \"$work/norca.tar.gz\"",
+		// The functions of both managers, each once.
+		"\nexpect_package() {\n", "\napk_expect() {\n",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script has no %q", want)
+		}
+	}
+	for _, unwanted := range []string{"etcd-only", "cmp -s", "pipefail", "[[", "<<<", "getenforce"} {
+		if strings.Contains(script, unwanted) {
+			t.Errorf("the script has %q", unwanted)
+		}
+	}
+	alpine := script[strings.Index(script, "service_alpine() {"):]
+	alpine = alpine[:strings.Index(alpine, "\n}\n")]
+	if strings.Contains(alpine, "systemctl") || strings.Contains(alpine, "/etc/systemd/system") {
+		t.Errorf("the service of Alpine is a unit of systemd:\n%s", alpine)
+	}
+	if strings.Count(script, "\napk_version() {\n") != 1 || strings.Count(script, "\nexpect_package() {\n") != 1 {
+		t.Error("a function is defined twice")
+	}
+	// Only the apk block, with consul.dns_forwarding: no family is left.
+	base := machinePlan(officialRelease, "")
+	apkOnly := base[:strings.Index(base, "host_packages:")] + "consul:\n  dns_forwarding: {enabled: true}\nhost_packages:\n" + apkBlock + base[strings.Index(base, "node_scaling:"):]
+	plan := loadPlan(t, apkOnly)
+	if _, err := GenerateInstallScript(t.Context(), plan, artifacts.NewResolver(plan, t.TempDir()), MachineScriptOptions{}); err == nil ||
+		!strings.Contains(err.Error(), "no family to install on") {
+		t.Fatalf("a script without a family: %v", err)
+	}
+}
+
 // machineScriptPlans are the plans of the install scripts of the tests
 // above.
 func machineScriptPlans() map[string]string {
 	return map[string]string{
 		"rhel":     rhelMachinePlan(),
+		"alpine":   alpineMachinePlan(),
 		"official": machinePlan(officialRelease, joinMachine),
 		"boot":     machinePlan(officialRelease, "  machine: {install: boot}"),
 		"local":    machinePlan(`release: {version: v0.3.0, source: local-path, local_binary_path: ./norca}`, ""),

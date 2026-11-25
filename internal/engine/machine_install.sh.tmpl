@@ -8,10 +8,10 @@
 # by hand); the machines of the image then need no download at boot.{{end}}
 # Architecture: {{.Arch}}. Families: {{.Families}}.
 #
-# It installs {{if .HasPackages}}the host packages, {{end}}{{if .Tuning}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
-# {{if .CNI}}the CNI plugins, {{end}}norca-join and the systemd unit of the agent, which it enables but
-# does not start: the bootstrap (or norca-join) starts it once the configuration
-# and the certificate are there.{{if .HasRHEL}} On RHEL it restores the SELinux labels
+# It installs {{if .HasPackages}}the host packages, {{end}}{{if or .Tuning .TuningByFamily}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
+# {{if .CNI}}the CNI plugins, {{end}}norca-join and the service of the agent (systemd; OpenRC on Alpine), which it
+# enables but does not start: the bootstrap (or norca-join) starts it once the
+# configuration and the certificate are there.{{if .HasRHEL}} On RHEL it restores the SELinux labels
 # of what it changed.{{end}} It does not open the firewall: that is the
 # security group of the cloud or the image (the ranges of the region are in the
 # Variable nodescaler/network/{{.Region}}).
@@ -208,6 +208,20 @@ packages_{{.Name}}() {
 {{.Packages}}
 }
 {{- end}}
+{{- if .Tuning}}
+
+# Host tuning of the {{.Name}} family: kernel modules and sysctl (tuning.apply_sysctl)
+tuning_{{.Name}}() {
+{{.Tuning}}
+}
+{{- end}}
+{{- if .Binary}}
+
+# The norca binary ({{$.Version}}) of the {{.Name}} family
+binary_{{.Name}}() {
+{{.Binary}}
+}
+{{- end}}
 
 # The service of the agent on the {{.Name}} family: enabled, not started
 service_{{.Name}}() {
@@ -229,6 +243,15 @@ esac
 log "sysctl tuning"
 {{.Tuning}}
 {{- end}}
+{{- if .TuningByFamily}}
+
+log "sysctl tuning"
+case $os_family in
+{{- range .Parts}}
+{{.Name}}) tuning_{{.Name}} ;;
+{{- end}}
+esac
+{{- end}}
 {{- if .DNS}}
 
 # DNS of the host: the consul domain goes to the local Consul agent
@@ -239,9 +262,17 @@ log "consul DNS forwarding"
 {{- end}}
 
 {{.Dirs}}
-
+{{if .BinaryByFamily}}
+# The norca binary ({{.Version}}) of the family
+case $os_family in
+{{- range .Parts}}
+{{.Name}}) binary_{{.Name}} ;;
+{{- end}}
+esac
+{{- else}}
 # The norca binary ({{.Version}})
 {{.Binary}}
+{{- end}}
 {{- if .CNI}}
 
 # The CNI plugins
