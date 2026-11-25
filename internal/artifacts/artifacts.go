@@ -11,6 +11,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
+	"debug/elf"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -85,58 +86,137 @@ func (r *Resolver) memo(key string, fn func() (*File, error)) (*File, error) {
 	return res.file, res.err
 }
 
-// NorcaBinary returns the norca binary for a platform.
-func (r *Resolver) NorcaBinary(ctx context.Context, goos, arch string) (*File, error) {
-	return r.ReleaseBinary(ctx, "norca", goos, arch)
+// The C libraries of the Linux builds of Norca: the release is built with
+// cgo, so a binary runs only with the C library it was built against.
+const (
+	// LibcGlibc is the default Linux build (glibc 2.31 and newer); a
+	// platform without a C library of its own (windows) takes it too.
+	LibcGlibc = "glibc"
+	// LibcMusl is the build for Alpine Linux: the release archives
+	// norca_<version>_linux_<arch>_musl.tar.gz.
+	LibcMusl = "musl"
+)
+
+// libcSuffix is the suffix of the names of a build of a C library: _musl
+// for musl, nothing for glibc.
+func libcSuffix(libc string) string {
+	if libc == LibcMusl {
+		return "_musl"
+	}
+	return ""
 }
 
-// ReleaseBinary returns a binary of the release archive for a platform.
-func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch string) (*File, error) {
-	return r.memo(name+"/"+goos+"/"+arch, func() (*File, error) {
-		rel := r.plan.Release
-		binName := name
-		if goos == "windows" {
-			binName = name + ".exe"
+// NorcaBinary returns the norca binary for a platform; libc is the C
+// library of a Linux node (LibcGlibc or LibcMusl).
+func (r *Resolver) NorcaBinary(ctx context.Context, goos, arch, libc string) (*File, error) {
+	return r.ReleaseBinary(ctx, "norca", goos, arch, libc)
+}
+
+// ReleaseBinary returns a binary of the release archive for a platform. A
+// Linux binary of the other C library than the node's is refused (an ELF
+// interpreter of glibc for an Alpine node, of musl for the others).
+func (r *Resolver) ReleaseBinary(ctx context.Context, name, goos, arch, libc string) (*File, error) {
+	suffix := libcSuffix(libc)
+	return r.memo(name+"/"+goos+"/"+arch+suffix, func() (*File, error) {
+		f, err := r.releaseBinary(ctx, name, goos, arch, libc)
+		if err != nil || goos != "linux" {
+			return f, err
 		}
-		switch rel.Source {
-		case config.ReleaseLocalPath:
-			src := r.plan.ResolveLocalPath(expand(rel.LocalBinaryPath, goos, arch))
-			if isArchive(src) {
-				if err := verifyOptional(src, rel.ChecksumSHA256); err != nil {
-					return nil, err
-				}
-				dest := filepath.Join(r.cacheDir, "norca", "local", goos+"_"+arch, binName)
-				if err := extractBinary(src, binName, dest); err != nil {
-					return nil, err
-				}
-				return fileWithDigest(dest)
-			}
+		if err := checkLibc(f.Path, libc); err != nil {
+			return nil, err
+		}
+		return f, nil
+	})
+}
+
+func (r *Resolver) releaseBinary(ctx context.Context, name, goos, arch, libc string) (*File, error) {
+	rel := r.plan.Release
+	binName := name
+	if goos == "windows" {
+		binName = name + ".exe"
+	}
+	target := goos + "_" + arch + libcSuffix(libc)
+	switch rel.Source {
+	case config.ReleaseLocalPath:
+		src := r.plan.ResolveLocalPath(expandRelease(rel.LocalBinaryPath, goos, arch, libc))
+		if isArchive(src) {
 			if err := verifyOptional(src, rel.ChecksumSHA256); err != nil {
 				return nil, err
 			}
-			return fileWithDigest(src)
-
-		case config.ReleaseOfficial, config.ReleaseCustomURL:
-			var archive string
-			rf, err := r.withSums(func(fresh bool) (*remoteFile, error) {
-				rf, err := r.releaseArchive(ctx, goos, arch, fresh)
-				if err != nil {
-					return rf, err
-				}
-				archive = filepath.Join(rf.dir, rf.name)
-				return rf, r.download(ctx, rf.url, archive, rf.sha256)
-			})
-			if err != nil {
-				return nil, err
-			}
-			dest := filepath.Join(rf.dir, goos+"_"+arch, binName)
-			if err := extractBinary(archive, binName, dest); err != nil {
+			dest := filepath.Join(r.cacheDir, "norca", "local", target, binName)
+			if err := extractBinary(src, binName, dest); err != nil {
 				return nil, err
 			}
 			return fileWithDigest(dest)
 		}
-		return nil, fmt.Errorf("release source %q does not provide a binary", rel.Source)
-	})
+		if err := verifyOptional(src, rel.ChecksumSHA256); err != nil {
+			return nil, err
+		}
+		return fileWithDigest(src)
+
+	case config.ReleaseOfficial, config.ReleaseCustomURL:
+		var archive string
+		rf, err := r.withSums(func(fresh bool) (*remoteFile, error) {
+			rf, err := r.releaseArchive(ctx, goos, arch, libc, fresh)
+			if err != nil {
+				return rf, err
+			}
+			archive = filepath.Join(rf.dir, rf.name)
+			return rf, r.download(ctx, rf.url, archive, rf.sha256)
+		})
+		if err != nil {
+			return nil, err
+		}
+		dest := filepath.Join(rf.dir, target, binName)
+		if err := extractBinary(archive, binName, dest); err != nil {
+			return nil, err
+		}
+		return fileWithDigest(dest)
+	}
+	return nil, fmt.Errorf("release source %q does not provide a binary", rel.Source)
+}
+
+// BinaryLibc returns the C library an executable needs, by its ELF
+// interpreter: LibcGlibc, LibcMusl, "static" (no interpreter), or "unknown"
+// for an ELF file of another loader. A file that is not ELF gives "" (it is
+// not checked).
+func BinaryLibc(path string) string {
+	f, err := elf.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	for _, p := range f.Progs {
+		if p.Type != elf.PT_INTERP {
+			continue
+		}
+		data := make([]byte, min(p.Filesz, 4096))
+		if _, err := p.ReadAt(data, 0); err != nil {
+			return "unknown"
+		}
+		interp := strings.TrimRight(string(data), "\x00")
+		switch {
+		case strings.Contains(interp, "ld-musl-"):
+			return LibcMusl
+		case strings.Contains(interp, "ld-linux"):
+			return LibcGlibc
+		}
+		return "unknown"
+	}
+	return "static"
+}
+
+// checkLibc refuses a Linux binary of the other C library than the node's.
+func checkLibc(path, libc string) error {
+	switch got := BinaryLibc(path); {
+	case libc == LibcMusl && got == LibcGlibc:
+		return fmt.Errorf("%s is a glibc build of norca: Alpine nodes need the musl build "+
+			"(the release archive norca_<version>_linux_<arch>_musl.tar.gz, or {musl} in release.local_binary_path)", path)
+	case libc != LibcMusl && got == LibcMusl:
+		return fmt.Errorf("%s is a musl build of norca (for Alpine): this node needs the glibc build "+
+			"(the release archive norca_<version>_linux_<arch>.tar.gz; {musl} in release.local_binary_path is empty for it)", path)
+	}
+	return nil
 }
 
 // remoteFile is a file of a release on the internet: its URL, its name, the
@@ -183,16 +263,17 @@ func (r *Resolver) sums(ctx context.Context, url, dest, name string, fresh bool)
 }
 
 // releaseArchive resolves the release archive of a platform (sources
-// official and custom-url). Without release.checksum_sha256 the digest comes
-// from the SHA256SUMS file of the release, downloaded once and cached.
-func (r *Resolver) releaseArchive(ctx context.Context, goos, arch string, fresh bool) (*remoteFile, error) {
+// official and custom-url): norca_<version>_<os>_<arch>[_musl].tar.gz.
+// Without release.checksum_sha256 the digest comes from the SHA256SUMS file
+// of the release, downloaded once and cached.
+func (r *Resolver) releaseArchive(ctx context.Context, goos, arch, libc string, fresh bool) (*remoteFile, error) {
 	rel := r.plan.Release
 	version := strings.TrimPrefix(rel.Version, "v")
 	ext := ".tar.gz"
 	if goos == "windows" {
 		ext = ".zip"
 	}
-	archiveName := fmt.Sprintf("norca_%s_%s_%s%s", version, goos, arch, ext)
+	archiveName := fmt.Sprintf("norca_%s_%s_%s%s%s", version, goos, arch, libcSuffix(libc), ext)
 	sumsName := fmt.Sprintf("norca_%s_SHA256SUMS", version)
 	base := strings.TrimRight(rel.DownloadBaseURL, "/") + "/" + rel.Version + "/"
 	dir := filepath.Join(r.cacheDir, "norca", version)
@@ -268,13 +349,13 @@ type Download struct {
 // platform, the one ReleaseBinary downloads and extracts, without
 // downloading it. Only the sources official and custom-url have one; the
 // SHA256SUMS of the release is downloaded when the plan has no checksum.
-func (r *Resolver) ReleaseDownload(ctx context.Context, goos, arch string) (*Download, error) {
+func (r *Resolver) ReleaseDownload(ctx context.Context, goos, arch, libc string) (*Download, error) {
 	switch r.plan.Release.Source {
 	case config.ReleaseOfficial, config.ReleaseCustomURL:
 	default:
 		return nil, fmt.Errorf("release source %q has no download URL", r.plan.Release.Source)
 	}
-	rf, err := r.releaseArchive(ctx, goos, arch, false)
+	rf, err := r.releaseArchive(ctx, goos, arch, libc, false)
 	if err != nil {
 		return nil, err
 	}
@@ -297,6 +378,13 @@ func (r *Resolver) CNIDownload(ctx context.Context, arch string) (*Download, err
 
 func expand(p, goos, arch string) string {
 	return strings.NewReplacer("{os}", goos, "{arch}", arch).Replace(p)
+}
+
+// expandRelease replaces the placeholders of release.local_binary_path:
+// {os}, {arch}, and {musl}, which is _musl for the musl build (Alpine) and
+// empty otherwise, as in the names of the release archives.
+func expandRelease(p, goos, arch, libc string) string {
+	return strings.ReplaceAll(expand(p, goos, arch), "{musl}", libcSuffix(libc))
 }
 
 func isArchive(p string) bool {

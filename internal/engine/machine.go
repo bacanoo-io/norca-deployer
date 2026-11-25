@@ -282,7 +282,7 @@ func machineBinaryStep(ctx context.Context, plan *config.DeploymentPlan, res *ar
 				"put_file " + q(bin) + " 0755 <\"$norca_src\"",
 		}, nil
 	}
-	d, err := res.ReleaseDownload(ctx, "linux", arch)
+	d, err := res.ReleaseDownload(ctx, "linux", arch, artifacts.LibcGlibc)
 	if err != nil {
 		return step.Step{}, fmt.Errorf("norca release: %w", err)
 	}

@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
+	"debug/elf"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -55,7 +57,7 @@ func TestOfficialReleaseVerifiedAndCached(t *testing.T) {
 
 	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{Version: "v1.2.3", Source: config.ReleaseCustomURL, DownloadBaseURL: srv.URL}}
 	cache := t.TempDir()
-	f, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64")
+	f, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64", LibcGlibc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +68,7 @@ func TestOfficialReleaseVerifiedAndCached(t *testing.T) {
 	// A second resolver reuses the cached archive and the cached sums file:
 	// it asks the server nothing.
 	before := hits.Load()
-	if _, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64"); err != nil {
+	if _, err := NewResolver(plan, cache).NorcaBinary(t.Context(), "linux", "amd64", LibcGlibc); err != nil {
 		t.Fatal(err)
 	}
 	if hits.Load() != before {
@@ -221,11 +223,152 @@ func TestLocalArchiveWithPlaceholders(t *testing.T) {
 	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{
 		Source: config.ReleaseLocalPath, LocalBinaryPath: filepath.Join(dir, "norca_{os}_{arch}.tar.gz"),
 	}}
-	f, err := NewResolver(plan, t.TempDir()).NorcaBinary(t.Context(), "linux", "arm64")
+	f, err := NewResolver(plan, t.TempDir()).NorcaBinary(t.Context(), "linux", "arm64", LibcGlibc)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(f.Path); string(data) != "arm binary" {
 		t.Fatalf("extracted %q", data)
+	}
+}
+
+// fakeELF writes a minimal ELF executable of x86-64 whose interpreter is
+// interp; an empty interp makes a static one (no PT_INTERP).
+func fakeELF(t *testing.T, path, interp string) {
+	t.Helper()
+	var buf bytes.Buffer
+	hdr := elf.Header64{
+		Type: uint16(elf.ET_EXEC), Machine: uint16(elf.EM_X86_64), Version: uint32(elf.EV_CURRENT),
+		Phoff: 64, Ehsize: 64, Phentsize: 56,
+	}
+	copy(hdr.Ident[:], elf.ELFMAG)
+	hdr.Ident[elf.EI_CLASS], hdr.Ident[elf.EI_DATA], hdr.Ident[elf.EI_VERSION] = byte(elf.ELFCLASS64), byte(elf.ELFDATA2LSB), byte(elf.EV_CURRENT)
+	if interp != "" {
+		hdr.Phnum = 1
+	}
+	if err := binary.Write(&buf, binary.LittleEndian, hdr); err != nil {
+		t.Fatal(err)
+	}
+	if interp != "" {
+		prog := elf.Prog64{Type: uint32(elf.PT_INTERP), Flags: uint32(elf.PF_R), Off: 64 + 56,
+			Filesz: uint64(len(interp) + 1), Memsz: uint64(len(interp) + 1), Align: 1}
+		if err := binary.Write(&buf, binary.LittleEndian, prog); err != nil {
+			t.Fatal(err)
+		}
+		buf.WriteString(interp + "\x00")
+	}
+	if err := os.WriteFile(path, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The C library of a binary is read from its interpreter: glibc, musl,
+// static (none), or not known (not an ELF file).
+func TestBinaryLibc(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name, interp, content, want string
+	}{
+		{name: "glibc", interp: "/lib64/ld-linux-x86-64.so.2", want: LibcGlibc},
+		{name: "glibc arm64", interp: "/lib/ld-linux-aarch64.so.1", want: LibcGlibc},
+		{name: "musl", interp: "/lib/ld-musl-x86_64.so.1", want: LibcMusl},
+		{name: "static", want: "static"},
+		{name: "not elf", content: "binary", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-"))
+			if tt.content != "" {
+				if err := os.WriteFile(p, []byte(tt.content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				fakeELF(t, p, tt.interp)
+			}
+			if got := BinaryLibc(p); got != tt.want {
+				t.Fatalf("BinaryLibc = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// An Alpine node gets the musl archive of the release (norca_<version>_
+// linux_<arch>_musl.tar.gz); a binary of the other C library is refused
+// with what to use.
+func TestMuslReleaseArchive(t *testing.T) {
+	dir := t.TempDir()
+	glibcBin, muslBin := filepath.Join(dir, "glibc"), filepath.Join(dir, "musl")
+	fakeELF(t, glibcBin, "/lib64/ld-linux-x86-64.so.2")
+	fakeELF(t, muslBin, "/lib/ld-musl-x86_64.so.1")
+	glibc, _ := os.ReadFile(glibcBin)
+	musl, _ := os.ReadFile(muslBin)
+	archives := map[string][]byte{
+		"norca_1.2.3_linux_amd64.tar.gz":      tarGz(t, "norca_1.2.3_linux_amd64/norca", glibc),
+		"norca_1.2.3_linux_amd64_musl.tar.gz": tarGz(t, "norca_1.2.3_linux_amd64_musl/norca", musl),
+		// A musl archive that holds a glibc binary.
+		"norca_1.2.3_linux_arm64_musl.tar.gz": tarGz(t, "norca_1.2.3_linux_arm64_musl/norca", glibc),
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1.2.3/norca_1.2.3_SHA256SUMS" {
+			for name, data := range archives {
+				fmt.Fprintf(w, "%s  %s\n", hexSum(data), name)
+			}
+			return
+		}
+		if data, ok := archives[strings.TrimPrefix(r.URL.Path, "/v1.2.3/")]; ok {
+			w.Write(data)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{Version: "v1.2.3", Source: config.ReleaseCustomURL, DownloadBaseURL: srv.URL}}
+	res := quickResolver(plan, t.TempDir())
+	for libc, want := range map[string][]byte{LibcGlibc: glibc, LibcMusl: musl} {
+		f, err := res.NorcaBinary(t.Context(), "linux", "amd64", libc)
+		if err != nil {
+			t.Fatalf("%q: %v", libc, err)
+		}
+		if data, _ := os.ReadFile(f.Path); !bytes.Equal(data, want) {
+			t.Fatalf("%q: the binary of the other C library", libc)
+		}
+	}
+	if d, err := res.ReleaseDownload(t.Context(), "linux", "amd64", LibcMusl); err != nil || !strings.HasSuffix(d.URL, "/v1.2.3/norca_1.2.3_linux_amd64_musl.tar.gz") ||
+		d.SHA256 != hexSum(archives["norca_1.2.3_linux_amd64_musl.tar.gz"]) {
+		t.Fatalf("ReleaseDownload musl = %+v, %v", d, err)
+	}
+	if _, err := res.NorcaBinary(t.Context(), "linux", "arm64", LibcMusl); err == nil || !strings.Contains(err.Error(), "is a glibc build of norca") ||
+		!strings.Contains(err.Error(), "Alpine nodes need the musl build") {
+		t.Fatalf("a glibc binary for an Alpine node: %v", err)
+	}
+}
+
+// local-path: {musl} is _musl for an Alpine node and empty for the others,
+// as in the names of the release archives.
+func TestLocalPathMusl(t *testing.T) {
+	dir := t.TempDir()
+	fakeELF(t, filepath.Join(dir, "norca_linux_amd64"), "/lib64/ld-linux-x86-64.so.2")
+	fakeELF(t, filepath.Join(dir, "norca_linux_amd64_musl"), "/lib/ld-musl-x86_64.so.1")
+	plan := &config.DeploymentPlan{Release: config.ReleaseConfig{
+		Source: config.ReleaseLocalPath, LocalBinaryPath: filepath.Join(dir, "norca_{os}_{arch}{musl}"),
+	}}
+	res := NewResolver(plan, t.TempDir())
+	for libc, want := range map[string]string{LibcGlibc: "norca_linux_amd64", LibcMusl: "norca_linux_amd64_musl"} {
+		f, err := res.NorcaBinary(t.Context(), "linux", "amd64", libc)
+		if err != nil || filepath.Base(f.Path) != want {
+			t.Fatalf("%q: %+v %v", libc, f, err)
+		}
+	}
+	// Without {musl} an Alpine node would get the glibc build: refused.
+	plan.Release.LocalBinaryPath = filepath.Join(dir, "norca_{os}_{arch}")
+	if _, err := NewResolver(plan, t.TempDir()).NorcaBinary(t.Context(), "linux", "amd64", LibcMusl); err == nil ||
+		!strings.Contains(err.Error(), "{musl} in release.local_binary_path") {
+		t.Fatalf("a glibc binary for an Alpine node: %v", err)
+	}
+	// A musl build for a node of glibc.
+	plan.Release.LocalBinaryPath = filepath.Join(dir, "norca_linux_amd64_musl")
+	if _, err := NewResolver(plan, t.TempDir()).NorcaBinary(t.Context(), "linux", "amd64", LibcGlibc); err == nil ||
+		!strings.Contains(err.Error(), "is a musl build of norca") {
+		t.Fatalf("a musl binary for a node of glibc: %v", err)
 	}
 }

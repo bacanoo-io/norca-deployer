@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 
+	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform"
@@ -84,7 +85,7 @@ func (r *Runner) binaryStep(t *target) (step.Step, error) {
 	if t.isWindows() {
 		goos, dest = "windows", t.paths.BinDir+`\norca.exe`
 	}
-	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch)
+	file, err := r.artifacts.NorcaBinary(r.abortCtx(), goos, t.node.Arch, artifacts.LibcGlibc)
 	if err != nil {
 		return step.Step{}, err
 	}
