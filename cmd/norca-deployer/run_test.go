@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,11 +65,63 @@ func TestErrorsGoToStderrNotStdout(t *testing.T) {
 
 func TestValidatePrintsToStdout(t *testing.T) {
 	code, stdout, stderr := execute(t, "validate", "-c", exampleSingleNode)
-	if code != exitOK || stderr != "" {
+	if code != exitOK || !onlyWarnings(stderr) {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}
 	if !strings.Contains(stdout, "[OK] Configuration is valid!") {
 		t.Fatalf("stdout = %q", stdout)
+	}
+}
+
+// onlyWarnings reports whether every line of stderr is a warning.
+func onlyWarnings(stderr string) bool {
+	for line := range strings.SplitSeq(strings.TrimSuffix(stderr, "\n"), "\n") {
+		if line != "" && !strings.HasPrefix(line, "[WARN] ") {
+			return false
+		}
+	}
+	return true
+}
+
+// apkOnlyPlan installs a package of apk on every node: it works only if
+// every Linux node uses apk.
+const apkOnlyPlan = `metadata: {name: prod, region: eu}
+release: {version: v0.3.0}
+host_packages:
+  apk:
+    install:
+      - {name: jq}
+inventory:
+  masters:
+    - {host: 10.0.0.1}
+`
+
+// validate warns of what only the facts of the nodes decide (a block of
+// host_packages every node takes, while another package manager has none),
+// and the plan stays valid: on stderr with the text output, in the
+// document with JSON.
+func TestValidateWarns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "plan.yaml")
+	if err := os.WriteFile(path, []byte(apkOnlyPlan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const warning = "host_packages: every Linux node of the inventory takes packages or repositories of host_packages.apk, " +
+		"and the plan has no block for apt or dnf: it works only if every Linux node uses apk. " +
+		"apply checks this against the package manager it finds on each node, before it changes anything"
+	code, stdout, stderr := execute(t, "validate", "-c", path)
+	if code != exitOK || !strings.Contains(stdout, "[OK] Configuration is valid!") || stderr != "[WARN] "+warning+"\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	code, stdout, stderr = execute(t, "validate", "-c", path, "-o", "json")
+	var res struct {
+		Valid    bool     `json:"valid"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &res); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout)
+	}
+	if code != exitOK || stderr != "" || !res.Valid || len(res.Warnings) != 1 || res.Warnings[0] != warning {
+		t.Fatalf("code=%d stderr=%q result=%+v", code, stderr, res)
 	}
 }
 

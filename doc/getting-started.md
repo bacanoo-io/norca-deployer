@@ -61,6 +61,8 @@ go build -o bin/norca-deployer ./cmd/norca-deployer
    norca-deployer plan -c cluster-deploy.yaml       # dry run: nodes, release, rollout settings
    ```
 
+   `validate` does not connect to the nodes. What depends on them, such as which block of `host_packages` each node takes, is a `[WARN]` line there; `apply` checks it against each node before it changes anything (see [Host packages and scripts](host-packages-and-scripts.md#which-block-a-node-takes)).
+
 4. **Deploy.**
 
    ```sh

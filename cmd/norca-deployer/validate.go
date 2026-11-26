@@ -26,11 +26,17 @@ func newValidateCmd() *cobra.Command {
 				}
 				return fmt.Errorf("invalid configuration: %w", err)
 			}
+			// What only the facts of the nodes decide: apply checks it.
+			warnings := plan.Warnings()
 			if *format == formatJSON {
 				return writeJSON(out, validateResult{
 					Valid: true, Cluster: plan.Metadata.Name, Region: plan.Metadata.Region,
 					Masters: len(plan.Inventory.Masters), Clients: len(plan.Inventory.Clients),
+					Warnings: warnings,
 				})
+			}
+			for _, w := range warnings {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[WARN] %s\n", w)
 			}
 			fmt.Fprintf(out, "[OK] Configuration is valid! (cluster: %s, masters: %d, clients: %d)\n",
 				plan.Metadata.Name, len(plan.Inventory.Masters), len(plan.Inventory.Clients))

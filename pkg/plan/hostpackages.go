@@ -91,6 +91,110 @@ func AppliesTo(roles, hosts []string, node *NodeConfig, isMaster bool) bool {
 	return true
 }
 
+// selector is the roles and hosts of an entry of host_packages.
+type selector struct {
+	roles, hosts []string
+}
+
+// blockSelectors returns the selectors of the repositories and the packages
+// of a block.
+func blockSelectors[R any](repos []R, rolesOf func(*R) []string, install []HostPackage) []selector {
+	res := make([]selector, 0, len(repos)+len(install))
+	for i := range repos {
+		res = append(res, selector{roles: rolesOf(&repos[i])})
+	}
+	for i := range install {
+		res = append(res, selector{roles: install[i].Roles, hosts: install[i].Hosts})
+	}
+	return res
+}
+
+// hostPackagesWarning warns of host_packages that work only if every Linux
+// node uses a package manager the plan has a block of: a block has packages
+// or repositories that every Linux node of the inventory takes (not
+// narrowed to some of them by roles or hosts), while another manager has no
+// block. Apply refuses a node of such a manager; without the facts of the
+// nodes the plan cannot tell whether it has one. "" when it is not so.
+func (p *DeploymentPlan) hostPackagesWarning() string {
+	hp := p.HostPackages
+	if hp == nil {
+		return ""
+	}
+	blocks := []struct {
+		manager   string
+		has       bool
+		selectors []selector
+	}{
+		{manager: PackageManagerApt, has: hp.Apt != nil},
+		{manager: PackageManagerDnf, has: hp.Dnf != nil},
+		{manager: PackageManagerApk, has: hp.Apk != nil},
+	}
+	if hp.Apt != nil {
+		blocks[0].selectors = blockSelectors(hp.Apt.Repositories, func(r *AptRepository) []string { return r.Roles }, hp.Apt.Install)
+	}
+	if hp.Dnf != nil {
+		blocks[1].selectors = blockSelectors(hp.Dnf.Repositories, func(r *DnfRepository) []string { return r.Roles }, hp.Dnf.Install)
+	}
+	if hp.Apk != nil {
+		blocks[2].selectors = blockSelectors(hp.Apk.Repositories, func(r *ApkRepository) []string { return r.Roles }, hp.Apk.Install)
+	}
+
+	// The Linux nodes: Windows nodes take no packages.
+	type linuxNode struct {
+		node     *NodeConfig
+		isMaster bool
+	}
+	var nodes []linuxNode
+	for i := range p.Inventory.Masters {
+		if p.Inventory.Masters[i].Platform == "linux" {
+			nodes = append(nodes, linuxNode{node: &p.Inventory.Masters[i], isMaster: true})
+		}
+	}
+	for i := range p.Inventory.Clients {
+		if p.Inventory.Clients[i].Platform == "linux" {
+			nodes = append(nodes, linuxNode{node: &p.Inventory.Clients[i]})
+		}
+	}
+	if len(nodes) == 0 {
+		return ""
+	}
+	everyNode := func(s selector) bool {
+		for _, n := range nodes {
+			if !AppliesTo(s.roles, s.hosts, n.node, n.isMaster) {
+				return false
+			}
+		}
+		return true
+	}
+
+	var taken, present, missing []string
+	for _, b := range blocks {
+		if !b.has {
+			missing = append(missing, b.manager)
+			continue
+		}
+		present = append(present, b.manager)
+		if slices.ContainsFunc(b.selectors, everyNode) {
+			taken = append(taken, "host_packages."+b.manager)
+		}
+	}
+	if len(taken) == 0 || len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("host_packages: every Linux node of the inventory takes packages or repositories of %s, "+
+		"and the plan has no block for %s: it works only if every Linux node uses %s. "+
+		"apply checks this against the package manager it finds on each node, before it changes anything",
+		joinWords(taken, "and"), joinWords(missing, "or"), joinWords(present, "or"))
+}
+
+// joinWords joins words as a sentence does: "a", "a or b", "a, b or c".
+func joinWords(words []string, conj string) string {
+	if len(words) < 2 {
+		return strings.Join(words, "")
+	}
+	return strings.Join(words[:len(words)-1], ", ") + " " + conj + " " + words[len(words)-1]
+}
+
 // RepositoryKey returns the key of a repository, ASCII-armored or binary.
 func (p *DeploymentPlan) RepositoryKey(r *AptRepository) ([]byte, error) {
 	if r.Key != "" {

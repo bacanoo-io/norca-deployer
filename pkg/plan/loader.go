@@ -403,6 +403,17 @@ func (p *DeploymentPlan) fillWindowsPathDefaults(pc *PathConfig) {
 	}
 }
 
+// Warnings are what validate reports about a valid plan without refusing
+// it: what only the facts of the nodes decide, which apply checks before it
+// changes anything.
+func (p *DeploymentPlan) Warnings() []string {
+	var res []string
+	if w := p.hostPackagesWarning(); w != "" {
+		res = append(res, w)
+	}
+	return res
+}
+
 // Validate verifies logical and structural requirements of the plan.
 func (p *DeploymentPlan) Validate() error {
 	if p.hasPacksKey {

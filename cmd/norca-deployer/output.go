@@ -51,6 +51,9 @@ type validateResult struct {
 	Region  string `json:"region,omitempty"`
 	Masters int    `json:"masters"`
 	Clients int    `json:"clients"`
+	// Warnings are what only the facts of the nodes decide, which apply
+	// checks; the plan is valid with them.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // planResult is the JSON output of `plan`.

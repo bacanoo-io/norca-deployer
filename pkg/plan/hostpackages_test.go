@@ -124,3 +124,70 @@ func TestSaveToFileIsPrivate(t *testing.T) {
 		t.Fatalf("mode = %v, want 0600", info.Mode().Perm())
 	}
 }
+
+// validate warns of host_packages that work only if every Linux node uses
+// the package managers the plan has blocks of: a block whose packages or
+// repositories every Linux node of the inventory takes, while another
+// manager has no block. The plan stays valid: apply decides with the
+// package manager it finds on each node.
+func TestHostPackagesWarnings(t *testing.T) {
+	const head = "metadata: {name: prod, region: eu}\nrelease: {version: v0.3.0}\n"
+	const servers = "inventory:\n  masters:\n    - {host: 10.0.0.1}\n"
+	const serverAndClient = servers + "  clients:\n    - {host: 10.0.0.2}\n"
+	const windowsClient = serverAndClient + "    - {host: 10.0.0.3, platform: windows, connection: {mode: ssh, ssh_user: admin}}\n"
+	apkOnly := "  apk:\n    install:\n      - {name: jq}\n"
+	tests := []struct {
+		name, packages, inventory string
+		// want are the parts of the one warning; none: no warning.
+		want []string
+	}{
+		{name: "apk for every node", packages: apkOnly, inventory: serverAndClient, want: []string{
+			"host_packages: every Linux node of the inventory takes packages or repositories of host_packages.apk, " +
+				"and the plan has no block for apt or dnf: it works only if every Linux node uses apk. " +
+				"apply checks this against the package manager it finds on each node, before it changes anything"}},
+		{name: "apk for the clients", packages: "  apk:\n    install:\n      - {name: jq, roles: [client]}\n", inventory: serverAndClient},
+		{name: "apk for one host", packages: "  apk:\n    install:\n      - {name: jq, hosts: [10.0.0.2]}\n", inventory: serverAndClient},
+		{name: "apk for the servers of an inventory of servers", packages: "  apk:\n    install:\n      - {name: jq, roles: [master]}\n",
+			inventory: servers, want: []string{"of host_packages.apk", "works only if every Linux node uses apk"}},
+		{name: "a repository for every node", inventory: servers,
+			packages: "  apk:\n    repositories:\n      - {name: community, url: https://dl-cdn.alpinelinux.org/alpine/v3.22/community}\n",
+			want:     []string{"of host_packages.apk", "no block for apt or dnf"}},
+		{name: "apt and apk for every node", packages: "  apt:\n    install:\n      - {name: jq}\n" + apkOnly, inventory: serverAndClient,
+			want: []string{"of host_packages.apt and host_packages.apk", "no block for dnf", "uses apt or apk"}},
+		{name: "apt for every node and dnf for the clients", inventory: serverAndClient,
+			packages: "  apt:\n    install:\n      - {name: jq}\n  dnf:\n    install:\n      - {name: jq, roles: [client]}\n",
+			want:     []string{"of host_packages.apt,", "no block for apk", "uses apt or dnf"}},
+		{name: "every block", inventory: serverAndClient,
+			packages: "  apt:\n    install:\n      - {name: jq}\n  dnf:\n    install:\n      - {name: jq}\n" + apkOnly},
+		{name: "windows nodes take no packages", packages: "  apk:\n    install:\n      - {name: jq, hosts: [10.0.0.1, 10.0.0.2]}\n",
+			inventory: windowsClient, want: []string{"works only if every Linux node uses apk"}},
+		{name: "no packages", inventory: serverAndClient},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := head + tt.inventory
+			if tt.packages != "" {
+				src += "host_packages:\n" + tt.packages
+			}
+			p, err := Parse([]byte(src), FormatYAML, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := p.Warnings()
+			if len(tt.want) == 0 {
+				if len(got) != 0 {
+					t.Fatalf("warnings %q", got)
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("warnings %q, want one", got)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(got[0], w) {
+					t.Errorf("the warning has no %q:\n%s", w, got[0])
+				}
+			}
+		})
+	}
+}
