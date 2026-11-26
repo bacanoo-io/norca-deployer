@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
+	"github.com/bacanoo-io/norca-pki"
 )
 
 // fakeCluster answers the commands of the rolling restart for several nodes
@@ -84,6 +87,49 @@ func testRunner(t *testing.T, masters, clients int) (*Runner, []*target, []*targ
 		return ts
 	}
 	return r, mk(plan.Inventory.Masters, true), mk(plan.Inventory.Clients, false), cluster
+}
+
+// The local state of a running cluster is lost (certs/ and .norca-deployer/
+// deleted) and apply runs again: it would make a new CA and gossip key, find
+// the agents running and restart them into a cluster that does not trust
+// them. It stops after the probe of the nodes instead: nothing is written to
+// a node, and the new CA and gossip key are not kept.
+func TestApplyRefusesANewCAForNodesOfAnotherCA(t *testing.T) {
+	plan := loadPlan(t, spiffePlan)
+	plan.Security.GossipEncryptionKey = config.GossipAutoGenerate
+	clusterCA, err := pki.NewCA("prod", 10, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hosts := map[string]*equivHost{}
+	for _, n := range append(append([]config.NodeConfig{}, plan.Inventory.Masters...), plan.Inventory.Clients...) {
+		hosts[n.Host] = &equivHost{
+			files: map[string][]byte{"/etc/norca.d/tls/ca.pem": clusterCA.CertPEM},
+			modes: map[string]os.FileMode{}, probe: debianProbe,
+		}
+	}
+	r := NewRunner(plan, nil)
+	r.connect = func(n *config.NodeConfig) (connector.Connector, error) { return hosts[n.Host], nil }
+
+	err = r.Apply(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "set up with another CA") {
+		t.Fatalf("apply = %v, want the refusal", err)
+	}
+	for host, h := range hosts {
+		if len(h.cmds) != 1 {
+			t.Errorf("%s: commands after the probe: %q", host, h.cmds[1:])
+		}
+		for _, e := range h.events {
+			if strings.HasPrefix(e, "> ") {
+				t.Errorf("%s: changed: %s", host, e)
+			}
+		}
+	}
+	for _, f := range []string{filepath.Join("certs", "norca-ca.pem"), filepath.Join("certs", "norca-ca-key.pem"), filepath.Join(".norca-deployer", "gossip.key")} {
+		if _, err := os.Stat(filepath.Join(plan.BaseDir(), f)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s was written by the refused apply (stat: %v)", f, err)
+		}
+	}
 }
 
 func TestRollingRestartOneServerAtATime(t *testing.T) {

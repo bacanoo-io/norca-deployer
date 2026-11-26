@@ -3,6 +3,7 @@ package engine
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -366,5 +367,127 @@ func TestIssueFromAnEncryptedCAKey(t *testing.T) {
 	}
 	if _, err := IssueIntermediate(plan, IntermediateOptions{Name: "mesh", Years: 1, MaxPathLen: 1, Vault: vault}); err != nil {
 		t.Fatalf("intermediate with the master key: %v", err)
+	}
+}
+
+// failingExists is a node whose files cannot be looked at.
+type failingExists struct{ *connector.FakeConnector }
+
+func (failingExists) FileExists(string) (bool, error) { return false, errors.New("permission denied") }
+
+// A node that was set up with another CA is refused before anything is
+// changed: its certificates from the CA of this apply would cut the agents
+// off the cluster at their restart. The error says why and what to do.
+func TestCheckClusterCA(t *testing.T) {
+	other, err := pki.NewCA("other", 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const nodeCA = "/etc/norca.d/tls/ca.pem"
+	tests := []struct {
+		name string
+		// state: "" no local state (the apply makes a new CA), "earlier" the
+		// CA of an earlier apply in certs/, "configured" ca_cert_path.
+		state string
+		// node is the ca.pem of the node: "" none, "same" the CA of the
+		// apply, "other" another CA, else the content.
+		node       string
+		failExists bool
+		want       []string // parts of the error; none: no error
+	}{
+		{name: "a new cluster", state: "", node: ""},
+		{name: "a new node of the cluster", state: "earlier", node: ""},
+		{name: "the same CA", state: "earlier", node: "same"},
+		{name: "the same configured CA", state: "configured", node: "same"},
+		{name: "a file without a certificate", state: "", node: "not a certificate"},
+		{
+			name: "the local state is lost", state: "", node: "other",
+			want: []string{
+				"10.0.0.1", "10.0.0.2", nodeCA, "set up with another CA",
+				"no local state", filepath.Join("certs", "norca-ca.pem"), ".norca-deployer",
+				"restore", "security.pki.ca_cert_path", "decommission", "nothing was changed",
+			},
+		},
+		{
+			name: "the CA of an earlier apply differs", state: "earlier", node: "other",
+			want: []string{"set up with another CA", "no CA rotation", filepath.Join("certs", "norca-ca.pem"), "nothing was changed"},
+		},
+		{
+			name: "ca_cert_path names another CA", state: "configured", node: "other",
+			want: []string{"set up with another CA", "no CA rotation", "security.pki.ca_cert_path", "nothing was changed"},
+		},
+		{
+			name: "the CA file cannot be read", state: "earlier", node: "same", failExists: true,
+			want: []string{"10.0.0.1", "permission denied", "nothing was changed"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan := loadPlan(t, spiffePlan)
+			switch tt.state {
+			case "earlier":
+				if err := NewRunner(plan, nil).initPKI(); err != nil {
+					t.Fatal(err)
+				}
+			case "configured":
+				dir := t.TempDir()
+				ca, err := pki.NewCA("external", 1, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan.Security.PKI.CACertPath, plan.Security.PKI.CAKeyPath = filepath.Join(dir, "ca.pem"), filepath.Join(dir, "ca-key.pem")
+				if err := os.WriteFile(plan.Security.PKI.CACertPath, ca.CertPEM, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(plan.Security.PKI.CAKeyPath, ca.KeyPEM, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := NewRunner(plan, nil)
+			if err := r.loadPKI(); err != nil {
+				t.Fatal(err)
+			}
+
+			var ts []*target
+			for i := range plan.Inventory.Masters {
+				ts = append(ts, &target{node: &plan.Inventory.Masters[i], isMaster: true})
+			}
+			for i := range plan.Inventory.Clients {
+				ts = append(ts, &target{node: &plan.Inventory.Clients[i]})
+			}
+			for _, tg := range ts {
+				tg.paths = storage.ResolveNodePaths(tg.node, plan)
+				fake := connector.NewFakeConnector()
+				switch tt.node {
+				case "":
+				case "same":
+					fake.Files[nodeCA] = r.ca.CertPEM
+				case "other":
+					fake.Files[nodeCA] = other.CertPEM
+				default:
+					fake.Files[nodeCA] = []byte(tt.node)
+				}
+				tg.conn = fake
+				if tt.failExists {
+					tg.conn = failingExists{fake}
+				}
+			}
+
+			err := r.checkClusterCA(ts)
+			if len(tt.want) == 0 {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("no error")
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(err.Error(), w) {
+					t.Errorf("the error does not say %q:\n%v", w, err)
+				}
+			}
+		})
 	}
 }

@@ -2,8 +2,11 @@ package engine
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -29,7 +32,17 @@ func caPaths(plan *config.DeploymentPlan) (cert, key string, configured bool) {
 	return filepath.Join(dir, "norca-ca.pem"), filepath.Join(dir, "norca-ca-key.pem"), false
 }
 
+// initPKI loads or makes the CA and keeps it (loadPKI and savePKI).
 func (r *Runner) initPKI() error {
+	if err := r.loadPKI(); err != nil {
+		return err
+	}
+	return r.savePKI()
+}
+
+// loadPKI loads the CA, or makes a new one when there is none (newCA). A new
+// CA is kept by savePKI, after checkClusterCA found no node of another CA.
+func (r *Runner) loadPKI() error {
 	if !r.plan.Security.TLSEnabled {
 		return nil
 	}
@@ -39,7 +52,6 @@ func (r *Runner) initPKI() error {
 	}
 	r.trustDomain = td
 
-	certsDir := filepath.Join(r.plan.BaseDir(), "certs")
 	caCert, caKey, configured := caPaths(r.plan)
 
 	// A configured CA that cannot be loaded is an error: silently
@@ -58,19 +70,33 @@ func (r *Runner) initPKI() error {
 			}
 		}
 		r.checkCATrustDomain()
-	} else {
-		ca, err := pki.NewCA(r.plan.Metadata.Name, 10, td)
-		if err != nil {
-			return fmt.Errorf("failed to generate new CA: %w", err)
-		}
-		r.ca = ca
+		return nil
+	}
+	ca, err := pki.NewCA(r.plan.Metadata.Name, 10, td)
+	if err != nil {
+		return fmt.Errorf("failed to generate new CA: %w", err)
+	}
+	r.ca = ca
+	r.newCA = true
+	return nil
+}
+
+// savePKI writes the CA that loadPKI made, and issues the local client
+// certificates of the plan.
+func (r *Runner) savePKI() error {
+	if r.ca == nil {
+		return nil
+	}
+	certsDir := filepath.Join(r.plan.BaseDir(), "certs")
+	if r.newCA {
+		caCert, caKey, _ := caPaths(r.plan)
 		if err := os.MkdirAll(certsDir, 0700); err != nil {
 			return fmt.Errorf("failed to create %s: %w", certsDir, err)
 		}
-		if err := os.WriteFile(caCert, ca.CertPEM, 0644); err != nil { //nolint:gosec // G306: a certificate is public
+		if err := os.WriteFile(caCert, r.ca.CertPEM, 0644); err != nil { //nolint:gosec // G306: a certificate is public
 			return fmt.Errorf("failed to save CA certificate: %w", err)
 		}
-		plain, err := r.secretStore().WriteSecret(caKey, string(ca.KeyPEM))
+		plain, err := r.secretStore().WriteSecret(caKey, string(r.ca.KeyPEM))
 		if err != nil {
 			return fmt.Errorf("failed to save CA key: %w", err)
 		}
@@ -91,6 +117,111 @@ func (r *Runner) initPKI() error {
 		}
 	}
 	return nil
+}
+
+// checkClusterCA refuses an apply whose CA is not the CA the nodes were set
+// up with (the ca.pem of their TLS directory). The deployer has no CA
+// rotation: an agent restarted with certificates of another CA is not
+// trusted by the other agents and does not trust them ("x509: certificate
+// signed by unknown authority", "No cluster leader"), so the rolling restart
+// would cut the cluster apart one node at a time. It runs after the probe of
+// the nodes and before the first change on any of them.
+func (r *Runner) checkClusterCA(ts []*target) error {
+	if r.ca == nil {
+		return nil
+	}
+	var others, unknown []string
+	for _, t := range ts {
+		if t.conn == nil || t.err != nil {
+			continue // not reached: this apply does not change it either
+		}
+		path := joinPath(t.paths, t.paths.TLSDir, "ca.pem")
+		cert, err := nodeCA(t.conn, path)
+		switch {
+		case err != nil:
+			unknown = append(unknown, fmt.Sprintf("node [%s]: %s: %v", t.node.Host, path, err))
+		case cert != nil && !bytes.Equal(cert.Raw, r.ca.Certificate.Raw):
+			others = append(others, fmt.Sprintf("node [%s]: %s holds %s", t.node.Host, path, describeCA(cert)))
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf("cannot tell which CA the nodes were set up with (nothing was changed):\n - %s",
+			strings.Join(unknown, "\n - "))
+	}
+	if len(others) == 0 {
+		return nil
+	}
+
+	caCert, _, configured := caPaths(r.plan)
+	var b strings.Builder
+	fmt.Fprintf(&b, "the nodes were set up with another CA than the one of this apply (nothing was changed):\n - %s\n",
+		strings.Join(others, "\n - "))
+	switch {
+	case r.newCA:
+		fmt.Fprintf(&b, "This apply has no local state: %s does not exist, so it made a new CA (%s), and with "+
+			"gossip_encryption_key AUTO_GENERATE it would make a new gossip key. Agents restarted with them would be cut off "+
+			"from the cluster. The CA, the gossip key and the management token of the cluster are in %s and %s next to the plan.\n",
+			caCert, describeCA(r.ca.Certificate), filepath.Dir(caCert), r.secretStore().Dir)
+		b.WriteString("Do one of these:\n" +
+			" - restore certs/ and .norca-deployer/ from a backup of the directory that set up the cluster;\n" +
+			" - set security.pki.ca_cert_path and ca_key_path to the CA of the cluster (and security.gossip_encryption_key to its gossip key);\n" +
+			" - decommission the nodes, or reset them (stop Norca and remove its configuration and data), to set up a new cluster.")
+	default:
+		source := "the CA of an earlier apply"
+		if configured {
+			source = "named by security.pki.ca_cert_path"
+		}
+		fmt.Fprintf(&b, "The CA of this apply is %s (%s, %s). The deployer has no CA rotation: agents restarted with "+
+			"certificates of this CA would not be trusted by the others.\n", caCert, describeCA(r.ca.Certificate), source)
+		b.WriteString("Do one of these:\n" +
+			" - use the CA of the cluster: security.pki.ca_cert_path and ca_key_path, or the certs/ of the directory that set up the cluster;\n" +
+			" - decommission the nodes, or reset them (stop Norca and remove its configuration and data), to set up a new cluster with this CA.")
+	}
+	return errors.New(b.String())
+}
+
+// nodeCA returns the first certificate of the CA file of a node: nil when
+// the file does not exist or holds no certificate, an error when the node
+// cannot tell.
+func nodeCA(conn connector.Connector, path string) (*x509.Certificate, error) {
+	exists, err := conn.FileExists(path)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	data, err := conn.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	for rest := data; ; {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			return nil, nil
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, nil //nolint:nilerr // a file that is no CA certificate is no CA a cluster could trust
+		}
+		return cert, nil
+	}
+}
+
+// describeCA names a CA certificate by its subject and its SHA-256
+// fingerprint, as openssl x509 -fingerprint -sha256 prints it.
+func describeCA(cert *x509.Certificate) string {
+	sum := sha256.Sum256(cert.Raw)
+	hexSum := strings.ToUpper(hex.EncodeToString(sum[:]))
+	pairs := make([]string, 0, len(sum))
+	for i := 0; i < len(hexSum); i += 2 {
+		pairs = append(pairs, hexSum[i:i+2])
+	}
+	return fmt.Sprintf("%q, SHA-256 fingerprint %s", cert.Subject.CommonName, strings.Join(pairs, ":"))
 }
 
 // checkCATrustDomain reports a CA whose SPIFFE ID does not fit the plan. A

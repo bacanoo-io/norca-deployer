@@ -110,6 +110,14 @@ A node whose agent is not running is always started. Successfully provisioned no
 
 On the nodes the deployer uses `/var/lib/norca-deployer/` (script markers, copied `.deb` files and temporary CLI files; on the first server also `rigger/`, the copy of the Rigger stack while it is applied).
 
+**Lost state.** Without `certs/` an `apply` makes a new CA (and, with `AUTO_GENERATE`, a new gossip key). Agents restarted with them are not trusted by the rest of the cluster ("x509: certificate signed by unknown authority", "No cluster leader"). So, after connecting to the nodes and before it changes anything, `apply` compares the `ca.pem` in the TLS directory of each node with its own CA. A node set up with another CA stops the run: the error names the nodes and the SHA-256 fingerprints of both CAs, nothing is changed on a node, and the new CA and gossip key are not kept. Then:
+
+- restore `certs/` and `.norca-deployer/` from a backup of the directory that set up the cluster, or
+- set `security.pki.ca_cert_path` and `ca_key_path` to the CA of the cluster (and `security.gossip_encryption_key` to its gossip key), or
+- decommission the nodes, or remove Norca from them, to set up a new cluster.
+
+The same check stops an `apply` whose `ca_cert_path` names another CA than the cluster has: the deployer does not rotate the CA of a running cluster.
+
 ## Failure handling
 
 - An error on a node is reported with the node address. Servers: the run stops before restarts. Clients: the other clients of the batch finish, then the rollout stops.

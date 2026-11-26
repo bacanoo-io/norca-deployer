@@ -51,6 +51,8 @@ type Runner struct {
 	bootstrapSecret string
 	// trustDomain is the SPIFFE trust domain (nil without SPIFFE).
 	trustDomain *url.URL
+	// newCA: this apply made the CA, the local state had none (loadPKI).
+	newCA bool
 
 	// installed is the list of nodes installed by earlier applies, and
 	// decom the resolved inventory.decommission entries.
@@ -162,14 +164,8 @@ func (r *Runner) Apply(ctx context.Context) error {
 		return err
 	}
 	r.artifacts = artifacts.NewResolver(r.plan, store.CacheDir())
-	if err := r.initPKI(); err != nil {
+	if err := r.loadPKI(); err != nil {
 		return fmt.Errorf("PKI initialization error: %w", err)
-	}
-	if r.gossipKey, err = store.GossipKey(r.plan.Security.GossipEncryptionKey); err != nil {
-		return fmt.Errorf("gossip key: %w", err)
-	}
-	if err := r.resolveReplicationToken(); err != nil {
-		return err
 	}
 	if c := r.plan.Consul; c != nil && c.TokenFile != "" {
 		path := r.plan.ResolveLocalPath(c.TokenFile)
@@ -197,6 +193,20 @@ func (r *Runner) Apply(ctx context.Context) error {
 		return fmt.Errorf("master node provisioning failed (nothing was changed): %w", err)
 	}
 	if err := r.checkFacts(all); err != nil {
+		return err
+	}
+	// The CA, the gossip key and the bootstrap secret that a new cluster
+	// gets are kept only once no node was found set up with another CA.
+	if err := r.checkClusterCA(all); err != nil {
+		return err
+	}
+	if err := r.savePKI(); err != nil {
+		return fmt.Errorf("PKI initialization error: %w", err)
+	}
+	if r.gossipKey, err = store.GossipKey(r.plan.Security.GossipEncryptionKey); err != nil {
+		return fmt.Errorf("gossip key: %w", err)
+	}
+	if err := r.resolveReplicationToken(); err != nil {
 		return err
 	}
 
