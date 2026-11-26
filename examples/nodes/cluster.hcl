@@ -268,6 +268,18 @@ systemctl restart docker
 EOT
 }
 
+scripts {
+  name        = "windows-firewall"
+  phase       = "pre_install"
+  interpreter = "powershell"           # Windows PowerShell 5.1: the Windows client only.
+  path        = "scripts/windows-firewall.ps1"
+  env {
+    CLUSTER_CIDRS    = "10.8.0.0/24"
+    AGENT_PORTS      = "4646,4647"
+    ALLOCATION_PORTS = "20000-32000"
+  }
+}
+
 secrets {                              # Written after the cluster is up, before the Rigger stack.
   store = "builtin"                    # external: secrets come from an external store (skipped here).
 
@@ -522,7 +534,7 @@ inventory {
   clients {
     host            = "203.0.113.30"
     hostname        = "norca-win-01"
-    platform        = "windows"        # PowerShell; packages and scripts are skipped.
+    platform        = "windows"        # PowerShell, for scripts too; host packages are skipped.
     cluster_address = "10.8.0.30"
 
     connection {

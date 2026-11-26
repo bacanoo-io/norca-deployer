@@ -253,6 +253,17 @@ scripts:
       {"log-driver": "json-file", "log-opts": {"max-size": "50m", "max-file": "3"}}
       EOF
       systemctl restart docker
+  - name: windows-firewall
+    phase: pre_install
+    interpreter: powershell         # Windows PowerShell 5.1: runs on the Windows client only.
+                                    # (Without interpreter a script runs with bash on Linux and
+                                    # with powershell on Windows, so a plan with both platforms
+                                    # names it, or families.)
+    path: scripts/windows-firewall.ps1
+    env:
+      CLUSTER_CIDRS: 10.8.0.0/24
+      AGENT_PORTS: "4646,4647"
+      ALLOCATION_PORTS: 20000-32000
 
 secrets:                            # Written after the cluster is up, before the Rigger stack.
   store: builtin                    # builtin: Norca's built-in secret store. external: the jobs
@@ -460,7 +471,7 @@ inventory:
         data_dir: /data/norca
     - host: 203.0.113.30
       hostname: norca-win-01
-      platform: windows             # Commands run through PowerShell; packages and scripts are skipped.
+      platform: windows             # Commands and scripts run in PowerShell; host packages are skipped.
       cluster_address: 10.8.0.30
       connection:
         mode: ssh
