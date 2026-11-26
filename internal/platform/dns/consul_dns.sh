@@ -572,18 +572,19 @@ ncd_prepare_dnsmasq() {
 
 # ncd_check_dnsmasq_upstream warns on OpenRC when dnsmasq has no server for
 # the names outside the domain: it reads /etc/resolv.conf, which names only
-# loopback addresses (dnsmasq skips its own: "ignoring nameserver 127.0.0.1
-# - local interface", and answers REFUSED), and no resolv-file= or server=
-# in its configuration or on its command line gives it another. On Alpine
-# udhcpc writes the servers of the network into /etc/resolv.conf unless
-# RESOLV_CONF in /etc/udhcpc/udhcpc.conf names another file.
+# dnsmasq itself (127.0.0.1, ::1; dnsmasq skips an address of its own:
+# "ignoring nameserver 127.0.0.1 - local interface", and answers REFUSED),
+# and no resolv-file= or server= in its configuration or on its command
+# line gives it another. On Alpine udhcpc writes the servers of the network
+# into /etc/resolv.conf unless RESOLV_CONF in /etc/udhcpc/udhcpc.conf names
+# another file.
 ncd_check_dnsmasq_upstream() {
   if [ "$ncd_init" != openrc ] || [ "$ncd_online" != 1 ]; then
     return 0
   fi
   for ncd_server in $ncd_ns; do
     case $ncd_server in
-    127.* | ::1) ;;
+    127.0.0.1 | ::1) ;;
     *) return 0 ;;
     esac
   done

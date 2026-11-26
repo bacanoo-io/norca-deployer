@@ -1118,6 +1118,15 @@ func TestScriptOpenRCDnsmasqWithoutUpstream(t *testing.T) {
 			},
 		},
 		{
+			// Another loopback address is not dnsmasq (the DNS of a Docker
+			// network is 127.0.0.11).
+			name: "another loopback server in resolv.conf",
+			setup: func(h *host) {
+				h.file("/etc/dnsmasq.d/local.conf", "")
+				h.file("/etc/resolv.conf", "nameserver 127.0.0.1\nnameserver 127.0.0.11\n")
+			},
+		},
+		{
 			name: "resolv-file on the command line of the service",
 			setup: func(h *host) {
 				h.file("/etc/dnsmasq.d/local.conf", "")
