@@ -150,14 +150,21 @@ build) are functions of that family. In order:
    It writes the same files as `apply`. A package from a local `.deb`, `.rpm` or `.apk` file
    cannot be downloaded: the script checks that it is installed and says to install it into the
    image first.
+
+   On Alpine, after the packages and with or without `tuning.apply_sysctl`, **the init system**
+   as `apply` prepares it (see [Host packages and scripts](host-packages-and-scripts.md)): the
+   dependencies of the OpenRC services read again (`rc-update -u`) and the `cgroups` service put
+   into the `sysinit` runlevel when no cgroup file system is mounted, and started. While OpenRC
+   does not run (an image built in a container) neither is done now: the cgroups are mounted at
+   the next boot (a warning).
 2. **sysctl tuning**: the modules file (`/etc/modules-load.d/norca-bridge.conf`, so the modules
    load at boot) and the sysctl file, `modprobe` and `sysctl --system`. A module that cannot be
    loaded now is a warning; a failed `sysctl --system` is a warning where `/proc/sys` cannot be
    written (an image built in a container: systemd applies the files at the next boot) and an
    error elsewhere. On Alpine the same files (the `modules` and `sysctl` services of OpenRC read
    them at boot), applied with `sysctl -p`; a key the machine does not have, or one that is
-   read-only there (a container), is a warning; the `modules`, `sysctl` and `cgroups` services
-   are put into their runlevels when they are in none.
+   read-only there (a container), is a warning; the `modules` and `sysctl` services are put into
+   the boot runlevel when they are in none.
    - With `consul.dns_forwarding` enabled, **the DNS forwarding of the consul domain**: the script
      writes the POSIX `sh` script `apply` runs on the nodes of the inventory to
      `/var/lib/norca-deployer/consul-dns.sh` and runs it (see

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -150,6 +151,78 @@ func TestPrepareNodeAlpine(t *testing.T) {
 	}
 	if !strings.HasPrefix(second, " changed false, error <nil>") {
 		t.Fatalf("the second run changes something:\n%s", second)
+	}
+}
+
+// alpineScriptPlan is a plan of one Alpine server that installs Docker with
+// apk and starts it in a post_packages script; %s is tuning.apply_sysctl.
+const alpineScriptPlan = `
+metadata: {name: prod, region: eu}
+release: {version: v0.3.0, download_base_url: https://mirror.example/norca, checksum_sha256: ` + sumRelease + `}
+tuning: {apply_sysctl: %s}
+host_packages:
+  apk:
+    install:
+      - {name: docker}
+scripts:
+  - name: start-docker
+    phase: post_packages
+    interpreter: sh
+    inline: rc-service docker start
+inventory:
+  masters:
+    - {host: 10.0.0.1, hostname: s1}
+`
+
+// On an Alpine node the dependencies of OpenRC are read again and the
+// cgroups mounted after the host packages and before the post_packages
+// scripts, so that a script can start a service of a package (Docker needs
+// the cgroups): whether or not the plan tunes the host, and on every apply
+// for the dependencies (a cache of OpenRC written while the clock was ahead
+// does not see a new service). The tuning comes after the scripts.
+func TestPrepareNodeAlpineInitBeforeScripts(t *testing.T) {
+	for _, sysctl := range []string{"true", "false"} {
+		t.Run("apply_sysctl "+sysctl, func(t *testing.T) {
+			transcript, _ := recordPlanWith(t, loadPlan(t, fmt.Sprintf(alpineScriptPlan, sysctl)), alpineProbe)
+			first, second, found := strings.Cut(transcript, "run 2:")
+			if !found {
+				t.Fatalf("no second run:\n%s", transcript)
+			}
+			order := []string{
+				"# apply: apk packages",
+				"# apply: openrc dependencies",
+				"# apply: cgroups",
+				"> write /var/lib/norca-deployer/scripts/start-docker.sh",
+			}
+			if sysctl == "true" {
+				order = append(order, "sysctl -p /etc/sysctl.d/99-norca-production.conf")
+			}
+			at := -1
+			for _, want := range order {
+				i := strings.Index(first, want)
+				if i < 0 {
+					t.Fatalf("the first run has no %q:\n%s", want, first)
+				}
+				if i < at {
+					t.Errorf("%q comes too early: the order is %q", want, order)
+				}
+				at = i
+			}
+			if sysctl == "false" && strings.Contains(first, "sysctl -p") {
+				t.Error("the host is tuned without tuning.apply_sysctl")
+			}
+			// The dependencies are read on every apply; that is no change.
+			if !strings.HasPrefix(second, " changed false, error <nil>") || !strings.Contains(second, "# apply: openrc dependencies") {
+				t.Fatalf("the second run:\n%s", second)
+			}
+		})
+	}
+	// A node of systemd gets none of it.
+	debian, _ := recordPlanWith(t, loadPlan(t, strings.Replace(fmt.Sprintf(alpineScriptPlan, "true"), "apk:", "apt:", 1)), debianProbe)
+	for _, unwanted := range []string{"openrc dependencies", "rc-update", "cgroups"} {
+		if strings.Contains(debian, unwanted) {
+			t.Errorf("a Debian node runs %q", unwanted)
+		}
 	}
 }
 

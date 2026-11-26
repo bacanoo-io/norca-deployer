@@ -26,16 +26,17 @@
 On every server, in this order:
 
 1. `pre_install` scripts
-2. Repositories and packages of the node's package manager (`host_packages.apt`)
-3. `post_packages` scripts
-4. Kernel tuning (sysctl, modules) or Windows tuning
-5. Directories (bin, config, data, log, tls; CNI and app volumes on client nodes)
-6. Norca binary (only copied when its SHA-256 differs)
-7. CNI plugins (nodes that run a client)
-8. TLS certificates (kept while still valid for the node)
-9. `norca.hcl`
-10. Firewall rules
-11. Service unit (systemd or Windows service)
+2. Repositories and packages of the node's package manager (`host_packages.apt`, `dnf` or `apk`)
+3. On OpenRC (Alpine): the dependencies of the services read again and the cgroups mounted, so that a `post_packages` script can start a service of the packages (see [Host packages and scripts](host-packages-and-scripts.md))
+4. `post_packages` scripts
+5. Kernel tuning (sysctl, modules) or Windows tuning
+6. Directories (bin, config, data, log, tls; CNI and app volumes on client nodes)
+7. Norca binary (only copied when its SHA-256 differs)
+8. CNI plugins (nodes that run a client)
+9. TLS certificates (kept while still valid for the node)
+10. `norca.hcl`
+11. Firewall rules
+12. Service unit (systemd, OpenRC or Windows service)
 
 Each item is a step: its files are written only when their content differs, and its change runs only when its check finds something to do, so a second `apply` changes nothing. The commands run in `sh` on the node (dash on Debian and Ubuntu), each starting with a comment that names its step (`# apply: apt packages`). The install script of a scaled machine is made of the same steps (see [Node scaling machines](node-scaling-machines.md)).
 

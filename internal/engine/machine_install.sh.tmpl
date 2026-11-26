@@ -8,7 +8,7 @@
 # by hand); the machines of the image then need no download at boot.{{end}}
 # Architecture: {{.Arch}}. Families: {{.Families}}.
 #
-# It installs {{if .HasPackages}}the host packages, {{end}}{{if or .Tuning .TuningByFamily}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
+# It installs {{if .HasPackages}}the host packages, {{end}}{{if .HasInit}}the cgroups of OpenRC (Alpine), {{end}}{{if or .Tuning .TuningByFamily}}the sysctl tuning, {{end}}{{if .DNS}}the DNS forwarding of the consul domain, {{end}}the directories, the norca binary,
 # {{if .CNI}}the CNI plugins, {{end}}norca-join and the service of the agent (systemd; OpenRC on Alpine), which it
 # enables but does not start: the bootstrap (or norca-join) starts it once the
 # configuration and the certificate are there.{{if .HasRHEL}} On RHEL it restores the SELinux labels
@@ -251,6 +251,13 @@ packages_{{.Name}}() {
 {{.Packages}}
 }
 {{- end}}
+{{- if .Init}}
+
+# The init system of the {{.Name}} family: it can start the services of the host packages
+init_{{.Name}}() {
+{{.Init}}
+}
+{{- end}}
 {{- if .Tuning}}
 
 # Host tuning of the {{.Name}} family: kernel modules and sysctl (tuning.apply_sysctl)
@@ -277,6 +284,15 @@ log "host packages"
 case $os_family in
 {{- range .Parts}}{{if .Packages}}
 {{.Name}}) packages_{{.Name}} ;;
+{{- end}}{{end}}
+esac
+{{- end}}
+{{- if .HasInit}}
+
+log "init system"
+case $os_family in
+{{- range .Parts}}{{if .Init}}
+{{.Name}}) init_{{.Name}} ;;
 {{- end}}{{end}}
 esac
 {{- end}}

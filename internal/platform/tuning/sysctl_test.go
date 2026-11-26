@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 )
 
 // The OpenRC tuning writes the files of Linux (the modules and sysctl
@@ -102,57 +104,196 @@ func TestOpenRCSysctl(t *testing.T) {
 	}
 }
 
-// The functions and the steps of the OpenRC tuning in the shells of this
-// machine, on runlevels of the test: a service in a runlevel, one in none.
+// openrcNode is a node of OpenRC below a test directory: its init scripts
+// and runlevels, /run/openrc while OpenRC runs, and the commands rc-update
+// and rc-service (commands: their names are no function names of ash),
+// which record what they are asked. rc-service cgroups start mounts the
+// cgroups (the stat of the step answers cgroup2fs then) unless
+// RC_SERVICE_FAIL is set; RC_UPDATE_FAIL makes rc-update fail.
+type openrcNode struct {
+	root, bin string
+}
+
+func newOpenRCNode(t *testing.T, files ...string) *openrcNode {
+	t.Helper()
+	n := &openrcNode{root: t.TempDir()}
+	n.bin = filepath.Join(n.root, "bin")
+	for _, d := range []string{"bin", "etc/init.d", "etc/runlevels/boot", "etc/runlevels/sysinit", "etc/runlevels/default"} {
+		if err := os.MkdirAll(filepath.Join(n.root, d), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n.add(t, files...)
+	// They record to descriptor 3, which the step does not redirect.
+	commands := map[string]string{
+		"rc-update": "#!/bin/sh\nprintf 'rc-update %s\\n' \"$*\" >&3\nif [ -n \"${RC_UPDATE_FAIL:-}\" ]; then\n  echo 'rc-update: failed' >&2\n  exit 1\nfi\n",
+		"rc-service": "#!/bin/sh\nprintf 'rc-service %s\\n' \"$*\" >&3\n[ -z \"${RC_SERVICE_FAIL:-}\" ] || exit 1\n" +
+			"if [ \"$*\" = 'cgroups start' ]; then\n  : >\"$NODE_ROOT/mounted\"\nfi\n",
+	}
+	for name, body := range commands {
+		if err := os.WriteFile(filepath.Join(n.bin, name), []byte(body), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return n
+}
+
+// add creates files of the node (empty), such as an init script, a service
+// in a runlevel, run/openrc (OpenRC runs) or mounted (the cgroups are).
+func (n *openrcNode) add(t *testing.T, files ...string) {
+	t.Helper()
+	for _, f := range files {
+		if f == "run/openrc" {
+			if err := os.MkdirAll(filepath.Join(n.root, f), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(n.root, f), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// run runs a step on the node as the Executor does: its Apply when its
+// Check fails ("done" when it holds). The output is what the commands
+// recorded and the log of the step.
+func (n *openrcNode) run(t *testing.T, argv []string, s step.Step, env ...string) string {
+	t.Helper()
+	fix := strings.NewReplacer("/etc/", n.root+"/etc/", "/run/openrc", n.root+"/run/openrc").Replace
+	stubs := "log() { printf 'log %s\\n' \"$*\"; }\nwarn() { printf 'warn %s\\n' \"$*\"; }\n" +
+		"stat() { if [ -e \"$NODE_ROOT/mounted\" ]; then echo cgroup2fs; else echo sysfs; fi; }\n"
+	prog := stubs + "set -eu\nexec 3>&2\n" + fix(s.Functions) + "\n"
+	if s.Check != "" {
+		prog += "if {\n" + fix(s.Check) + "\n}; then\n  echo done\n  exit 0\nfi\n"
+	}
+	prog += fix(s.Apply) + "\n"
+	c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+	c.Env = append([]string{"PATH=" + n.bin + ":/usr/bin:/bin", "NODE_ROOT=" + n.root}, env...)
+	out, err := c.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v:\n%s", err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// The services step of the OpenRC tuning in the shells of this machine:
+// the modules and sysctl services go into the boot runlevel when they are
+// in none; the cgroups are the init steps' (TestOpenRCCgroupsStep).
 func TestOpenRCServicesStep(t *testing.T) {
 	s := OpenRC{}.Steps()[2]
 	for shell, argv := range testShells(t) {
 		t.Run(shell, func(t *testing.T) {
-			root := t.TempDir()
-			for _, d := range []string{"etc/init.d", "etc/runlevels/boot", "etc/runlevels/sysinit", "etc/runlevels/default"} {
-				if err := os.MkdirAll(filepath.Join(root, d), 0o750); err != nil {
-					t.Fatal(err)
-				}
+			n := newOpenRCNode(t, "etc/init.d/modules", "etc/init.d/sysctl", "etc/init.d/cgroups", "etc/runlevels/sysinit/modules")
+			want := "rc-update add sysctl boot\nlog sysctl added to the boot runlevel"
+			if out := n.run(t, argv, s); out != want {
+				t.Fatalf("got:\n%s\nwant:\n%s", out, want)
 			}
-			for _, f := range []string{"etc/init.d/modules", "etc/init.d/sysctl", "etc/init.d/cgroups", "etc/runlevels/sysinit/modules"} {
-				if err := os.WriteFile(filepath.Join(root, f), nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
+			n.add(t, "etc/runlevels/boot/sysctl")
+			if out := n.run(t, argv, s); out != "done" {
+				t.Fatalf("second run:\n%s", out)
 			}
-			// The paths of the node below root; rc-update (a command: its
-			// name is no function name of ash) records what it is asked; the
-			// cgroups are not mounted.
-			bin := filepath.Join(root, "bin")
-			if err := os.MkdirAll(bin, 0o750); err != nil {
-				t.Fatal(err)
+		})
+	}
+}
+
+// The init steps of OpenRC: the dependencies of OpenRC read again, then
+// the cgroups. Only OpenRC has them.
+func TestOpenRCInitSteps(t *testing.T) {
+	steps := OpenRC{}.InitSteps()
+	if len(steps) != 2 || steps[0].Name != "openrc dependencies" || steps[1].Name != "cgroups" {
+		t.Fatalf("steps %+v", steps)
+	}
+	// Read on every apply, as a refresh of a cache: no check, no change.
+	if steps[0].Check != "" || !strings.Contains(steps[0].Apply, "rc-update -u") {
+		t.Errorf("dependencies: %+v", steps[0])
+	}
+	for _, tn := range []Tuner{Linux{}, Windows{}} {
+		if s := tn.InitSteps(); len(s) != 0 {
+			t.Errorf("%T has init steps %+v", tn, s)
+		}
+	}
+	for _, s := range (OpenRC{}).Steps() {
+		if strings.Contains(s.Check+s.Apply, "cgroups") {
+			t.Errorf("the tuning step %q handles the cgroups", s.Name)
+		}
+	}
+}
+
+// The step of the dependencies of OpenRC: rc-update -u while OpenRC runs
+// (an image built in a container has no /run/openrc), a warning when it
+// fails.
+func TestOpenRCDependenciesStep(t *testing.T) {
+	s := OpenRC{}.InitSteps()[0]
+	for shell, argv := range testShells(t) {
+		t.Run(shell, func(t *testing.T) {
+			n := newOpenRCNode(t)
+			if out := n.run(t, argv, s); out != "" {
+				t.Fatalf("without OpenRC running: %q", out)
 			}
-			if err := os.WriteFile(filepath.Join(bin, "rc-update"), []byte("#!/bin/sh\nprintf 'rc-update %s\\n' \"$*\" >&2\n"), 0o700); err != nil {
-				t.Fatal(err)
+			n.add(t, "run/openrc")
+			if out := n.run(t, argv, s); out != "rc-update -u" {
+				t.Fatalf("OpenRC runs: %q", out)
 			}
-			fix := strings.NewReplacer("/etc/", root+"/etc/").Replace
-			stubs := "log() { printf 'log %s\\n' \"$*\"; }\nwarn() { printf 'warn %s\\n' \"$*\"; }\nstat() { echo sysfs; }\n"
-			prog := stubs + fix(s.Functions) + "\nif {\n" + fix(s.Check) + "\n}; then echo done; else\n" + fix(s.Apply) + "\nfi\n"
-			run := func() ([]byte, error) {
-				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
-				c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin"}
-				return c.CombinedOutput()
+			want := "rc-update -u\nwarn rc-update -u failed, so OpenRC may start a service of the host packages without the services it needs: rc-update: failed"
+			if out := n.run(t, argv, s, "RC_UPDATE_FAIL=1"); out != want {
+				t.Fatalf("got:\n%s\nwant:\n%s", out, want)
 			}
-			out, err := run()
-			want := "rc-update add sysctl boot\nlog sysctl added to the boot runlevel\n" +
-				"rc-update add cgroups sysinit\nlog cgroups added to the sysinit runlevel\n" +
-				"warn the cgroups are mounted at the next boot: the task drivers of the agent need them"
-			if err != nil || strings.TrimSpace(string(out)) != want {
-				t.Fatalf("%v:\n%s\nwant:\n%s", err, out, want)
+		})
+	}
+}
+
+// The cgroups step: the cgroups service goes into the sysinit runlevel
+// when no cgroup file system is mounted, and is started while OpenRC runs,
+// so that what starts after it (a post_packages script that starts Docker,
+// the agent) finds them mounted. Cgroups mounted by others (a container)
+// are left alone.
+func TestOpenRCCgroupsStep(t *testing.T) {
+	s := OpenRC{}.InitSteps()[1]
+	added := "rc-update add cgroups sysinit\nlog cgroups added to the sysinit runlevel\n"
+	tests := []struct {
+		name  string
+		files []string
+		env   []string
+		want  string
+		// again is the output of a second run.
+		again string
+	}{
+		{name: "openrc runs", files: []string{"run/openrc"},
+			want: added + "rc-service cgroups start\nlog cgroups mounted", again: "done"},
+		{name: "in a runlevel but not started", files: []string{"run/openrc", "etc/runlevels/sysinit/cgroups"},
+			want: "rc-service cgroups start\nlog cgroups mounted", again: "done"},
+		{name: "an image build, openrc does not run",
+			want: added + "warn the cgroups are mounted at the next boot: the task drivers of the agent and Docker need them", again: "done"},
+		{name: "the start fails", files: []string{"run/openrc"}, env: []string{"RC_SERVICE_FAIL=1"},
+			want: added + "rc-service cgroups start\nwarn the cgroups could not be mounted now (rc-service cgroups start): " +
+				"a service that needs them (Docker) fails to start until they are; they are mounted at the next boot",
+			again: "rc-service cgroups start\nwarn the cgroups could not be mounted now (rc-service cgroups start): " +
+				"a service that needs them (Docker) fails to start until they are; they are mounted at the next boot"},
+		{name: "mounted by others", files: []string{"run/openrc", "mounted"}, want: "done", again: "done"},
+		{name: "mounted and in a runlevel", files: []string{"run/openrc", "mounted", "etc/runlevels/sysinit/cgroups"}, want: "done", again: "done"},
+	}
+	for shell, argv := range testShells(t) {
+		t.Run(shell, func(t *testing.T) {
+			for _, tt := range tests {
+				t.Run(tt.name, func(t *testing.T) {
+					n := newOpenRCNode(t, append([]string{"etc/init.d/cgroups"}, tt.files...)...)
+					out := n.run(t, argv, s, tt.env...)
+					if out != tt.want {
+						t.Fatalf("got:\n%s\nwant:\n%s", out, tt.want)
+					}
+					if strings.Contains(out, "rc-update add cgroups sysinit") {
+						// What rc-update add does: the link of the runlevel.
+						n.add(t, "etc/runlevels/sysinit/cgroups")
+					}
+					if out := n.run(t, argv, s, tt.env...); out != tt.again {
+						t.Fatalf("second run:\n%s\nwant:\n%s", out, tt.again)
+					}
+				})
 			}
-			// Mounted cgroups and every service in a runlevel: nothing to do.
-			for _, f := range []string{"etc/runlevels/boot/sysctl", "etc/runlevels/sysinit/cgroups"} {
-				if err := os.WriteFile(filepath.Join(root, f), nil, 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			out, err = run()
-			if err != nil || strings.TrimSpace(string(out)) != "done" {
-				t.Fatalf("second run %v:\n%s", err, out)
+			// No cgroups service: nothing to do.
+			if out := newOpenRCNode(t, "run/openrc").run(t, argv, s); out != "done" {
+				t.Fatalf("without the cgroups service: %q", out)
 			}
 		})
 	}

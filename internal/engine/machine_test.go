@@ -837,8 +837,27 @@ func TestInstallScriptAlpine(t *testing.T) {
 	if strings.Contains(alpine, "systemctl") || strings.Contains(alpine, "/etc/systemd/system") {
 		t.Errorf("the service of Alpine is a unit of systemd:\n%s", alpine)
 	}
-	if strings.Count(script, "\napk_version() {\n") != 1 || strings.Count(script, "\nexpect_package() {\n") != 1 {
+	if strings.Count(script, "\napk_version() {\n") != 1 || strings.Count(script, "\nexpect_package() {\n") != 1 ||
+		strings.Count(script, "\nopenrc_enabled() {\n") != 1 {
 		t.Error("a function is defined twice")
+	}
+	// The init steps of OpenRC (its dependencies, the cgroups) after the
+	// packages and before the tuning, also without the tuning; none for
+	// systemd.
+	for _, sysctl := range []bool{true, false} {
+		s := script
+		if !sysctl {
+			s = generate(t, loadPlan(t, strings.Replace(alpineMachinePlan(), "apply_sysctl: true", "apply_sysctl: false", 1)), MachineScriptOptions{})
+		}
+		pkgsAt := strings.Index(s, "alpine) packages_alpine ;;")
+		initAt := strings.Index(s, "log \"init system\"\ncase $os_family in\nalpine) init_alpine ;;\nesac")
+		if pkgsAt < 0 || initAt < pkgsAt || !strings.Contains(s, "init_alpine() {\n# openrc dependencies\n") ||
+			!strings.Contains(s, "rc-update add cgroups sysinit") || strings.Contains(s, "init_debian") {
+			t.Fatalf("apply_sysctl %t: the init steps of Alpine:\n%s", sysctl, s)
+		}
+		if tuning := strings.Index(s, "log \"sysctl tuning\""); sysctl && tuning < initAt || !sysctl && tuning >= 0 {
+			t.Errorf("apply_sysctl %t: the tuning at %d, the init steps at %d", sysctl, tuning, initAt)
+		}
 	}
 	// Only the apk block, with consul.dns_forwarding: Alpine with dnsmasq
 	// (NCD_INIT openrc); with docker, which needs systemd-resolved, no

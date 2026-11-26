@@ -43,7 +43,12 @@ br_netfilter
 
 // Tuner is the driver of the tuning of a node.
 type Tuner interface {
+	// Steps tune the host (tuning.apply_sysctl, tuning.windows_long_paths).
 	Steps() []step.Step
+	// InitSteps make the init system able to start the services of the
+	// host packages. They run on every apply, after the host packages and
+	// before the post_packages scripts, which may start such a service.
+	InitSteps() []step.Step
 }
 
 // Linux tunes a Linux node with systemd-modules-load and sysctl.
@@ -78,14 +83,18 @@ func (Linux) Steps() []step.Step {
 	}
 }
 
+// InitSteps implements Tuner: systemd needs none (the packages reload its
+// units, and it mounts the cgroups itself).
+func (Linux) InitSteps() []step.Step { return nil }
+
 // OpenRC tunes a Linux node whose init system is OpenRC (Alpine). The
 // files are those of Linux: the modules and sysctl services of OpenRC read
 // /etc/modules-load.d and /etc/sysctl.d at boot. The settings are applied
 // now with sysctl -p (busybox has no sysctl --system, and its sysctl ends
 // with 0 after an error, so its output is read). The modules and sysctl
-// services are put into the boot runlevel when they are in none, and the
-// cgroups service into sysinit when no cgroup file system is mounted (the
-// task drivers of the agent need one; cgroup v1 and v2 both serve).
+// services are put into the boot runlevel when they are in none. The
+// cgroups are the init steps' (InitSteps), which do not depend on the
+// tuning.
 type OpenRC struct{}
 
 var _ Tuner = OpenRC{}
@@ -138,25 +147,62 @@ func (OpenRC) Steps() []step.Step {
 		Name:      "openrc services",
 		Functions: openrcFunctions,
 		Check: "{ [ ! -e /etc/init.d/modules ] || openrc_enabled modules; } &&\n" +
-			"  { [ ! -e /etc/init.d/sysctl ] || openrc_enabled sysctl; } &&\n" +
-			"  { [ ! -e /etc/init.d/cgroups ] || openrc_enabled cgroups || openrc_cgroups; }",
+			"  { [ ! -e /etc/init.d/sysctl ] || openrc_enabled sysctl; }",
 		Apply: "for openrc_svc in modules sysctl; do\n" +
 			"  if [ -e \"/etc/init.d/$openrc_svc\" ] && ! openrc_enabled \"$openrc_svc\"; then\n" +
 			"    rc-update add \"$openrc_svc\" boot >/dev/null\n" +
 			"    log \"$openrc_svc added to the boot runlevel\"\n" +
 			"  fi\n" +
-			"done\n" +
-			"if [ -e /etc/init.d/cgroups ] && ! openrc_enabled cgroups && ! openrc_cgroups; then\n" +
-			"  rc-update add cgroups sysinit >/dev/null\n" +
-			"  log \"cgroups added to the sysinit runlevel\"\n" +
-			"  if [ -d /run/openrc ] && rc-service cgroups start >/dev/null 2>&1; then\n" +
-			"    log \"cgroups mounted\"\n" +
-			"  else\n" +
-			"    warn \"the cgroups are mounted at the next boot: the task drivers of the agent need them\"\n" +
-			"  fi\n" +
-			"fi",
+			"done",
 	}
 	return []step.Step{modules, sysctl, services}
+}
+
+// InitSteps implements Tuner. First the dependencies of the services are
+// read again (rc-update -u). OpenRC reads them anew only when /etc/init.d,
+// /etc/conf.d or a file in them is newer than its cache. A cache written
+// while the clock was ahead (a virtual machine whose clock starts on local
+// time, which NTP then steps back by an hour) stays newer than what apk
+// installs after boot: rc-service docker start then finds no dependencies
+// for docker and starts dockerd without the cgroups ("Devices cgroup isn't
+// mounted"). The cache is a file of /run: reading it again changes nothing
+// else and restarts nothing, so it is done on every apply while OpenRC
+// runs. Then the cgroups: the cgroups service goes into the sysinit
+// runlevel when no cgroup file system is mounted (the task drivers of the
+// agent and Docker need one; cgroup v1 and v2 both serve), and is started
+// while OpenRC runs. Both hold whatever tuning.apply_sysctl says.
+func (OpenRC) InitSteps() []step.Step {
+	return []step.Step{
+		{
+			Name: "openrc dependencies",
+			Apply: "if [ -d /run/openrc ] && command -v rc-update >/dev/null 2>&1; then\n" +
+				"  if ! openrc_out=$(rc-update -u 2>&1); then\n" +
+				"    openrc_out=$(printf '%s\\n' \"$openrc_out\" | tail -n 3 | tr '\\n' ' ')\n" +
+				"    warn \"rc-update -u failed, so OpenRC may start a service of the host packages without the services it needs: ${openrc_out% }\"\n" +
+				"  fi\n" +
+				"fi",
+		},
+		{
+			Name:      "cgroups",
+			Functions: openrcFunctions,
+			// Nothing to do without the service, with a cgroup file system
+			// mounted (by the service, or by others: a container), or with
+			// the service in a runlevel while OpenRC does not run (an image
+			// built in a container: it mounts them at boot).
+			Check: "[ ! -e /etc/init.d/cgroups ] || openrc_cgroups || { openrc_enabled cgroups && [ ! -d /run/openrc ]; }",
+			Apply: "if ! openrc_enabled cgroups; then\n" +
+				"  rc-update add cgroups sysinit >/dev/null\n" +
+				"  log \"cgroups added to the sysinit runlevel\"\n" +
+				"fi\n" +
+				"if [ ! -d /run/openrc ]; then\n" +
+				"  warn \"the cgroups are mounted at the next boot: the task drivers of the agent and Docker need them\"\n" +
+				"elif rc-service cgroups start >/dev/null 2>&1 && openrc_cgroups; then\n" +
+				"  log \"cgroups mounted\"\n" +
+				"else\n" +
+				"  warn \"the cgroups could not be mounted now (rc-service cgroups start): a service that needs them (Docker) fails to start until they are; they are mounted at the next boot\"\n" +
+				"fi",
+		},
+	}
 }
 
 // Windows tunes a Windows node: long paths and the execution policy of
@@ -178,3 +224,6 @@ func (Windows) Steps() []step.Step {
 			`} catch { if ("$_" -notlike '*completed*') { throw } }`,
 	}}
 }
+
+// InitSteps implements Tuner: a Windows node takes no host packages.
+func (Windows) InitSteps() []step.Step { return nil }

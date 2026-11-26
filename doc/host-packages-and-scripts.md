@@ -6,11 +6,19 @@ Order on each node:
 
 1. `pre_install` scripts
 2. Repositories and package installation (one install transaction)
-3. `post_packages` scripts
-4. Tuning, directories, Norca binary, CNI, certificates, `norca.hcl`, firewall, service
-5. `post_install` scripts (after the agent was restarted and is healthy, or was unchanged)
+3. On OpenRC (Alpine): the init system is made ready to start the services of the packages (below)
+4. `post_packages` scripts
+5. Tuning, directories, Norca binary, CNI, certificates, `norca.hcl`, firewall, service
+6. `post_install` scripts (after the agent was restarted and is healthy, or was unchanged)
 
 An error in any step stops that node.
+
+**A `post_packages` script can start a service that the packages installed**, such as Docker. On an Alpine node the deployer prepares OpenRC for that before the scripts run, on every apply and whatever `tuning.apply_sysctl` says:
+
+- it reads the dependencies of the services again (`rc-update -u`, while OpenRC runs). OpenRC keeps them in a cache that it renews only when `/etc/init.d` or `/etc/conf.d` is newer than the cache; a cache written while the clock was ahead (a virtual machine whose clock starts on local time and is then set back by NTP) would hide a service apk just installed, and `rc-service docker start` would start dockerd without the services it needs. The cache is a file of `/run`: renewing it changes nothing else and restarts nothing;
+- it mounts the cgroups: the `cgroups` service of OpenRC goes into the `sysinit` runlevel when no cgroup file system is mounted (the cloud images of Alpine do not mount one), and is started while OpenRC runs. Docker needs them (`failed to start daemon: Devices cgroup isn't mounted`), and so do the task drivers of the agent. Cgroups that something else mounted (a container) are left alone.
+
+A `pre_install` script runs before the packages and before this step. On systemd nodes there is no such step: the packages reload the units of systemd themselves, and systemd mounts the cgroups.
 
 ## Which block a node takes
 

@@ -75,9 +75,10 @@ type machineScriptData struct {
 	// rhel"), and their parts.
 	Families, FamilyPattern string
 	Parts                   []machineFamily
-	// HasPackages: a family has host packages; HasRHEL: the RHEL family is
-	// one of them (the SELinux warning).
-	HasPackages, HasRHEL bool
+	// HasPackages: a family has host packages; HasInit: a family has steps
+	// of its init system; HasRHEL: the RHEL family is one of them (the
+	// SELinux warning).
+	HasPackages, HasInit, HasRHEL bool
 	// TuningByFamily and BinaryByFamily: the families have a tuning or a
 	// norca binary of their own (in their parts), not the common one.
 	TuningByFamily, BinaryByFamily bool
@@ -95,10 +96,11 @@ type machineScriptData struct {
 }
 
 // machineFamily is the part of the install script of one family: its host
-// packages and the service of the agent, and its tuning and norca binary
+// packages, the steps of its init system after them (Init, empty for
+// systemd) and the service of the agent, and its tuning and norca binary
 // when they differ between the families.
 type machineFamily struct {
-	Name, Manager, Packages, Service, Tuning, Binary string
+	Name, Manager, Packages, Init, Service, Tuning, Binary string
 }
 
 // machineInit is an init system and the families of the script that have
@@ -200,8 +202,8 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	}
 
 	// Per family: the host packages of a client with the manager of the
-	// family, the service (on RHEL with the SELinux labels), the tuning and
-	// the norca binary.
+	// family, the steps of its init system, the service (on RHEL with the
+	// SELinux labels), the tuning and the norca binary.
 	var names []string
 	tunings, binaries := map[string]bool{}, map[string]bool{}
 	inits := map[string][]string{}
@@ -220,6 +222,9 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		part := machineFamily{Name: f.family, Manager: f.manager}
 		if part.Packages, err = render(pkgSteps); err != nil {
 			return "", fmt.Errorf("host_packages.%s: %w", f.manager, err)
+		}
+		if part.Init, err = render(f.tuner.InitSteps()); err != nil {
+			return "", err
 		}
 		svc := f.service.InstallSteps(paths, plan.Tuning.FileDescriptorLimit)
 		if f.family == config.FamilyRHEL {
@@ -243,6 +248,7 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 		}
 		tunings[part.Tuning], binaries[part.Binary] = true, true
 		data.HasPackages = data.HasPackages || part.Packages != ""
+		data.HasInit = data.HasInit || part.Init != ""
 		data.Parts = append(data.Parts, part)
 		names = append(names, f.family)
 	}

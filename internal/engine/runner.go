@@ -353,6 +353,12 @@ func (r *Runner) prepareNode(t *target) error {
 			}
 		}
 	}
+	// 0c. The init system can start the services of the packages (OpenRC:
+	// its dependencies read again, the cgroups mounted), before a
+	// post_packages script starts one
+	if err := r.runSteps(t, "init system", t.drivers.Tuning.InitSteps()); err != nil {
+		return err
+	}
 	if err := scripts.Run(conn, r.plan, config.PhasePostPackages, t.scriptTarget(), r.resolveSecret); err != nil {
 		return err
 	}
