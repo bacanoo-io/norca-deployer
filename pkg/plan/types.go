@@ -1062,10 +1062,44 @@ type NodeMachineConfig struct {
 	JoinDownload *JoinDownload `yaml:"join_download,omitempty" json:"join_download,omitempty"`
 }
 
-// JoinDownload is the URL of a norca-join binary and its digest.
+// JoinDownload is where the install script downloads norca-join from: a
+// URL and its digest (source url, the default), or a release of
+// norca-platform named by its version (source official).
 type JoinDownload struct {
-	URL            string `yaml:"url" json:"url"`
-	ChecksumSHA256 string `yaml:"checksum_sha256" json:"checksum_sha256"`
+	// Source is url (the default) or official.
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+
+	// URL and ChecksumSHA256 are the binary and its digest (source url).
+	URL            string `yaml:"url,omitempty" json:"url,omitempty"`
+	ChecksumSHA256 string `yaml:"checksum_sha256,omitempty" json:"checksum_sha256,omitempty"`
+
+	// Version is the release of norca-platform (source official): the
+	// script downloads norca-join_<version>_linux_<arch> of the release,
+	// whose digest the deployer reads from its
+	// norca-platform_<version>_SHA256SUMS. The same static binary serves
+	// glibc and musl (Alpine) machines.
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	// DownloadBaseURL is where the releases are (source official; default
+	// DefaultJoinDownloadBaseURL): <base>/v<version>/<file>, the layout of
+	// GitHub releases, which a mirror keeps.
+	DownloadBaseURL string `yaml:"download_base_url,omitempty" json:"download_base_url,omitempty"`
+}
+
+// The sources of node_scaling.machine.join_download.
+const (
+	// JoinDownloadURL is a URL and its digest.
+	JoinDownloadURL = "url"
+	// JoinDownloadOfficial is a release of norca-platform (ReleaseOfficial).
+	JoinDownloadOfficial = ReleaseOfficial
+)
+
+// DefaultJoinDownloadBaseURL is where the releases of norca-platform are.
+const DefaultJoinDownloadBaseURL = "https://github.com/bacanoo-io/norca-platform/releases/download"
+
+// Official reports whether norca-join comes from a release of
+// norca-platform.
+func (d *JoinDownload) Official() bool {
+	return d != nil && d.Source == JoinDownloadOfficial
 }
 
 // The install modes of node_scaling.machine.

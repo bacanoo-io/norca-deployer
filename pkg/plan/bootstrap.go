@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -245,6 +246,50 @@ func (p *DeploymentPlan) validateNodeScaling() error {
 	return nil
 }
 
+// JoinReleaseArchs are the architectures of norca-join in a release of
+// norca-platform.
+var JoinReleaseArchs = []string{"amd64", "arm64"}
+
+// validateJoinDownload checks node_scaling.machine.join_download: a URL and
+// its digest, or a release of norca-platform for an architecture it has
+// (arch, the architecture of the machines; empty is amd64).
+func validateJoinDownload(d *JoinDownload, arch string) error {
+	if d == nil {
+		return nil
+	}
+	const what = "node_scaling.machine.join_download"
+	switch d.Source {
+	case "", JoinDownloadURL:
+		if d.Version != "" || d.DownloadBaseURL != "" {
+			return fmt.Errorf("%s: version and download_base_url are for source official; source url takes url and checksum_sha256", what)
+		}
+		if u, err := url.Parse(d.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("%s.url %q must be an http(s) URL", what, d.URL)
+		}
+		if !sha256Re.MatchString(strings.ToLower(d.ChecksumSHA256)) {
+			return fmt.Errorf("%s.checksum_sha256 must be 64 hex characters", what)
+		}
+	case JoinDownloadOfficial:
+		if d.URL != "" || d.ChecksumSHA256 != "" {
+			return fmt.Errorf("%s: source official takes a version, not url or checksum_sha256: "+
+				"the URL and the digest come from the release (its norca-platform_<version>_SHA256SUMS)", what)
+		}
+		if !versionTagRe.MatchString(d.Version) {
+			return fmt.Errorf("%s.version %q must look like v0.1.0", what, d.Version)
+		}
+		if u, err := url.Parse(d.DownloadBaseURL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("%s.download_base_url %q must be an http(s) URL", what, d.DownloadBaseURL)
+		}
+		if arch != "" && !slices.Contains(JoinReleaseArchs, arch) {
+			return fmt.Errorf("%s: the releases of norca-platform have norca-join for %s, not for the arch %s of the machines; "+
+				"use source url with a build of your own", what, strings.Join(JoinReleaseArchs, " and "), arch)
+		}
+	default:
+		return fmt.Errorf("%s.source %q must be url or official", what, d.Source)
+	}
+	return nil
+}
+
 // machinePathRe is an absolute path the bootstrap of the operator accepts in
 // a systemd unit: no spaces and no quotes.
 var machinePathRe = regexp.MustCompile(`^/[A-Za-z0-9_./+@-]+$`)
@@ -267,13 +312,8 @@ func (p *DeploymentPlan) validateNodeMachine(m *NodeMachineConfig) error {
 	if m.JoinBinary != "" && !machinePathRe.MatchString(m.JoinBinary) {
 		return fmt.Errorf("node_scaling.machine.join_binary %q must be an absolute path without spaces or quotes", m.JoinBinary)
 	}
-	if d := m.JoinDownload; d != nil {
-		if u, err := url.Parse(d.URL); err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return fmt.Errorf("node_scaling.machine.join_download.url %q must be an http(s) URL", d.URL)
-		}
-		if !sha256Re.MatchString(strings.ToLower(d.ChecksumSHA256)) {
-			return fmt.Errorf("node_scaling.machine.join_download.checksum_sha256 must be 64 hex characters")
-		}
+	if err := validateJoinDownload(m.JoinDownload, m.Arch); err != nil {
+		return err
 	}
 	if m.Install == MachineInstallBoot {
 		// At boot the script downloads everything: a file on the deployer

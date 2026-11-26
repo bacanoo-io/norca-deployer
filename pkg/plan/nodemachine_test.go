@@ -68,8 +68,58 @@ inventory {
 	}
 	m = p.NodeScaling.Machine
 	if !m.InstallAtBoot() || m.MachineArch() != "arm64" || m.JoinBinaryPath() != "/opt/norca/bin/norca-join" ||
-		m.JoinDownload == nil || m.JoinDownload.URL != "https://mirror.example/norca-join" {
+		m.JoinDownload == nil || m.JoinDownload.URL != "https://mirror.example/norca-join" || m.JoinDownload.Official() {
 		t.Fatalf("HCL: %+v", m)
+	}
+}
+
+// join_download names a release of norca-platform by its version (source
+// official), in YAML and in HCL; the releases are on GitHub by default.
+func TestJoinDownloadOfficial(t *testing.T) {
+	p, err := Parse([]byte(machineBase+"node_scaling:\n  machine:\n    join_download: {source: official, version: v0.2.0}\n"), FormatYAML, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.NodeScaling.Machine.JoinDownload
+	if !d.Official() || d.Version != "v0.2.0" || d.DownloadBaseURL != DefaultJoinDownloadBaseURL || d.URL != "" {
+		t.Fatalf("YAML: %+v", d)
+	}
+
+	hclPlan := `
+metadata {
+  name   = "prod"
+  region = "eu"
+}
+release {
+  version = "v0.3.0"
+}
+security {
+  tls_enabled = true
+}
+node_scaling {
+  machine {
+    arch = "arm64"
+    join_download {
+      source            = "official"
+      version           = "v0.2.0"
+      download_base_url = "https://mirror.example/norca-platform"
+    }
+  }
+}
+inventory {
+  masters {
+    host     = "10.0.0.1"
+    hostname = "s1"
+  }
+}
+`
+	p, err = Parse([]byte(hclPlan), FormatHCL, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d = p.NodeScaling.Machine.JoinDownload
+	if !d.Official() || d.Version != "v0.2.0" || d.DownloadBaseURL != "https://mirror.example/norca-platform" {
+		t.Fatalf("HCL: %+v", d)
 	}
 }
 
@@ -84,6 +134,18 @@ func TestNodeMachineValidation(t *testing.T) {
 		"join with a space": {"", "{join_binary: '/opt/my bin/norca-join'}", "absolute path"},
 		"join url":          {"", "{join_download: {url: 'ftp://x/norca-join', checksum_sha256: " + sum + "}}", "http(s) URL"},
 		"join checksum":     {"", "{join_download: {url: 'https://x/norca-join'}}", "64 hex"},
+		"join url with a version": {"", "{join_download: {url: 'https://x/norca-join', checksum_sha256: " + sum + ", version: v0.2.0}}",
+			"for source official"},
+		"join source":          {"", "{join_download: {source: github, version: v0.2.0}}", "must be url or official"},
+		"official without":     {"", "{join_download: {source: official}}", "must look like v0.1.0"},
+		"official bad version": {"", "{join_download: {source: official, version: latest}}", "must look like v0.1.0"},
+		"official with a url": {"", "{join_download: {source: official, version: v0.2.0, url: 'https://x/norca-join'}}",
+			"not url or checksum_sha256"},
+		"official with a checksum": {"", "{join_download: {source: official, version: v0.2.0, checksum_sha256: " + sum + "}}",
+			"not url or checksum_sha256"},
+		"official base url": {"", "{join_download: {source: official, version: v0.2.0, download_base_url: 'ftp://x'}}",
+			"download_base_url"},
+		"official for 386": {"", "{arch: '386', join_download: {source: official, version: v0.2.0}}", "amd64 and arm64"},
 		"boot local release": {"release: {version: v0.3.0, source: local-path, local_binary_path: ./norca}\n",
 			"{install: boot}", "not local-path"},
 		"boot local cni": {"cni: {source: local-path, local_archive_path: ./cni.tgz}\n", "{install: boot}", "CNI plugins"},

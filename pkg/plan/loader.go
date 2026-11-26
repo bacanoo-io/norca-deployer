@@ -182,6 +182,9 @@ func (p *DeploymentPlan) SetDefaults() {
 		if ns.Machine.Arch == "" {
 			ns.Machine.Arch = "amd64"
 		}
+		if d := ns.Machine.JoinDownload; d.Official() && d.DownloadBaseURL == "" {
+			d.DownloadBaseURL = DefaultJoinDownloadBaseURL
+		}
 	}
 
 	p.setConsulDefaults()
