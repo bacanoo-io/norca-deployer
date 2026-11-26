@@ -20,8 +20,9 @@ import (
 
 // portableScripts are every script and POSIX command the deployer makes for
 // a Linux node: the commands prepareNode runs for the example plans (with
-// the drivers, the DNS script, the firewall), the probe, the uninstall, the
-// command of a script of the plan, and the install scripts of a scaled
+// the drivers, the DNS script, the firewall), the probe, the removal of the
+// service and the uninstall, the command of a script of the plan, and the
+// install scripts of a scaled
 // machine of the machine tests.
 func portableScripts(t *testing.T) map[string]string {
 	t.Helper()
@@ -57,6 +58,12 @@ func portableScripts(t *testing.T) map[string]string {
 	res["consul-dns"] = dns.Script()
 	paths := storage.ResolveNodePaths(&config.NodeConfig{Platform: "linux"}, loadPlan(t, machinePlan(officialRelease, "")))
 	res["uninstall"] = linuxUninstallScript(paths, true)
+	// The removal of the service before the uninstall, on both init systems.
+	for name, m := range map[string]service.Manager{"systemd": service.Systemd{}, "openrc": service.OpenRC{}} {
+		for i, s := range m.RemoveSteps(paths) {
+			res[fmt.Sprintf("remove-%s-%d", name, i)] = s.Apply
+		}
+	}
 	res["script-command"] = scripts.Command(&scripts.Prepared{Config: &config.ScriptConfig{Name: "prep", Interpreter: "sh"}}, "/var/lib/norca-deployer/scripts/prep.env")
 	for name, yaml := range machineScriptPlans() {
 		res["machine-"+name] = generate(t, loadPlan(t, yaml), MachineScriptOptions{})

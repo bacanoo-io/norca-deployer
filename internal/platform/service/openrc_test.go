@@ -130,6 +130,7 @@ func TestOpenRCRemoveStepsKillTheCgroupOfTheService(t *testing.T) {
 		"rc-service norca stop",
 		"for norca_procs in /sys/fs/cgroup/openrc.norca/cgroup.procs /sys/fs/cgroup/unified/openrc.norca/cgroup.procs /sys/fs/cgroup/openrc/norca/tasks; do",
 		`kill -9 "$norca_pid"`,
+		`done <"$norca_procs"`,
 		"rc-update del norca default",
 		"rm -f "+runlevelLink+" "+InitScriptPath,
 	)

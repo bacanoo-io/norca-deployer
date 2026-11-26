@@ -116,7 +116,7 @@ func (OpenRC) RemoveSteps(*storage.ResolvedPaths) []step.Step {
 		Apply: "rc-service " + Name + " stop >/dev/null 2>&1 || true\n" +
 			"for norca_procs in " + strings.Join(serviceCgroupProcs, " ") + "; do\n" +
 			"  [ -f \"$norca_procs\" ] || continue\n" +
-			"  for norca_pid in $(cat \"$norca_procs\"); do kill -9 \"$norca_pid\" 2>/dev/null || true; done\n" +
+			"  while read -r norca_pid; do kill -9 \"$norca_pid\" 2>/dev/null || true; done <\"$norca_procs\"\n" +
 			"done\n" +
 			"rc-update del " + Name + " default >/dev/null 2>&1 || true\n" +
 			"rm -f " + runlevelLink + " " + InitScriptPath,

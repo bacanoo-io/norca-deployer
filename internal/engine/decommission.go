@@ -244,7 +244,7 @@ const taskCgroups = "/sys/fs/cgroup/nomad.slice"
 // up to 5 seconds until they are empty and removes them.
 const taskCgroupsCleanup = "if [ -d " + taskCgroups + " ]; then\n" +
 	"  for d in " + taskCgroups + "/*/; do if [ -f \"${d}cgroup.kill\" ]; then echo 1 >\"${d}cgroup.kill\"; fi; done\n" +
-	"  for i in 1 2 3 4 5 6 7 8 9 10; do grep -q '^populated 1' " + taskCgroups + "/cgroup.events 2>/dev/null || break; sleep 0.5; done\n" +
+	"  for _ in 1 2 3 4 5 6 7 8 9 10; do grep -q '^populated 1' " + taskCgroups + "/cgroup.events 2>/dev/null || break; sleep 0.5; done\n" +
 	"  find " + taskCgroups + " -mindepth 1 -depth -type d -exec rmdir {} \\; 2>/dev/null\n" +
 	"fi\n"
 
