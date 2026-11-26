@@ -9,8 +9,10 @@ import (
 
 // configureHostDNS makes a Linux node resolve the Consul domain through the
 // local Consul agent (consul.dns_forwarding), or removes what an earlier
-// apply wrote for it. It marks nothing for a restart: the agent does not
-// depend on it. With docker the docker0 subnet is kept for the firewall.
+// apply wrote for it. The init system of its facts tells the script how to
+// drive the resolver (systemd, or OpenRC with dnsmasq). It marks nothing
+// for a restart: the agent does not depend on it. With docker the docker0
+// subnet is kept for the firewall.
 func (r *Runner) configureHostDNS(t *target) error {
 	var fwd *config.ConsulDNSForwarding
 	if r.plan.Consul != nil {
@@ -24,7 +26,7 @@ func (r *Runner) configureHostDNS(t *target) error {
 		return nil
 	}
 	// The steps print the warnings.
-	res, err := dns.Apply(r.abortCtx(), t.conn, t.node.Host, fwd)
+	res, err := dns.Apply(r.abortCtx(), t.conn, t.node.Host, string(t.facts.Init), fwd)
 	if err != nil {
 		return err
 	}

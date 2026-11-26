@@ -9,7 +9,9 @@
 // local resolver (systemd-resolved or dnsmasq), checks what it needs before
 // it changes anything, writes the files and restarts the resolver when one
 // changed. Its steps (Steps) upload it and run it, over SSH and in the
-// install script of a scaled machine alike.
+// install script of a scaled machine alike. The caller tells it the init
+// system of the node: systemd, or OpenRC (Alpine), where dnsmasq is the
+// only resolver and rc-service starts it.
 package dns
 
 import (
@@ -55,13 +57,22 @@ func Script() string {
 // Var is one parameter of the script.
 type Var struct{ Name, Value string }
 
-// Vars returns the parameters of the script for a forwarding block; nil or
-// disabled removes what an earlier run wrote.
-func Vars(f *config.ConsulDNSForwarding) ([]Var, error) {
-	return vars(f, "")
+// Vars returns the parameters of the script for a forwarding block on a
+// node whose init system is initSystem (config.InitSystemd or
+// config.InitOpenRC); nil or disabled removes what an earlier run wrote. An
+// empty initSystem leaves NCD_INIT out: the caller puts it into the
+// environment of the script (the install script of a scaled machine, from
+// the family of the machine).
+func Vars(f *config.ConsulDNSForwarding, initSystem string) ([]Var, error) {
+	return vars(f, initSystem, "")
 }
 
-func vars(f *config.ConsulDNSForwarding, root string) ([]Var, error) {
+func vars(f *config.ConsulDNSForwarding, initSystem, root string) ([]Var, error) {
+	switch initSystem {
+	case "", config.InitSystemd, config.InitOpenRC:
+	default:
+		return nil, fmt.Errorf("consul.dns_forwarding: the init system %q is not %s or %s", initSystem, config.InitSystemd, config.InitOpenRC)
+	}
 	enabled, docker := "0", "0"
 	addrStr, domain, method := config.DefaultConsulDNSAddress, config.DefaultConsulDNSDomain, config.DNSMethodAuto
 	if f != nil {
@@ -90,7 +101,7 @@ func vars(f *config.ConsulDNSForwarding, root string) ([]Var, error) {
 	if addr.Is6() {
 		resolved = "[" + ip + "]"
 	}
-	return []Var{
+	vs := []Var{
 		{"NCD_ENABLED", enabled},
 		{"NCD_DOMAIN", domain},
 		{"NCD_RESOLVED_DNS", resolved + ":" + strconv.Itoa(port)},
@@ -98,8 +109,11 @@ func vars(f *config.ConsulDNSForwarding, root string) ([]Var, error) {
 		{"NCD_PORT", strconv.Itoa(port)},
 		{"NCD_METHOD", method},
 		{"NCD_DOCKER", docker},
-		{"NCD_ROOT", root},
-	}, nil
+	}
+	if initSystem != "" {
+		vs = append(vs, Var{"NCD_INIT", initSystem})
+	}
+	return append(vs, Var{"NCD_ROOT", root}), nil
 }
 
 // Assignments renders the parameters as shell assignments joined by sep:
@@ -190,13 +204,15 @@ const StepName = "consul.dns_forwarding"
 // ScriptPath and run with the parameters; its result lines decide the
 // change, the warnings and the errors. nil or disabled removes what an
 // earlier run wrote: the script runs only on a node that has a file of an
-// earlier run, and the script goes afterwards.
-func Steps(f *config.ConsulDNSForwarding) ([]step.Step, error) {
-	return steps(f, "")
+// earlier run, and the script goes afterwards. initSystem is the init
+// system of the node, as for Vars: empty when the caller sets NCD_INIT in
+// the environment of the step.
+func Steps(f *config.ConsulDNSForwarding, initSystem string) ([]step.Step, error) {
+	return steps(f, initSystem, "")
 }
 
-func steps(f *config.ConsulDNSForwarding, root string) ([]step.Step, error) {
-	vs, err := vars(f, root)
+func steps(f *config.ConsulDNSForwarding, initSystem, root string) ([]step.Step, error) {
+	vs, err := vars(f, initSystem, root)
 	if err != nil {
 		return nil, err
 	}
@@ -218,15 +234,16 @@ func steps(f *config.ConsulDNSForwarding, root string) ([]step.Step, error) {
 
 // Apply configures the forwarding of a Linux node: f enabled forwards the
 // domain, nil or disabled removes what an earlier apply wrote. node names
-// the node in the errors. A node without a suitable resolver is an error,
-// found before anything is changed on it.
-func Apply(ctx context.Context, conn connector.Connector, node string, f *config.ConsulDNSForwarding) (*Result, error) {
-	return apply(ctx, conn, node, f, "")
+// the node in the errors; initSystem is its init system
+// (config.InitSystemd or config.InitOpenRC, from its facts). A node without
+// a suitable resolver is an error, found before anything is changed on it.
+func Apply(ctx context.Context, conn connector.Connector, node, initSystem string, f *config.ConsulDNSForwarding) (*Result, error) {
+	return apply(ctx, conn, node, initSystem, f, "")
 }
 
 // apply is Apply with every path of the node below root (tests).
-func apply(ctx context.Context, conn connector.Connector, node string, f *config.ConsulDNSForwarding, root string) (*Result, error) {
-	steps, err := steps(f, root)
+func apply(ctx context.Context, conn connector.Connector, node, initSystem string, f *config.ConsulDNSForwarding, root string) (*Result, error) {
+	steps, err := steps(f, initSystem, root)
 	if err != nil {
 		return nil, err
 	}

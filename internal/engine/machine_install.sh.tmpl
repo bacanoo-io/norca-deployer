@@ -299,8 +299,15 @@ esac
 
 # DNS of the host: the consul domain goes to the local Consul agent
 # (consul.dns_forwarding). The script is the one the deployer runs on the
-# nodes of its inventory; it prints one line per event.
+# nodes of its inventory; it prints one line per event. Its NCD_INIT is the
+# init system of the family of this machine.
 log "consul DNS forwarding"
+case $os_family in
+{{- range .DNSInits}}
+{{.Families}}) NCD_INIT={{.Init}} ;;
+{{- end}}
+esac
+export NCD_INIT
 {{.DNS}}
 {{- end}}
 

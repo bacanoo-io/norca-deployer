@@ -333,18 +333,21 @@ func TestInstallScriptConsulDNS(t *testing.T) {
 	}
 
 	script := generate(t, loadPlan(t, consulDNSMachinePlan()), MachineScriptOptions{})
-	vs, err := dns.Vars(&config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto", Docker: true})
+	// NCD_INIT is not a parameter of the run: the script sets it from the
+	// family of the machine.
+	vs, err := dns.Vars(&config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto", Docker: true}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sysctl := strings.Index(script, "# Host tuning: kernel modules and sysctl")
 	file := strings.Index(script, "put_file '"+dns.ScriptPath+"' 0700 <<'NORCA_EOF'\n"+dns.Script())
+	initAt := strings.Index(script, "case $os_family in\ndebian) NCD_INIT=systemd ;;\nesac\nexport NCD_INIT\n")
 	run := strings.Index(script, dns.Assignments(vs, " ")+" sh "+dns.ScriptPath+"\n")
 	lines := strings.Index(script, "step_lines 'consul.dns_forwarding' \"$step_rc\" \"$step_out\"")
 	dirs := strings.Index(script, "# directories")
-	if sysctl < 0 || file < 0 || run < 0 || lines < 0 || dirs < 0 ||
-		!(sysctl < file && file < run && run < lines && lines < dirs) {
-		t.Fatalf("sysctl %d, file %d, run %d, lines %d, directories %d:\n%s", sysctl, file, run, lines, dirs, script)
+	if sysctl < 0 || initAt < 0 || file < 0 || run < 0 || lines < 0 || dirs < 0 ||
+		!(sysctl < initAt && initAt < file && file < run && run < lines && lines < dirs) {
+		t.Fatalf("sysctl %d, NCD_INIT %d, file %d, run %d, lines %d, directories %d:\n%s", sysctl, initAt, file, run, lines, dirs, script)
 	}
 	for _, want := range []string{
 		`die "$1: this machine ${step_errors:-could not be configured}"`,
@@ -429,7 +432,7 @@ func TestInstallScriptConsulDNSRun(t *testing.T) {
 				scriptDir := filepath.ToSlash(filepath.Dir(dns.ScriptPath))
 				b := strings.ReplaceAll(block, scriptDir, root+scriptDir)
 				b = strings.Replace(b, "NCD_ROOT=''", "NCD_ROOT="+connector.ShellQuote(root), 1)
-				prog := helpers + "\n" + b + "\necho \"changed=$changed\"\n"
+				prog := helpers + "\nos_family=debian\n" + b + "\necho \"changed=$changed\"\n"
 				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
 				c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "ACTIVE=" + active, "TMPDIR=" + t.TempDir(), "LC_ALL=C"}
 				out, err := c.CombinedOutput()

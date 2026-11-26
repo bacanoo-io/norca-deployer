@@ -42,27 +42,36 @@ func TestVars(t *testing.T) {
 	tests := []struct {
 		name string
 		f    *config.ConsulDNSForwarding
+		init string
 		want string
 	}{
 		{
 			name: "disabled",
 			f:    nil,
-			want: "NCD_ENABLED='0' NCD_DOMAIN='consul' NCD_RESOLVED_DNS='127.0.0.1:8600' NCD_DNSMASQ_SERVER='127.0.0.1#8600' NCD_PORT='8600' NCD_METHOD='auto' NCD_DOCKER='0' NCD_ROOT=''",
+			init: config.InitSystemd,
+			want: "NCD_ENABLED='0' NCD_DOMAIN='consul' NCD_RESOLVED_DNS='127.0.0.1:8600' NCD_DNSMASQ_SERVER='127.0.0.1#8600' NCD_PORT='8600' NCD_METHOD='auto' NCD_DOCKER='0' NCD_INIT='systemd' NCD_ROOT=''",
 		},
 		{
 			name: "enabled with docker",
 			f:    &config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:18600", Domain: "dc1.example", Method: config.DNSMethodResolved, Docker: true},
-			want: "NCD_ENABLED='1' NCD_DOMAIN='dc1.example' NCD_RESOLVED_DNS='127.0.0.1:18600' NCD_DNSMASQ_SERVER='127.0.0.1#18600' NCD_PORT='18600' NCD_METHOD='systemd-resolved' NCD_DOCKER='1' NCD_ROOT=''",
+			init: config.InitSystemd,
+			want: "NCD_ENABLED='1' NCD_DOMAIN='dc1.example' NCD_RESOLVED_DNS='127.0.0.1:18600' NCD_DNSMASQ_SERVER='127.0.0.1#18600' NCD_PORT='18600' NCD_METHOD='systemd-resolved' NCD_DOCKER='1' NCD_INIT='systemd' NCD_ROOT=''",
 		},
 		{
-			name: "ipv6",
+			name: "ipv6 on openrc",
 			f:    &config.ConsulDNSForwarding{Enabled: true, Address: "[::1]:8600", Domain: "consul", Method: config.DNSMethodDnsmasq},
-			want: "NCD_ENABLED='1' NCD_DOMAIN='consul' NCD_RESOLVED_DNS='[::1]:8600' NCD_DNSMASQ_SERVER='::1#8600' NCD_PORT='8600' NCD_METHOD='dnsmasq' NCD_DOCKER='0' NCD_ROOT=''",
+			init: config.InitOpenRC,
+			want: "NCD_ENABLED='1' NCD_DOMAIN='consul' NCD_RESOLVED_DNS='[::1]:8600' NCD_DNSMASQ_SERVER='::1#8600' NCD_PORT='8600' NCD_METHOD='dnsmasq' NCD_DOCKER='0' NCD_INIT='openrc' NCD_ROOT=''",
+		},
+		{
+			name: "init from the environment (the install script)",
+			f:    &config.ConsulDNSForwarding{Enabled: true},
+			want: "NCD_ENABLED='1' NCD_DOMAIN='consul' NCD_RESOLVED_DNS='127.0.0.1:8600' NCD_DNSMASQ_SERVER='127.0.0.1#8600' NCD_PORT='8600' NCD_METHOD='auto' NCD_DOCKER='0' NCD_ROOT=''",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			vs, err := Vars(tt.f)
+			vs, err := Vars(tt.f, tt.init)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,8 +80,12 @@ func TestVars(t *testing.T) {
 			}
 		})
 	}
-	if _, err := Vars(&config.ConsulDNSForwarding{Enabled: true, Address: "localhost:8600"}); err == nil {
+	if _, err := Vars(&config.ConsulDNSForwarding{Enabled: true, Address: "localhost:8600"}, config.InitSystemd); err == nil {
 		t.Fatal("Vars() accepted a host name")
+	}
+	if _, err := Vars(&config.ConsulDNSForwarding{Enabled: true}, "windows"); err == nil ||
+		err.Error() != `consul.dns_forwarding: the init system "windows" is not systemd or openrc` {
+		t.Fatalf("Vars() of windows = %v", err)
 	}
 }
 
@@ -119,7 +132,7 @@ func cannedNode(exists bool, out string, err error) *connector.FakeConnector {
 
 func TestApplyUploadsAndRuns(t *testing.T) {
 	conn := cannedNode(false, "method dnsmasq\nchanged "+DnsmasqConf+"\nrestarted dnsmasq\n", nil)
-	res, err := Apply(t.Context(), conn, "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto"})
+	res, err := Apply(t.Context(), conn, "10.0.0.1", config.InitSystemd, &config.ConsulDNSForwarding{Enabled: true, Address: "127.0.0.1:8600", Domain: "consul", Method: "auto"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +140,8 @@ func TestApplyUploadsAndRuns(t *testing.T) {
 		t.Fatalf("the script was not uploaded to %s", ScriptPath)
 	}
 	runs := conn.CommandsWithPrefix("# apply: " + StepName + "\n")
-	if len(runs) != 1 || !strings.Contains(runs[0], "\nNCD_ENABLED='1' ") || !strings.HasSuffix(runs[0], " sh "+ScriptPath) {
+	if len(runs) != 1 || !strings.Contains(runs[0], "\nNCD_ENABLED='1' ") ||
+		!strings.Contains(runs[0], " NCD_INIT='systemd' ") || !strings.HasSuffix(runs[0], " sh "+ScriptPath) {
 		t.Fatalf("commands = %q, want one run of the script", conn.Commands)
 	}
 	if res.Method != "dnsmasq" || len(res.Restarted) != 1 {
@@ -158,7 +172,7 @@ func TestApplyErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Apply(t.Context(), cannedNode(false, tt.out, tt.err), "10.0.0.1", &config.ConsulDNSForwarding{Enabled: true})
+			_, err := Apply(t.Context(), cannedNode(false, tt.out, tt.err), "10.0.0.1", config.InitSystemd, &config.ConsulDNSForwarding{Enabled: true})
 			if err == nil || !strings.HasPrefix(err.Error(), tt.want) {
 				t.Fatalf("Apply() = %v, want %q", err, tt.want)
 			}
@@ -170,7 +184,7 @@ func TestApplyErrors(t *testing.T) {
 func TestApplyDisabledWithoutFiles(t *testing.T) {
 	for _, f := range []*config.ConsulDNSForwarding{nil, {Enabled: false}} {
 		conn := cannedNode(false, "", nil)
-		res, err := Apply(t.Context(), conn, "10.0.0.1", f)
+		res, err := Apply(t.Context(), conn, "10.0.0.1", config.InitOpenRC, f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +196,7 @@ func TestApplyDisabledWithoutFiles(t *testing.T) {
 
 func TestApplyDisabledRemoves(t *testing.T) {
 	conn := cannedNode(true, "removed "+ResolvedDropIn+"\nrestarted systemd-resolved\n", nil)
-	res, err := Apply(t.Context(), conn, "10.0.0.1", nil)
+	res, err := Apply(t.Context(), conn, "10.0.0.1", config.InitSystemd, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

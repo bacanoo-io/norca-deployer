@@ -85,7 +85,10 @@ type machineScriptData struct {
 	Functions string
 	// The rendered steps common to the families.
 	Tuning, DNS, Dirs, Binary, CNI string
-	Join                           machineJoin
+	// DNSInits are the init systems of the families for the DNS step
+	// (NCD_INIT), with the families of each as a case pattern.
+	DNSInits []machineInit
+	Join     machineJoin
 	// Minimums are the first versions of the distributions, those of the
 	// check of a node over SSH (host.Minimums).
 	Minimums []host.Minimum
@@ -98,20 +101,27 @@ type machineFamily struct {
 	Name, Manager, Packages, Service, Tuning, Binary string
 }
 
+// machineInit is an init system and the families of the script that have
+// it ("debian | rhel").
+type machineInit struct {
+	Init, Families string
+}
+
 // machineFamilies are the families of the install script: the manager of
-// their packages, their init system, their tuning and the C library of
-// their norca binary.
+// their packages, their init system (its service driver, and its name for
+// the DNS step), their tuning and the C library of their norca binary.
 var machineFamilies = []struct {
 	family  string
 	manager string
 	driver  packages.Manager
 	service service.Manager
+	init    string
 	tuner   tuning.Tuner
 	libc    string
 }{
-	{config.FamilyDebian, config.PackageManagerApt, packages.Apt{}, service.Systemd{}, tuning.Linux{}, artifacts.LibcGlibc},
-	{config.FamilyRHEL, config.PackageManagerDnf, packages.Dnf{}, service.Systemd{}, tuning.Linux{}, artifacts.LibcGlibc},
-	{config.FamilyAlpine, config.PackageManagerApk, packages.Apk{}, service.OpenRC{}, tuning.OpenRC{}, artifacts.LibcMusl},
+	{config.FamilyDebian, config.PackageManagerApt, packages.Apt{}, service.Systemd{}, config.InitSystemd, tuning.Linux{}, artifacts.LibcGlibc},
+	{config.FamilyRHEL, config.PackageManagerDnf, packages.Dnf{}, service.Systemd{}, config.InitSystemd, tuning.Linux{}, artifacts.LibcGlibc},
+	{config.FamilyAlpine, config.PackageManagerApk, packages.Apk{}, service.OpenRC{}, config.InitOpenRC, tuning.OpenRC{}, artifacts.LibcMusl},
 }
 
 // scriptFamilies returns the families the install script installs on, as
@@ -193,8 +203,13 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	// the norca binary.
 	var names []string
 	tunings, binaries := map[string]bool{}, map[string]bool{}
+	inits := map[string][]string{}
 	for _, i := range scriptFamilies(plan, node) {
 		f := machineFamilies[i]
+		if _, seen := inits[f.init]; !seen {
+			data.DNSInits = append(data.DNSInits, machineInit{Init: f.init})
+		}
+		inits[f.init] = append(inits[f.init], f.family)
 		sel, _ := packages.Block(plan.HostPackages, f.manager, node, false)
 		pkgSteps, err := f.driver.Steps(sel, packages.Context{Plan: plan, Arch: arch, Script: true,
 			Resolve: func(v string) (string, error) { return resolveSecretWith(opts.Vault, v) }})
@@ -235,6 +250,9 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 			"of host_packages while another block selects packages for a client, or (Alpine) consul.dns_forwarding needs systemd")
 	}
 	data.Families, data.FamilyPattern = strings.Join(names, ", "), strings.Join(names, " | ")
+	for i := range data.DNSInits {
+		data.DNSInits[i].Families = strings.Join(inits[data.DNSInits[i].Init], " | ")
+	}
 	// A tuning or a binary that every family shares is rendered once.
 	data.TuningByFamily, data.BinaryByFamily = len(tunings) > 1, len(binaries) > 1
 	for i := range data.Parts {
@@ -248,7 +266,8 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 
 	var err error
 	if plan.Consul.DNSForwardingEnabled() {
-		dnsSteps, err := dns.Steps(plan.Consul.DNSForwarding)
+		// NCD_INIT comes from the family of the machine (DNSInits).
+		dnsSteps, err := dns.Steps(plan.Consul.DNSForwarding, "")
 		if err != nil {
 			return "", err
 		}

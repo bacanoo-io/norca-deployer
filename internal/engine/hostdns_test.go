@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
 )
@@ -28,6 +29,12 @@ func dnsNode(out string, err error) *connector.FakeConnector {
 	return f
 }
 
+// systemdFacts and openRCFacts are the facts of a Debian and an Alpine node.
+var (
+	systemdFacts = &host.Facts{Platform: "linux", Family: host.FamilyDebian, Init: host.InitSystemd}
+	openRCFacts  = &host.Facts{Platform: "linux", Family: host.FamilyAlpine, Init: host.InitOpenRC}
+)
+
 func dnsRunner(t *testing.T, fwd *config.ConsulDNSForwarding) *Runner {
 	t.Helper()
 	plan := &config.DeploymentPlan{Inventory: config.InventoryConfig{Masters: []config.NodeConfig{{Host: "10.0.0.1"}}}}
@@ -40,7 +47,7 @@ func dnsRunner(t *testing.T, fwd *config.ConsulDNSForwarding) *Runner {
 func TestConfigureHostDNS(t *testing.T) {
 	r := dnsRunner(t, &config.ConsulDNSForwarding{Enabled: true, Docker: true})
 	conn := dnsNode("method systemd-resolved\nunchanged "+dns.ResolvedDropIn+"\nbridge 172.17.0.1/16\n", nil)
-	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn}
+	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn, facts: systemdFacts}
 	if err := r.configureHostDNS(tg); err != nil {
 		t.Fatal(err)
 	}
@@ -66,10 +73,32 @@ func TestConfigureHostDNS(t *testing.T) {
 	}
 }
 
+// The init system of the facts reaches the script: NCD_INIT of an Alpine
+// node is openrc, that of a Debian node systemd.
+func TestConfigureHostDNSInit(t *testing.T) {
+	for _, facts := range []*host.Facts{systemdFacts, openRCFacts} {
+		t.Run(string(facts.Init), func(t *testing.T) {
+			r := dnsRunner(t, &config.ConsulDNSForwarding{Enabled: true})
+			conn := dnsNode("method dnsmasq\nchanged "+dns.DnsmasqConf+"\nrestarted dnsmasq\n", nil)
+			tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn, facts: facts}
+			if err := r.configureHostDNS(tg); err != nil {
+				t.Fatal(err)
+			}
+			runs := conn.CommandsWithPrefix("# apply: " + dns.StepName + "\n")
+			if want := " NCD_INIT='" + string(facts.Init) + "' "; len(runs) != 1 || !strings.Contains(runs[0], want) {
+				t.Fatalf("commands = %q, want one run with %q", conn.Commands, want)
+			}
+			if !tg.wrote {
+				t.Fatal("the written file is not a change of the node")
+			}
+		})
+	}
+}
+
 func TestConfigureHostDNSError(t *testing.T) {
 	r := dnsRunner(t, &config.ConsulDNSForwarding{Enabled: true})
 	conn := dnsNode("error has no local resolver the deployer can forward the consul domain from: systemd-resolved not installed\n", errors.New("exit status 1"))
-	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn}
+	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn, facts: systemdFacts}
 	err := r.configureHostDNS(tg)
 	if err == nil || !strings.Contains(err.Error(), "consul.dns_forwarding: 10.0.0.1 has no local resolver") {
 		t.Fatalf("configureHostDNS() = %v", err)
@@ -81,7 +110,7 @@ func TestConfigureHostDNSError(t *testing.T) {
 func TestConfigureHostDNSOff(t *testing.T) {
 	r := dnsRunner(t, nil)
 	conn := dnsNode("", nil)
-	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn}
+	tg := &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn, facts: systemdFacts}
 	if err := r.configureHostDNS(tg); err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +121,7 @@ func TestConfigureHostDNSOff(t *testing.T) {
 	r = dnsRunner(t, &config.ConsulDNSForwarding{Enabled: true})
 	r.plan.Inventory.Masters[0].Platform = "windows"
 	conn = dnsNode("", nil)
-	tg = &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn}
+	tg = &target{node: &r.plan.Inventory.Masters[0], isMaster: true, conn: conn, facts: systemdFacts}
 	if err := r.configureHostDNS(tg); err != nil {
 		t.Fatal(err)
 	}

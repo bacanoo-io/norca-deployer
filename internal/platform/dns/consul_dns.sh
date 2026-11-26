@@ -3,7 +3,9 @@
 # answers that domain; every other name keeps being answered by the servers
 # the host has (systemd-resolved asks the global DNS= server too, in
 # parallel, and Consul refuses those names). The resolver must be there
-# already (systemd-resolved or dnsmasq); nothing is installed here.
+# already (systemd-resolved or dnsmasq); nothing is installed here. On a
+# node with OpenRC (Alpine) dnsmasq is the only resolver: there is no
+# systemd-resolved, and rc-service starts and restarts dnsmasq.
 #
 # One implementation for both ways the deployer reaches a host: the SSH path
 # uploads this file and runs it with sh, the install script of a scaled
@@ -24,6 +26,9 @@
 #   NCD_METHOD          auto, systemd-resolved or dnsmasq
 #   NCD_DOCKER          1: containers on docker0 resolve the domain too
 #                       (systemd-resolved only)
+#   NCD_INIT            the init system of the node, systemd or openrc: the
+#                       facts of the node over SSH, the family of the machine
+#                       in the install script
 #   NCD_ROOT            prefix of every path read or written (tests); empty
 #                       on a host
 #
@@ -65,16 +70,41 @@ ncd_installed() {
   esac
 }
 
-# ncd_state UNIT prints "active", "inactive" or "not installed". While
-# systemd does not run (an image built in a container), an enabled unit
-# counts as active.
+# ncd_active UNIT reports whether a service runs.
+ncd_active() {
+  if [ "$ncd_init" = openrc ]; then
+    rc-service "$1" status >/dev/null 2>&1
+  else
+    systemctl is-active --quiet "$1" >/dev/null 2>&1
+  fi
+}
+
+# ncd_enabled UNIT reports whether a service starts at boot: an enabled
+# unit, or a service in a runlevel of OpenRC (a link that rc-update add
+# made, to the absolute path of the service).
+ncd_enabled() {
+  if [ "$ncd_init" != openrc ]; then
+    systemctl is-enabled --quiet "$1" >/dev/null 2>&1
+    return
+  fi
+  for ncd_link in "$ncd_root"/etc/runlevels/*/"$1"; do
+    if [ -e "$ncd_link" ] || [ -L "$ncd_link" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# ncd_state UNIT prints "active", "inactive" or "not installed". While the
+# init system does not run (an image built in a container), a service that
+# starts at boot counts as active.
 ncd_state() {
   if [ "$ncd_online" = 1 ]; then
-    if systemctl is-active --quiet "$1" >/dev/null 2>&1; then
+    if ncd_active "$1"; then
       ncd_say active
       return 0
     fi
-  elif systemctl is-enabled --quiet "$1" >/dev/null 2>&1; then
+  elif ncd_enabled "$1"; then
     ncd_say active
     return 0
   fi
@@ -87,18 +117,28 @@ ncd_state() {
 
 # ncd_detect reads what the host has: the resolvers, the version of systemd,
 # the name servers of /etc/resolv.conf and the hosts line of nsswitch.conf.
+# The init system runs when systemd made /run/systemd/system, or when OpenRC
+# booted the host (/run/openrc/softlevel, the file rc-service looks for).
 ncd_detect() {
   ncd_online=0
-  if [ -d "$ncd_root/run/systemd/system" ]; then
-    ncd_online=1
+  ncd_systemd=0
+  if [ "$ncd_init" = openrc ]; then
+    if [ -e "$ncd_root/run/openrc/softlevel" ]; then
+      ncd_online=1
+    fi
+    ncd_resolved="not installed"
+  else
+    if [ -d "$ncd_root/run/systemd/system" ]; then
+      ncd_online=1
+    fi
+    ncd_resolved=$(ncd_state systemd-resolved)
+    ncd_systemd=$(systemctl --version 2>/dev/null | awk 'NR == 1 { print $2 }') || ncd_systemd=
+    ncd_systemd=${ncd_systemd%%[!0-9]*}
+    if [ -z "$ncd_systemd" ]; then
+      ncd_systemd=0
+    fi
   fi
-  ncd_resolved=$(ncd_state systemd-resolved)
   ncd_dnsmasq=$(ncd_state dnsmasq)
-  ncd_systemd=$(systemctl --version 2>/dev/null | awk 'NR == 1 { print $2 }') || ncd_systemd=
-  ncd_systemd=${ncd_systemd%%[!0-9]*}
-  if [ -z "$ncd_systemd" ]; then
-    ncd_systemd=0
-  fi
   ncd_ns=$(awk '$1 == "nameserver" { printf "%s ", $2 }' "$ncd_root/etc/resolv.conf" 2>/dev/null) || ncd_ns=
   ncd_ns=${ncd_ns% }
   ncd_hosts=$(awk '$1 == "hosts:" { $1 = ""; print; exit }' "$ncd_root/etc/nsswitch.conf" 2>/dev/null) || ncd_hosts=
@@ -151,8 +191,40 @@ ncd_version() {
   fi
 }
 
+# ncd_choose_openrc sets ncd_method on an OpenRC node: dnsmasq, the only
+# resolver there, for auto and dnsmasq; systemd-resolved and the containers
+# (which need it) are refused.
+ncd_choose_openrc() {
+  if [ "${NCD_METHOD:-auto}" = systemd-resolved ]; then
+    ncd_error "cannot forward the $ncd_domain domain with systemd-resolved (consul.dns_forwarding.method): the node runs OpenRC, which has no systemd-resolved; use method auto or dnsmasq"
+    return 1
+  fi
+  if [ "${NCD_DOCKER:-0}" = 1 ]; then
+    ncd_error "cannot let containers resolve the $ncd_domain domain (consul.dns_forwarding.docker): the node runs OpenRC, and the containers need systemd-resolved; set docker = false"
+    return 1
+  fi
+  if [ "$ncd_dnsmasq" != active ] || ! ncd_via_dnsmasq; then
+    ncd_remedy="start it (rc-update add dnsmasq default; rc-service dnsmasq start) and name 127.0.0.1 in /etc/resolv.conf"
+    if [ "${NCD_METHOD:-auto}" = dnsmasq ]; then
+      ncd_error "cannot forward the $ncd_domain domain with dnsmasq (consul.dns_forwarding.method): $(ncd_found_dnsmasq), $(ncd_found_ns). Install dnsmasq with host_packages, $ncd_remedy"
+    else
+      ncd_error "has no local resolver the deployer can forward the $ncd_domain domain from: $(ncd_found_dnsmasq), $(ncd_found_ns). OpenRC has no systemd-resolved: install dnsmasq with host_packages, $ncd_remedy, or set consul.dns_forwarding.enabled = false"
+    fi
+    return 1
+  fi
+  ncd_method=dnsmasq
+  ncd_say "method $ncd_method"
+  if [ "$ncd_online" != 1 ]; then
+    ncd_say "warn OpenRC was not started (an image built in a container?): dnsmasq is chosen by its runlevel, /etc/resolv.conf is not checked, and nothing is restarted"
+  fi
+}
+
 # ncd_choose sets ncd_method from NCD_METHOD and what the host has.
 ncd_choose() {
+  if [ "$ncd_init" = openrc ]; then
+    ncd_choose_openrc
+    return
+  fi
   ncd_ok_resolved=0
   if [ "$ncd_resolved" = active ] && ncd_via_resolved; then
     ncd_ok_resolved=1
@@ -236,13 +308,19 @@ ncd_remove() {
   return 1
 }
 
-# ncd_restart UNIT restarts a running service. Without a running systemd the
-# configuration applies at the next boot.
+# ncd_restart UNIT restarts a running service (rc-service on OpenRC; its
+# reload of dnsmasq does not read the configuration again). Without a
+# running init system the configuration applies at the next boot.
 ncd_restart() {
-  if [ "$ncd_online" != 1 ] || ! systemctl is-active --quiet "$1" >/dev/null 2>&1; then
+  if [ "$ncd_online" != 1 ] || ! ncd_active "$1"; then
     return 0
   fi
-  if ncd_out=$(systemctl restart "$1" 2>&1); then
+  if [ "$ncd_init" = openrc ]; then
+    if ncd_out=$(rc-service "$1" restart 2>&1); then
+      ncd_say "restarted $1"
+      return 0
+    fi
+  elif ncd_out=$(systemctl restart "$1" 2>&1); then
     ncd_say "restarted $1"
     return 0
   fi
@@ -441,28 +519,82 @@ ncd_write_docker() {
   fi
 }
 
+# ncd_dnsmasq_cmdline prints the command lines of the running dnsmasq, one
+# per line: the main process of its unit, or on OpenRC the process of its
+# pid file (the service of Alpine has start-stop-daemon write
+# /run/dnsmasq.pid), else those pidof finds (under supervise-daemon).
+ncd_dnsmasq_cmdline() {
+  if [ "$ncd_init" = openrc ]; then
+    ncd_pids=$(cat "$ncd_root/run/dnsmasq.pid" 2>/dev/null) || ncd_pids=
+    if [ -z "$ncd_pids" ]; then
+      ncd_pids=$(pidof dnsmasq 2>/dev/null) || ncd_pids=
+    fi
+  else
+    ncd_pids=$(systemctl show -p MainPID --value dnsmasq 2>/dev/null) || ncd_pids=
+  fi
+  for ncd_pid in $ncd_pids; do
+    case $ncd_pid in
+    0 | *[!0-9]*) ;;
+    *)
+      tr '\000' ' ' <"$ncd_root/proc/$ncd_pid/cmdline" 2>/dev/null
+      printf '\n'
+      ;;
+    esac
+  done
+}
+
 # ncd_prepare_dnsmasq checks that dnsmasq reads /etc/dnsmasq.d: a conf-dir
-# line in /etc/dnsmasq.conf, or on the command line of the running dnsmasq
-# (the unit of Debian passes it).
+# line in /etc/dnsmasq.conf (the package of Alpine has it), or on the
+# command line of the running dnsmasq (the unit of Debian passes it).
 ncd_prepare_dnsmasq() {
   if grep -Eq '^[[:space:]]*conf-dir=/etc/dnsmasq\.d/?(,|[[:space:]]*$)' "$ncd_root/etc/dnsmasq.conf" 2>/dev/null; then
     return 0
   fi
   if [ "$ncd_online" = 1 ]; then
-    ncd_pid=$(systemctl show -p MainPID --value dnsmasq 2>/dev/null) || ncd_pid=
-    case $ncd_pid in
-    '' | 0 | *[!0-9]*) ;;
-    *)
-      if tr '\000' ' ' <"$ncd_root/proc/$ncd_pid/cmdline" 2>/dev/null | grep -Eq -- '(--conf-dir=|-7 ?)/etc/dnsmasq\.d/?(,| |$)'; then
-        return 0
-      fi
-      ;;
-    esac
+    if ncd_dnsmasq_cmdline | grep -Eq -- '(--conf-dir=|-7 ?)/etc/dnsmasq\.d/?(,| |$)'; then
+      return 0
+    fi
+  elif [ "$ncd_init" = openrc ]; then
+    # The options of the service of Alpine (command_args).
+    if grep -q '^[^#]*/etc/dnsmasq\.d' "$ncd_root/etc/conf.d/dnsmasq" 2>/dev/null; then
+      return 0
+    fi
   elif grep -q '/etc/dnsmasq\.d' "$ncd_root/etc/init.d/dnsmasq" 2>/dev/null; then
     return 0
   fi
-  ncd_error "runs a dnsmasq that does not read /etc/dnsmasq.d (no conf-dir=/etc/dnsmasq.d in /etc/dnsmasq.conf or on its command line); add conf-dir=/etc/dnsmasq.d/,*.conf to /etc/dnsmasq.conf"
+  ncd_hint=
+  if [ "$ncd_init" = openrc ]; then
+    ncd_hint=" (the dnsmasq.conf of the Alpine package has that line)"
+  fi
+  ncd_error "runs a dnsmasq that does not read /etc/dnsmasq.d (no conf-dir=/etc/dnsmasq.d in /etc/dnsmasq.conf or on its command line); add conf-dir=/etc/dnsmasq.d/,*.conf to /etc/dnsmasq.conf$ncd_hint"
   return 1
+}
+
+# ncd_check_dnsmasq_upstream warns on OpenRC when dnsmasq has no server for
+# the names outside the domain: it reads /etc/resolv.conf, which names only
+# loopback addresses (dnsmasq skips its own: "ignoring nameserver 127.0.0.1
+# - local interface", and answers REFUSED), and no resolv-file= or server=
+# in its configuration or on its command line gives it another. On Alpine
+# udhcpc writes the servers of the network into /etc/resolv.conf unless
+# RESOLV_CONF in /etc/udhcpc/udhcpc.conf names another file.
+ncd_check_dnsmasq_upstream() {
+  if [ "$ncd_init" != openrc ] || [ "$ncd_online" != 1 ]; then
+    return 0
+  fi
+  for ncd_server in $ncd_ns; do
+    case $ncd_server in
+    127.* | ::1) ;;
+    *) return 0 ;;
+    esac
+  done
+  if cat "$ncd_root/etc/dnsmasq.conf" "$ncd_root"/etc/dnsmasq.d/*.conf 2>/dev/null |
+    grep -Eq '^[[:space:]]*(resolv-file=|server=[^/])'; then
+    return 0
+  fi
+  if ncd_dnsmasq_cmdline | grep -Eq -- '(^| )(--resolv-file=|-r |--server=[^/]|-S [^/])'; then
+    return 0
+  fi
+  ncd_say "warn dnsmasq has no DNS server for names outside the $ncd_domain domain: /etc/resolv.conf names only $ncd_ns, which dnsmasq does not ask, and no resolv-file= or server= gives it another. Give it the servers of the network: with udhcpc, RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf and resolv-file=/etc/resolv.dnsmasq in a file of /etc/dnsmasq.d"
 }
 
 # ncd_write_dnsmasq writes the server line of the domain and restarts
@@ -478,6 +610,7 @@ ncd_write_dnsmasq() {
   if [ "$ncd_wrote" = 1 ]; then
     ncd_restart dnsmasq || return 1
   fi
+  ncd_check_dnsmasq_upstream
 }
 
 # ncd_remove_resolved removes the files of systemd-resolved and restarts it
@@ -510,6 +643,13 @@ ncd_remove_dnsmasq() {
 }
 
 ncd_run() {
+  case $ncd_init in
+  systemd | openrc) ;;
+  *)
+    ncd_error "was given the init system \"$ncd_init\" (NCD_INIT), not systemd or openrc"
+    return 1
+    ;;
+  esac
   ncd_detect
   if [ "${NCD_ENABLED:-0}" != 1 ]; then
     ncd_remove_resolved || return 1
@@ -535,6 +675,7 @@ ncd_run() {
 # norca_consul_dns configures the forwarding (see the top of the file).
 norca_consul_dns() {
   ncd_root=${NCD_ROOT:-}
+  ncd_init=${NCD_INIT:-}
   ncd_domain=${NCD_DOMAIN:-consul}
   ncd_dropin=/etc/systemd/resolved.conf.d/norca-consul.conf
   ncd_anchor=/etc/dnssec-trust-anchors.d/norca-consul.negative
