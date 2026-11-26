@@ -33,7 +33,7 @@ iptables
 rc-service
 --
 --
-cgroup2fs
+cgroup2
 --
 0
 `

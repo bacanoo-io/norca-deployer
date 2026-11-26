@@ -3,7 +3,9 @@ package host
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -24,7 +26,7 @@ func probeOutput(t *testing.T, osRelease, machine, pid1 string, tools []string, 
 		data = string(b)
 	}
 	return data + "--\n" + machine + "\n--\n" + pid1 + "\n--\n" + strings.Join(tools, "\n") + "\n--\n" +
-		"Disabled\n--\ncgroup2fs\n--\n" + uid + "\n"
+		"Disabled\n--\ncgroup2\n--\n" + uid + "\n"
 }
 
 var (
@@ -334,6 +336,116 @@ func TestProbe(t *testing.T) {
 	}
 }
 
+// The lines of a /proc/mounts for the probe of the cgroups.
+const (
+	mountSysfs       = "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n"
+	mountV2          = "cgroup2 /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate 0 0\n"
+	mountV2Elsewhere = "cgroup2 /mnt/cgroup cgroup2 rw,relatime 0 0\n"
+	mountTmpfs       = "tmpfs /sys/fs/cgroup tmpfs ro,nosuid,nodev,noexec,mode=755 0 0\n"
+	mountV1CPU       = "cgroup /sys/fs/cgroup/cpu,cpuacct cgroup rw,nosuid,nodev,noexec,relatime,cpu,cpuacct 0 0\n"
+	mountV2Unified   = "cgroup2 /sys/fs/cgroup/unified cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate 0 0\n"
+)
+
+// The probe reads the file system of /sys/fs/cgroup from /proc/mounts: the
+// stat of busybox (Alpine) names no cgroup2 (UNKNOWN), so a probe that asked
+// stat reported no cgroup v2 on Alpine. It runs here in dash, bash and
+// busybox against a /proc/mounts of the test.
+func TestProbeCommandCgroupV2(t *testing.T) {
+	if !strings.Contains(ProbeCommand, "/proc/mounts") {
+		t.Error("the probe does not read /proc/mounts: the cases below ask the machine of the test")
+	}
+	tests := []struct {
+		name   string
+		mounts string // "": no /proc/mounts
+		want   bool
+	}{
+		{name: "cgroup v2 (Alpine)", mounts: mountSysfs + mountV2, want: true},
+		{name: "a cgroup2 elsewhere", mounts: mountSysfs + mountV2Elsewhere},
+		{name: "the hierarchies of v1", mounts: mountSysfs + mountTmpfs + mountV1CPU},
+		{name: "hybrid: v2 below the tmpfs of v1", mounts: mountSysfs + mountTmpfs + mountV1CPU + mountV2Unified},
+		{name: "the last mount on /sys/fs/cgroup counts", mounts: mountSysfs + mountTmpfs + mountV2, want: true},
+		{name: "a tmpfs over cgroup2", mounts: mountSysfs + mountV2 + mountTmpfs},
+		{name: "no cgroups", mounts: mountSysfs},
+		{name: "no /proc/mounts"},
+	}
+	for shName, argv := range probeShells(t) {
+		for _, tt := range tests {
+			t.Run(shName+"/"+tt.name, func(t *testing.T) {
+				mounts := filepath.Join(t.TempDir(), "mounts")
+				if tt.mounts != "" {
+					if err := os.WriteFile(mounts, []byte(tt.mounts), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				// Quoted: the directory of the test has the name of the case.
+				prog := strings.ReplaceAll(ProbeCommand, "/proc/mounts", connector.ShellQuote(mounts))
+				args := append(append([]string{}, argv[1:]...), "-c", prog)
+				out, err := exec.CommandContext(t.Context(), argv[0], args...).Output()
+				if err != nil {
+					t.Fatalf("the probe failed: %v\n%s", err, out)
+				}
+				f, err := Parse(string(out))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if f.CgroupV2 != tt.want {
+					t.Errorf("CgroupV2 = %v, want %v; the probe printed:\n%s", f.CgroupV2, tt.want, out)
+				}
+			})
+		}
+	}
+}
+
+// probeShells are the POSIX shells of this machine, by name: dash, bash and
+// the busybox of NORCA_TEST_BUSYBOX.
+func probeShells(t *testing.T) map[string][]string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the probe runs in a POSIX shell")
+	}
+	shells := map[string][]string{}
+	for _, name := range []string{"dash", "bash"} {
+		if p, err := exec.LookPath(name); err == nil {
+			shells[name] = []string{p}
+		}
+	}
+	if bb := os.Getenv("NORCA_TEST_BUSYBOX"); bb != "" {
+		shells["busybox"] = []string{bb, "sh"}
+	}
+	if len(shells) == 0 {
+		t.Skip("no POSIX shell")
+	}
+	return shells
+}
+
+// CgroupV2 is the type cgroup2 of the mount on /sys/fs/cgroup; tmpfs (v1),
+// nothing, and what stat printed before (cgroup2fs, UNKNOWN) are not.
+func TestParseCgroupV2(t *testing.T) {
+	tests := []struct {
+		section string
+		want    bool
+	}{
+		{"cgroup2", true},
+		{" cgroup2 ", true},
+		{"tmpfs", false},
+		{"", false},
+		{"cgroup2fs", false},
+		{"UNKNOWN", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.section, func(t *testing.T) {
+			out := "ID=alpine\n--\nx86_64\n--\ninit\n--\napk\n--\n--\n" + tt.section + "\n--\n0\n"
+			f, err := Parse(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if f.CgroupV2 != tt.want {
+				t.Errorf("CgroupV2 = %v, want %v", f.CgroupV2, tt.want)
+			}
+		})
+	}
+}
+
 // Whatever a node prints, the parser returns facts or an error; it does not
 // panic.
 func FuzzParse(f *testing.F) {
@@ -352,4 +464,4 @@ func FuzzParse(f *testing.F) {
 	})
 }
 
-const debianSample = "ID=debian\nVERSION_ID=\"12\"\n--\nx86_64\n--\nsystemd\n--\napt-get\nsudo\n--\n--\ncgroup2fs\n--\n0\n"
+const debianSample = "ID=debian\nVERSION_ID=\"12\"\n--\nx86_64\n--\nsystemd\n--\napt-get\nsudo\n--\n--\ncgroup2\n--\n0\n"

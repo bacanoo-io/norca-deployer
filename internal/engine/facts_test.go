@@ -33,7 +33,7 @@ systemctl
 ss
 --
 --
-cgroup2fs
+cgroup2
 --
 0
 `
@@ -64,7 +64,7 @@ ss
 --
 Enforcing
 --
-cgroup2fs
+cgroup2
 --
 0
 `

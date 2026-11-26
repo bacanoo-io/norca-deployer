@@ -14,7 +14,9 @@ import (
 // needs no root and is POSIX sh. Its sections are separated by lines of
 // "--": /etc/os-release, the machine, process 1 and the run directories of
 // systemd and OpenRC, the tools found, SELinux, the file system of the
-// cgroups and the user id.
+// cgroups and the user id. The file system of the cgroups is the type of the
+// last mount on /sys/fs/cgroup in /proc/mounts (cgroup2: v2; tmpfs: the
+// hierarchies of v1): the stat of busybox names no cgroup2 (UNKNOWN).
 const ProbeCommand = `cat /etc/os-release 2>/dev/null; echo "--"
 uname -m; echo "--"
 cat /proc/1/comm 2>/dev/null; [ -d /run/systemd/system ] && echo /run/systemd/system; [ -d /run/openrc ] && echo /run/openrc; echo "--"
@@ -22,7 +24,7 @@ for t in apt-get dnf yum apk sudo doas bash ufw firewall-cmd nft iptables getenf
   command -v "$t" >/dev/null 2>&1 && echo "$t"
 done; echo "--"
 getenforce 2>/dev/null; echo "--"
-stat -fc %T /sys/fs/cgroup 2>/dev/null; echo "--"
+awk '$2 == "/sys/fs/cgroup" { t = $3 } END { print t }' /proc/mounts 2>/dev/null; echo "--"
 id -u`
 
 // Probe collects the facts of a node: the probe command as the SSH user
@@ -77,7 +79,7 @@ func Parse(out string) (*Facts, error) {
 		}
 	}
 	f.SELinux = strings.ToLower(strings.TrimSpace(sections[4]))
-	f.CgroupV2 = strings.TrimSpace(sections[5]) == "cgroup2fs"
+	f.CgroupV2 = strings.TrimSpace(sections[5]) == "cgroup2"
 	uid, err := strconv.Atoi(strings.TrimSpace(sections[6]))
 	if err != nil {
 		return nil, fmt.Errorf("unexpected user id in the probe of the node: %q", sections[6])
