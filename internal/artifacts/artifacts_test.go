@@ -372,3 +372,65 @@ func TestLocalPathMusl(t *testing.T) {
 		t.Fatalf("a musl binary for a node of glibc: %v", err)
 	}
 }
+
+// join_download source official: the URL of norca-join of the release of
+// norca-platform for the architecture, and its digest from the SHA256SUMS
+// of the release, downloaded once; the binary itself is not downloaded.
+func TestJoinDownloadOfficial(t *testing.T) {
+	const amd, arm = "1111111111111111111111111111111111111111111111111111111111111111",
+		"2222222222222222222222222222222222222222222222222222222222222222"
+	var hits atomic.Int32
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/releases/v0.2.0/norca-platform_0.2.0_SHA256SUMS" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, "%s  norca-join_0.2.0_linux_amd64\n%s  norca-join_0.2.0_linux_arm64\n"+
+			"%s  norca-join_0.2.0_linux_amd64.cdx.json\n", amd, arm, strings.Repeat("3", 64))
+	}))
+	defer srv.Close()
+	join := &config.JoinDownload{Source: config.JoinDownloadOfficial, Version: "v0.2.0", DownloadBaseURL: srv.URL + "/releases/"}
+	cache := t.TempDir()
+	res := quickResolver(&config.DeploymentPlan{}, cache)
+	for arch, sum := range map[string]string{"amd64": amd, "arm64": arm} {
+		d, err := res.JoinDownload(t.Context(), join, arch)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := srv.URL + "/releases/v0.2.0/norca-join_0.2.0_linux_" + arch; d.URL != want || d.SHA256 != sum || d.Archive {
+			t.Fatalf("%s: %+v, want %s %s", arch, d, want, sum)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Fatalf("requests %v: want the sums once", paths)
+	}
+	// A version without the v names the same release.
+	join.Version = "0.2.0"
+	if d, err := quickResolver(&config.DeploymentPlan{}, cache).JoinDownload(t.Context(), join, "amd64"); err != nil ||
+		d.URL != srv.URL+"/releases/v0.2.0/norca-join_0.2.0_linux_amd64" || hits.Load() != 1 {
+		t.Fatalf("0.2.0: %+v %v after %d requests", d, err, hits.Load())
+	}
+
+	// No build for the architecture, and a release without the file.
+	if _, err := res.JoinDownload(t.Context(), join, "386"); err == nil || !strings.Contains(err.Error(), "amd64 and arm64") {
+		t.Fatalf("386: %v", err)
+	}
+	join.Version = "v0.3.0"
+	if _, err := quickResolver(&config.DeploymentPlan{}, t.TempDir()).JoinDownload(t.Context(), join, "amd64"); err == nil ||
+		!strings.Contains(err.Error(), "404") {
+		t.Fatalf("a release that is not there: %v", err)
+	}
+}
+
+// join_download source url: the URL and the digest of the plan, as they are.
+func TestJoinDownloadURL(t *testing.T) {
+	sum := strings.Repeat("A", 64)
+	d, err := NewResolver(&config.DeploymentPlan{}, t.TempDir()).JoinDownload(t.Context(),
+		&config.JoinDownload{URL: "https://mirror.example/norca-join", ChecksumSHA256: sum}, "arm")
+	if err != nil || d.URL != "https://mirror.example/norca-join" || d.SHA256 != strings.ToLower(sum) {
+		t.Fatalf("%+v %v", d, err)
+	}
+}

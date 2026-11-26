@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -374,6 +375,35 @@ func (r *Resolver) CNIDownload(ctx context.Context, arch string) (*Download, err
 		return nil, err
 	}
 	return &Download{URL: rf.url, SHA256: rf.sha256, Archive: true}, nil
+}
+
+// JoinDownload returns the URL and the digest of the norca-join binary of
+// node_scaling.machine.join_download for a Linux architecture, the file the
+// install script of a scaled machine downloads. Source url gives the URL
+// and the digest of the plan; source official the binary
+// norca-join_<version>_linux_<arch> of the release of norca-platform, with
+// the digest from the norca-platform_<version>_SHA256SUMS of the release,
+// downloaded once and cached as the checksums of the Norca release are.
+// There is no musl variant: the binary is static and serves glibc and musl
+// (Alpine) machines alike.
+func (r *Resolver) JoinDownload(ctx context.Context, d *config.JoinDownload, arch string) (*Download, error) {
+	if !d.Official() {
+		return &Download{URL: d.URL, SHA256: strings.ToLower(d.ChecksumSHA256)}, nil
+	}
+	if !slices.Contains(config.JoinReleaseArchs, arch) {
+		return nil, fmt.Errorf("norca-join: the releases of norca-platform have it for %s, not for linux/%s",
+			strings.Join(config.JoinReleaseArchs, " and "), arch)
+	}
+	version := strings.TrimPrefix(d.Version, "v")
+	name := fmt.Sprintf("norca-join_%s_linux_%s", version, arch)
+	sumsName := fmt.Sprintf("norca-platform_%s_SHA256SUMS", version)
+	base := strings.TrimRight(d.DownloadBaseURL, "/") + "/v" + version + "/"
+	dir := filepath.Join(r.cacheDir, "norca-join", version)
+	sum, _, err := r.sums(ctx, base+sumsName, filepath.Join(dir, sumsName), name, false)
+	if err != nil {
+		return nil, fmt.Errorf("norca-join %s: %w", d.Version, err)
+	}
+	return &Download{URL: base + name, SHA256: sum}, nil
 }
 
 func expand(p, goos, arch string) string {

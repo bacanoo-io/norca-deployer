@@ -150,10 +150,11 @@ var validMachineArch = map[string]bool{"amd64": true, "arm64": true, "arm": true
 
 // GenerateInstallScript returns the install script of a scaled Linux
 // machine. The downloads it names are resolved with res: the URL and the
-// SHA-256 of the release archive and of the CNI plugins, as the native
-// install resolves them (a SHA256SUMS file of the release is downloaded when
-// the plan has no checksum), but the files themselves are downloaded by the
-// machine. The script is deterministic: the same plan gives the same script.
+// SHA-256 of the release archive, of the CNI plugins and of norca-join, as
+// the native install resolves them (a SHA256SUMS file of the release is
+// downloaded when the plan has no checksum), but the files themselves are
+// downloaded by the machine. The script is deterministic: the same plan
+// gives the same script.
 func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res *artifacts.Resolver, opts MachineScriptOptions) (string, error) {
 	var machine *config.NodeMachineConfig
 	if plan.NodeScaling != nil {
@@ -274,8 +275,11 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	}
 
 	if machine != nil && machine.JoinDownload != nil {
-		data.Join.URL = machine.JoinDownload.URL
-		data.Join.SHA256 = strings.ToLower(machine.JoinDownload.ChecksumSHA256)
+		d, err := res.JoinDownload(ctx, machine.JoinDownload, arch)
+		if err != nil {
+			return "", err
+		}
+		data.Join.URL, data.Join.SHA256 = d.URL, d.SHA256
 	}
 	data.Functions = strings.TrimSuffix(step.Functions(all), "\n")
 

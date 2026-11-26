@@ -199,6 +199,52 @@ func TestInstallScriptChecksumFiles(t *testing.T) {
 	}
 }
 
+// join_download source official: the script downloads norca-join of the
+// release of norca-platform for its architecture and checks it against the
+// digest of the SHA256SUMS of the release, which the deployer read. One
+// binary for every family: Alpine gets the same as Debian.
+func TestInstallScriptOfficialJoin(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/v0.2.0/norca-platform_0.2.0_SHA256SUMS" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprintf(w, "%s  norca-join_0.2.0_linux_amd64\n%s  norca-join_0.2.0_linux_arm64\n", sumJoin, sumCNI)
+	}))
+	defer srv.Close()
+	machine := "  machine:\n    join_download: {source: official, version: v0.2.0, download_base_url: '" + srv.URL + "'}"
+	yaml := strings.Replace(machinePlan(officialRelease, machine), "node_scaling:\n",
+		"  apk:\n    install:\n      - {name: jq}\nnode_scaling:\n", 1)
+	plan := loadPlan(t, yaml)
+	script := generate(t, plan, MachineScriptOptions{})
+	for _, want := range []string{
+		"fetch '" + srv.URL + "/v0.2.0/norca-join_0.2.0_linux_amd64' \"$work/norca-join\"",
+		"verify \"$work/norca-join\" '" + sumJoin + "'",
+		"debian) service_debian ;;", "alpine) service_alpine ;;",
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("the script has no %q", want)
+		}
+	}
+	if strings.Count(script, "norca-join_0.2.0_linux_") != 1 {
+		t.Error("the script names norca-join more than once: one binary serves every family")
+	}
+	if !slices.Equal(paths, []string{"/v0.2.0/norca-platform_0.2.0_SHA256SUMS"}) {
+		t.Fatalf("requests %v: want only the sums", paths)
+	}
+	arm := generate(t, plan, MachineScriptOptions{Arch: "arm64"})
+	if !strings.Contains(arm, "fetch '"+srv.URL+"/v0.2.0/norca-join_0.2.0_linux_arm64'") ||
+		!strings.Contains(arm, "verify \"$work/norca-join\" '"+sumCNI+"'") {
+		t.Fatal("the arm64 script has another norca-join")
+	}
+	if _, err := GenerateInstallScript(context.Background(), plan, artifacts.NewResolver(plan, t.TempDir()),
+		MachineScriptOptions{Arch: "386"}); err == nil || !strings.Contains(err.Error(), "amd64 and arm64") {
+		t.Fatalf("386: %v", err)
+	}
+}
+
 func TestInstallScriptLocalPathAndHostPackage(t *testing.T) {
 	local := loadPlan(t, machinePlan(`release: {version: v0.3.0, source: local-path, local_binary_path: ./norca, checksum_sha256: `+sumRelease+`}`, ""))
 	script := generate(t, local, MachineScriptOptions{})
