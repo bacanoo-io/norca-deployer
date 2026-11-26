@@ -99,11 +99,15 @@ func (Systemd) InstallSteps(paths *storage.ResolvedPaths, fdLimit int) []step.St
 	}
 }
 
-// RemoveSteps implements Manager.
+// RemoveSteps implements Manager. The unit has KillMode=process, so the stop
+// leaves the task executors and the log plugins of the agent (norca
+// executor, logmon, docker_logger) running in its cgroup: they are killed
+// while the unit still exists, so that nothing of the agent outlives it.
 func (Systemd) RemoveSteps(*storage.ResolvedPaths) []step.Step {
 	return []step.Step{{
 		Name: "norca service removed",
 		Apply: "systemctl disable --now " + Name + " >/dev/null 2>&1 || true\n" +
+			"systemctl kill --kill-whom=all --signal=SIGKILL " + Name + " >/dev/null 2>&1 || true\n" +
 			"rm -f " + UnitPath + "\n" +
 			"systemctl daemon-reload >/dev/null 2>&1 || true\n" +
 			"systemctl reset-failed " + Name + " >/dev/null 2>&1 || true",

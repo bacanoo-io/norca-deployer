@@ -236,6 +236,18 @@ func (r *Runner) uninstall(d *config.DecommissionNode) {
 	fmt.Printf("    [OK] %s: Norca stopped; %s removed\n", d.Host, what)
 }
 
+// taskCgroups is the cgroup (v2) under which the agent makes one cgroup per
+// task: <alloc>.<task>.scope, docker-<id>.scope.
+const taskCgroups = "/sys/fs/cgroup/nomad.slice"
+
+// taskCgroupsCleanup kills what runs in the task cgroups (cgroup.kill), waits
+// up to 5 seconds until they are empty and removes them.
+const taskCgroupsCleanup = "if [ -d " + taskCgroups + " ]; then\n" +
+	"  for d in " + taskCgroups + "/*/; do if [ -f \"${d}cgroup.kill\" ]; then echo 1 >\"${d}cgroup.kill\"; fi; done\n" +
+	"  for i in 1 2 3 4 5 6 7 8 9 10; do grep -q '^populated 1' " + taskCgroups + "/cgroup.events 2>/dev/null || break; sleep 0.5; done\n" +
+	"  find " + taskCgroups + " -mindepth 1 -depth -type d -exec rmdir {} \\; 2>/dev/null\n" +
+	"fi\n"
+
 // linuxUninstallScript removes only the files the deployer wrote; the
 // directories are removed when they are empty afterwards. purge removes the
 // Norca data, log and application directories completely. The service is
@@ -249,6 +261,9 @@ func linuxUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	// would keep running without an agent.
 	sb.WriteString(`if command -v docker >/dev/null 2>&1; then ids=$(docker ps -aq --filter label=com.hashicorp.nomad.alloc_id); ` +
 		`if [ -n "$ids" ]; then printf '%s\n' "$ids" | xargs docker rm -f >/dev/null; fi; fi` + "\n")
+	// So would the tasks and executors in the cgroups the agent made for
+	// its tasks: they are killed, and the empty cgroups go.
+	sb.WriteString(taskCgroupsCleanup)
 	sb.WriteString("rm -f " + q(p.BinDir+"/norca") + " " + q(p.ConfigDir+"/norca.hcl"))
 	for _, f := range []string{"ca.pem", "server.pem", "server-key.pem", "client.pem", "client-key.pem", distrustedCAFile} {
 		sb.WriteString(" " + q(p.TLSDir+"/"+f))

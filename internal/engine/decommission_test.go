@@ -195,6 +195,37 @@ func TestDecommissionClientDrainsBeforeUninstallAndPurge(t *testing.T) {
 	}
 }
 
+// Nothing of the agent outlives the uninstall: the unit has KillMode=process,
+// so what its stop leaves in the cgroup of the unit (executors, logmon,
+// docker_logger) is killed before the unit goes, and after the containers
+// what still runs in the cgroups of the tasks.
+func TestUninstallKillsWhatTheAgentLeaves(t *testing.T) {
+	inst := installedWith(map[string]string{"s1": "master", "w2": "client"})
+	plan := planWith([]string{"s1"}, nil, config.DecommissionNode{NodeConfig: config.NodeConfig{Hostname: "w2"}})
+	r, first, nodes := decomRunner(t, plan, inst, &fakeAPI{})
+
+	if err := r.decommission(first, ""); err != nil {
+		t.Fatal(err)
+	}
+	script := strings.Join(nodes["w2"].Commands, "\n")
+	at := 0
+	for _, w := range []string{
+		"systemctl disable --now norca",
+		"systemctl kill --kill-whom=all --signal=SIGKILL norca",
+		"rm -f /etc/systemd/system/norca.service",
+		"xargs docker rm -f",
+		`echo 1 >"${d}cgroup.kill"`,
+		"find /sys/fs/cgroup/nomad.slice -mindepth 1 -depth -type d -exec rmdir {} \\;",
+		"rm -f '/usr/local/bin/norca'",
+	} {
+		i := strings.Index(script[at:], w)
+		if i < 0 {
+			t.Fatalf("the uninstall lacks %q (in this order):\n%s", w, script)
+		}
+		at += i + len(w)
+	}
+}
+
 func TestDecommissionServerLeavesRaftAfterStop(t *testing.T) {
 	inst := installedWith(map[string]string{"s1": "master", "s3": "master"})
 	plan := planWith([]string{"s1"}, nil, config.DecommissionNode{NodeConfig: config.NodeConfig{Hostname: "s3"}})

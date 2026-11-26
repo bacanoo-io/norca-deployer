@@ -121,3 +121,16 @@ func TestOpenRCRestartAndStatus(t *testing.T) {
 		}
 	}
 }
+
+// The stop leaves the executors and log plugins of the agent in the cgroup
+// of the service (rc_cgroup_cleanup="no"): the removal kills them, in the
+// cgroup of every mode of OpenRC, before the service goes.
+func TestOpenRCRemoveStepsKillTheCgroupOfTheService(t *testing.T) {
+	inOrder(t, OpenRC{}.RemoveSteps(testPaths)[0].Apply,
+		"rc-service norca stop",
+		"for norca_procs in /sys/fs/cgroup/openrc.norca/cgroup.procs /sys/fs/cgroup/unified/openrc.norca/cgroup.procs /sys/fs/cgroup/openrc/norca/tasks; do",
+		`kill -9 "$norca_pid"`,
+		"rc-update del norca default",
+		"rm -f "+runlevelLink+" "+InitScriptPath,
+	)
+}

@@ -65,7 +65,7 @@ The removal runs in the post-cluster stage, after the remaining nodes were rolle
 3. The server is removed from Raft (`/v1/operator/raft/peer`) and from Serf (`force-leave`).
 4. `apply` waits until the remaining servers report the new peer count.
 
-**Uninstall** removes the service, `norca.hcl`, the TLS files, the binary and `/var/lib/norca-deployer`; on Windows the service, the binary, the configuration and the TLS files. With `purge_data` the data directory (after unmounting allocation mounts), the log directory and the application directory are deleted too. Host packages, CNI plugins, sysctl and firewall settings are left in place.
+**Uninstall** removes the service, `norca.hcl`, the TLS files, the binary and `/var/lib/norca-deployer`; on Windows the service, the binary, the configuration and the TLS files. On Linux it also kills what the agent leaves running when it stops (the service keeps the task executors and log plugins over a restart of the agent) and, with cgroup v2, what still runs in the cgroups of its tasks. With `purge_data` the data directory (after unmounting allocation mounts), the log directory and the application directory are deleted too. Host packages, CNI plugins, sysctl and firewall settings are left in place.
 
 A machine that cannot be reached (for example, already deleted) is still removed from the cluster; `apply` prints a warning that Norca could not be uninstalled from it.
 

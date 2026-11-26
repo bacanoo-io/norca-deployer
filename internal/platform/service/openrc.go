@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
@@ -94,11 +95,29 @@ func (OpenRC) InstallSteps(paths *storage.ResolvedPaths, fdLimit int) []step.Ste
 	}
 }
 
-// RemoveSteps implements Manager.
+// serviceCgroupProcs are the process lists of the cgroup OpenRC gives the
+// service: cgroup v2 (rc_cgroup_mode unified, the default), hybrid, and the
+// named v1 hierarchy of OpenRC.
+var serviceCgroupProcs = []string{
+	"/sys/fs/cgroup/openrc." + Name + "/cgroup.procs",
+	"/sys/fs/cgroup/unified/openrc." + Name + "/cgroup.procs",
+	"/sys/fs/cgroup/openrc/" + Name + "/tasks",
+}
+
+// RemoveSteps implements Manager. The stop leaves the task executors and the
+// log plugins of the agent running in the cgroup of the service
+// (rc_cgroup_cleanup="no"): they are killed before the service goes. The
+// cgroup_cleanup command of OpenRC is not used: it looks for the cgroup
+// under another name than it creates in v2 (openrc.norca) and does nothing
+// there.
 func (OpenRC) RemoveSteps(*storage.ResolvedPaths) []step.Step {
 	return []step.Step{{
 		Name: "norca service removed",
 		Apply: "rc-service " + Name + " stop >/dev/null 2>&1 || true\n" +
+			"for norca_procs in " + strings.Join(serviceCgroupProcs, " ") + "; do\n" +
+			"  [ -f \"$norca_procs\" ] || continue\n" +
+			"  for norca_pid in $(cat \"$norca_procs\"); do kill -9 \"$norca_pid\" 2>/dev/null || true; done\n" +
+			"done\n" +
 			"rc-update del " + Name + " default >/dev/null 2>&1 || true\n" +
 			"rm -f " + runlevelLink + " " + InitScriptPath,
 	}}
