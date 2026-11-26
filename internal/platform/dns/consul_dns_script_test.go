@@ -16,10 +16,11 @@ import (
 
 // These tests run consul_dns.sh for real, through Apply and the fake
 // connector, against a fixture root (NCD_ROOT) with stub systemctl and ip
-// commands: under dash and busybox sh as the SSH path runs it, and under
-// bash with set -euo pipefail as the install script of a scaled machine
-// calls it. A shell that is not installed is left out (in the test
-// container: NORCA_TEST_BUSYBOX names a static busybox).
+// commands: under dash, busybox sh and bash in POSIX mode (the /bin/sh of
+// RHEL), each as sh ScriptPath, which is how both the SSH path and the
+// install script of a scaled machine run it. A shell that is not installed
+// is left out (in the test container: NORCA_TEST_BUSYBOX names a static
+// busybox).
 
 // shell is one way of running the script.
 type shell struct {
@@ -27,8 +28,6 @@ type shell struct {
 	argv []string
 	// path is the PATH after the stubs.
 	path string
-	// machine runs the functions as the machine script does.
-	machine bool
 	// applets are the commands the shell runs as its own applet before a
 	// command of PATH (a busybox built with FEATURE_PREFER_APPLETS, as
 	// those of Debian and Ubuntu are): a stub of such a name is called
@@ -81,7 +80,11 @@ func shells(t *testing.T) []shell {
 		res = append(res, shell{name: "busybox", argv: []string{bb, "sh"}, path: dir, applets: strings.Fields(string(list))})
 	}
 	if p, err := exec.LookPath("bash"); err == nil {
-		res = append(res, shell{name: "bash-machine", argv: []string{p}, path: systemPath, machine: true})
+		// bash in POSIX mode, the /bin/sh of RHEL. No pipefail: no caller
+		// sets it (the machine script is set -eu and runs sh ScriptPath),
+		// and with it a grep -q that has its match kills the writer before
+		// it (SIGPIPE), which fails the pipeline.
+		res = append(res, shell{name: "bash-posix", argv: []string{p, "--posix"}, path: systemPath})
 	}
 	if len(res) == 0 {
 		t.Skip("neither dash, busybox nor bash is installed")
@@ -333,9 +336,6 @@ func (h *host) handle(cmd string) (string, error, bool) {
 	case strings.Contains(cmd, " sh "+ScriptPath):
 		prefix, rest, _ := strings.Cut(cmd, " sh "+ScriptPath)
 		script := string(h.conn.Files[ScriptPath])
-		if h.sh.machine {
-			script = "set -euo pipefail\n" + Functions() + "\nif norca_consul_dns; then exit 0; else exit 1; fi\n"
-		}
 		for stub := range stubs {
 			if slices.Contains(h.sh.applets, stub) {
 				script = stub + "() { " + connector.ShellQuote(filepath.Join(h.bin, stub)) + " \"$@\"; }\n" + script
@@ -1088,6 +1088,14 @@ func TestScriptOpenRCDnsmasqWithoutUpstream(t *testing.T) {
 		warn  bool
 	}{
 		{name: "resolv-file in /etc/dnsmasq.d", setup: func(*host) {}},
+		{
+			// grep -q has its match in local.conf while cat still writes a
+			// blocklist longer than a pipe holds.
+			name: "resolv-file in /etc/dnsmasq.d, a long blocklist after it",
+			setup: func(h *host) {
+				h.file("/etc/dnsmasq.d/zz-blocklist.conf", strings.Repeat("address=/ads.example.com/0.0.0.0\n", 8192))
+			},
+		},
 		{
 			name:  "only resolv.conf",
 			setup: func(h *host) { h.file("/etc/dnsmasq.d/local.conf", "listen-address=127.0.0.1\n") },
