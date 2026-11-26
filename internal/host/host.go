@@ -145,9 +145,8 @@ func (f *Facts) Override(hf *config.HostFacts) []string {
 
 // Check returns the error of a node the deployer cannot drive: a family
 // outside Debian, RHEL and Alpine, no package manager, an init system that
-// is neither systemd nor OpenRC, a RHEL older than MinRHELMajor, or a
-// Debian, Ubuntu or Alpine older than its minimum (minimums). It lists
-// what the probe found.
+// is neither systemd nor OpenRC, or a version older than its minimum
+// (Minimums). It lists what the probe found.
 func (f *Facts) Check() error {
 	if f.Platform == "windows" {
 		return nil
@@ -162,11 +161,7 @@ func (f *Facts) Check() error {
 	if f.Init == "" {
 		problems = append(problems, "its init system is neither systemd nor OpenRC")
 	}
-	if major, ok := majorVersion(f.OSVersion); ok && f.Family == FamilyRHEL && major < MinRHELMajor {
-		problems = append(problems, fmt.Sprintf("it runs %s %s, but RHEL and its rebuilds are supported from version %d: "+
-			"the Norca binary needs glibc 2.34, and version %d has glibc 2.28 or older", f.OSID, f.OSVersion, MinRHELMajor, major))
-	}
-	if p := f.tooOld(); p != "" {
+	if p := VersionProblem(f.OSID, f.Family, f.OSVersion); p != "" {
 		problems = append(problems, p)
 	}
 	if len(problems) == 0 {
@@ -200,74 +195,105 @@ func (f *Facts) Warnings() []string {
 		"permissive if the agent fails)"}
 }
 
-// MinRHELMajor is the first major version of RHEL (and of its rebuilds)
-// the deployer installs on: the Linux release of Norca is built against
-// glibc 2.34, which RHEL 9 has and RHEL 8 (glibc 2.28) has not.
-const MinRHELMajor = 9
-
-// minimum is the first version of a distribution the deployer installs on,
-// and why the versions before it are refused.
-type minimum struct {
-	name         string // the distribution in the message
-	major, minor int
-	version      string // the first version, as the distribution writes it
-	reason       string
+// Minimum is the first version of a distribution the deployer installs on,
+// and why the versions before it are refused. The check of a node over SSH
+// (Check) and the install script of a scaled machine take the same
+// minimums.
+type Minimum struct {
+	// ID is the ID of /etc/os-release the minimum is of. A minimum
+	// without an ID holds for the members of Family that have no minimum
+	// of their own.
+	ID     string
+	Family Family
+	// Name is the distribution in the message; Version is the first
+	// version, as the distribution writes it.
+	Name, Version string
+	Major, Minor  int
+	Reason        string
 }
 
-// The first versions of Debian, Ubuntu and Alpine (RHEL: MinRHELMajor).
-// Debian and Ubuntu: the Linux release of Norca needs glibc 2.31, and the
-// deployer writes deb822 sources with Signed-By. Alpine: the musl build of
-// Norca runs on older branches too, but the deployer installs on the
-// branches Alpine supports (3.21 reached its end of support on 2026-11-01).
-var minimums = map[string]minimum{
-	"debian": {name: "Debian", major: 11, version: "11",
-		reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Debian 10 has glibc 2.28"},
-	"ubuntu": {name: "Ubuntu", major: 20, minor: 4, version: "20.04",
-		reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Ubuntu 18.04 has glibc 2.27"},
-	"alpine": {name: "Alpine", major: 3, minor: 22, version: "3.22",
-		reason: "older branches are no longer supported by Alpine (end of support), and the deployer installs on the supported ones"},
+// minimums are the first versions of Debian, Ubuntu, Alpine and the RHEL
+// family. Debian and Ubuntu: the Linux release of Norca needs glibc 2.31,
+// and the deployer writes deb822 sources with Signed-By. RHEL and its
+// rebuilds: the release needs glibc 2.34, which RHEL 9 has and RHEL 8
+// (glibc 2.28) has not. Alpine: the musl build of Norca runs on older
+// branches too, but the deployer installs on the branches Alpine supports
+// (3.21 reached its end of support on 2026-11-01).
+var minimums = []Minimum{
+	{ID: "debian", Family: FamilyDebian, Name: "Debian", Version: "11", Major: 11,
+		Reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Debian 10 has glibc 2.28"},
+	{ID: "ubuntu", Family: FamilyDebian, Name: "Ubuntu", Version: "20.04", Major: 20, Minor: 4,
+		Reason: "the Norca binary needs glibc 2.31 and the deployer writes deb822 sources with Signed-By; Ubuntu 18.04 has glibc 2.27"},
+	{ID: "alpine", Family: FamilyAlpine, Name: "Alpine", Version: "3.22", Major: 3, Minor: 22,
+		Reason: "older branches are no longer supported by Alpine (end of support), and the deployer installs on the supported ones"},
+	{Family: FamilyRHEL, Name: "RHEL (with its rebuilds)", Version: "9", Major: 9,
+		Reason: "the Norca binary needs glibc 2.34, which RHEL 9 has; RHEL 8 has glibc 2.28"},
 }
 
-// tooOld returns the problem of a Debian, Ubuntu or Alpine older than its
-// minimum; "" when it is not older or its version is not known (Debian
+// Minimums returns the minimums of the distributions: those of an ID
+// first, then those of a family.
+func Minimums() []Minimum { return slices.Clone(minimums) }
+
+// VersionProblem returns why a version of an operating system is older than
+// the deployer installs on: the minimum of its ID, else the one of its
+// family. It is "" when the version is not older or not known (Debian
 // testing has no VERSION_ID).
-func (f *Facts) tooOld() string {
-	m, ok := minimums[f.OSID]
-	if !ok {
+func VersionProblem(id string, family Family, version string) string {
+	m, ok := minimumOf(id, family)
+	if !ok || !m.olderThan(version) {
 		return ""
 	}
-	major, minor, ok := majorMinor(f.OSVersion)
-	if !ok || major > m.major || (major == m.major && minor >= m.minor) {
-		return ""
+	return fmt.Sprintf("it runs %s %s, but %s is supported from version %s: %s", id, version, m.Name, m.Version, m.Reason)
+}
+
+func minimumOf(id string, family Family) (Minimum, bool) {
+	for _, m := range minimums {
+		if m.ID != "" && m.ID == id {
+			return m, true
+		}
 	}
-	return fmt.Sprintf("it runs %s %s, but %s is supported from version %s: %s", f.OSID, f.OSVersion, m.name, m.version, m.reason)
+	for _, m := range minimums {
+		if m.ID == "" && m.Family == family {
+			return m, true
+		}
+	}
+	return Minimum{}, false
 }
 
-// majorVersion reads the major version of a VERSION_ID ("8.10" is 8).
-func majorVersion(v string) (int, bool) {
-	major, _, _ := strings.Cut(v, ".")
-	n, err := strconv.Atoi(major)
-	return n, err == nil
-}
-
-// majorMinor reads the major and minor version of a VERSION_ID: "20.04" is
-// 20 and 4, "3.25.0_alpha20260805" (Alpine edge) is 3 and 25, "11" is 11
-// and 0.
-func majorMinor(v string) (int, int, bool) {
-	major, ok := majorVersion(v)
+// olderThan reports whether a VERSION_ID is older than the minimum. The
+// major version is the number before the first dot, the minor one the
+// digits after it ("20.04" is 20 and 4, "3.25.0_alpha20260805" of Alpine
+// edge is 3 and 25, "11" is 11 and 0). A version that is not of this form
+// is not older; the minor version counts only when the major one is the
+// minimum's. The install script of a scaled machine compares the same way
+// in sh (os_too_old).
+func (m Minimum) olderThan(version string) bool {
+	majorPart, rest, hasMinor := strings.Cut(version, ".")
+	major, ok := versionNumber(majorPart)
 	if !ok {
-		return 0, 0, false
+		return false
 	}
-	_, rest, found := strings.Cut(v, ".")
-	if !found {
-		return major, 0, true
+	if major != m.Major {
+		return major < m.Major
 	}
-	end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' })
-	if end >= 0 {
+	if !hasMinor {
+		return m.Minor > 0
+	}
+	if end := strings.IndexFunc(rest, func(r rune) bool { return r < '0' || r > '9' }); end >= 0 {
 		rest = rest[:end]
 	}
-	minor, err := strconv.Atoi(rest)
-	return major, minor, err == nil
+	minor, ok := versionNumber(rest)
+	return ok && minor < m.Minor
+}
+
+// versionNumber reads 1 to 9 decimal digits: a longer number is not a
+// version (and would overflow the test of a shell).
+func versionNumber(s string) (int, bool) {
+	if s == "" || len(s) > 9 || strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(s)
+	return n, err == nil
 }
 
 // found describes what the probe saw, for an error.

@@ -167,6 +167,53 @@ func TestCheck(t *testing.T) {
 	}
 }
 
+// A version is older than the minimum of its ID, else of its family; a
+// version that is not a number before a dot is not older. The install
+// script of a scaled machine is held to the same results (engine
+// TestInstallScriptOSVersion).
+func TestVersionProblem(t *testing.T) {
+	tests := []struct {
+		id      string
+		family  Family
+		version string
+		older   bool
+	}{
+		{"debian", FamilyDebian, "10", true},
+		{"debian", FamilyDebian, "11", false},
+		{"debian", FamilyDebian, "", false},
+		{"debian", FamilyDebian, "011", false},
+		{"debian", FamilyDebian, "+9", false},
+		{"debian", FamilyDebian, "1234567890", false},
+		{"ubuntu", FamilyDebian, "19.10", true},
+		{"ubuntu", FamilyDebian, "20", true},
+		{"ubuntu", FamilyDebian, "20.04", false},
+		{"ubuntu", FamilyDebian, "20.x", false},
+		{"linuxmint", FamilyDebian, "19", false},
+		{"alpine", FamilyAlpine, "3.21.10", true},
+		{"alpine", FamilyAlpine, "3.22.0", false},
+		{"alpine", FamilyAlpine, "3.25.0_alpha20260805", false},
+		{"rocky", FamilyRHEL, "8.10", true},
+		{"centos", FamilyRHEL, "7", true},
+		{"rhel", FamilyRHEL, "9.0", false},
+		{"fedora", FamilyRHEL, "41", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.id+" "+tt.version, func(t *testing.T) {
+			got := VersionProblem(tt.id, tt.family, tt.version)
+			if (got != "") != tt.older {
+				t.Fatalf("VersionProblem = %q, want older %t", got, tt.older)
+			}
+			if tt.older && !strings.HasPrefix(got, "it runs "+tt.id+" "+tt.version+", but ") {
+				t.Fatalf("VersionProblem = %q", got)
+			}
+		})
+	}
+	if got := VersionProblem("rocky", FamilyRHEL, "8.10"); got != "it runs rocky 8.10, but RHEL (with its rebuilds) is supported from version 9: "+
+		"the Norca binary needs glibc 2.34, which RHEL 9 has; RHEL 8 has glibc 2.28" {
+		t.Fatalf("rocky 8.10: %q", got)
+	}
+}
+
 // SELinux: enforcing is a warning of the node, and enforcing and
 // permissive both label files.
 func TestSELinux(t *testing.T) {

@@ -760,3 +760,93 @@ func TestInstallScriptFamilyOf(t *testing.T) {
 		})
 	}
 }
+
+// The install script refuses a version of the operating system older than
+// the deployer installs on, with the minimums and the reason of the check
+// over SSH (host.VersionProblem), in every shell: for the os-release files
+// of the host tests and for versions at and around each minimum.
+func TestInstallScriptOSVersion(t *testing.T) {
+	script := generate(t, loadPlan(t, machinePlan(officialRelease, "")), MachineScriptOptions{})
+	helpers := scriptHelpers(t, script)
+	samples, err := filepath.Glob(filepath.Join("..", "host", "testdata", "os-release", "*"))
+	if err != nil || len(samples) < 5 {
+		t.Fatalf("os-release samples: %v %v", samples, err)
+	}
+	dir := t.TempDir()
+	// ID, ID_LIKE, VERSION_ID ("-": none)
+	for i, v := range [][3]string{
+		{"debian", "", "-"}, {"debian", "", "10"}, {"debian", "", "11"}, {"debian", "", "011"},
+		{"ubuntu", "debian", "18.04"}, {"ubuntu", "debian", "19.10"}, {"ubuntu", "debian", "20"}, {"ubuntu", "debian", "20.04"},
+		{"ubuntu", "debian", "20.4"}, {"ubuntu", "debian", "20.10"}, {"ubuntu", "debian", "21.x"},
+		{"alpine", "", "3.21.10"}, {"alpine", "", "3.22.0"}, {"alpine", "", "3.25.0_alpha20260805"}, {"alpine", "", "3.x"}, {"alpine", "", "2.99.1"},
+		{"rhel", "fedora", "8.10"}, {"rhel", "fedora", "9"}, {"rocky", "rhel centos fedora", "8"}, {"centos", "rhel fedora", "7"},
+		{"almalinux", "rhel centos fedora", "10.0"}, {"fedora", "", "41"},
+		{"debian", "", "abc"}, {"debian", "", "1234567890"}, {"debian", "", "+9"}, {"linuxmint", "ubuntu debian", "22"},
+	} {
+		body := "ID=" + v[0] + "\n"
+		if v[1] != "" {
+			body += "ID_LIKE=\"" + v[1] + "\"\n"
+		}
+		if v[2] != "-" {
+			body += "VERSION_ID=\"" + v[2] + "\"\n"
+		}
+		file := filepath.Join(dir, fmt.Sprintf("v%02d-%s-%s", i, v[0], v[2]))
+		if err := os.WriteFile(file, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		samples = append(samples, file)
+	}
+	// What the check over SSH says of each sample.
+	wants := map[string]string{}
+	for _, sample := range samples {
+		data, err := os.ReadFile(sample)
+		if err != nil {
+			t.Fatal(err)
+		}
+		facts, err := host.Parse(string(data) + "--\nx86_64\n--\nsystemd\n--\n--\n--\n--\n0\n")
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := host.VersionProblem(facts.OSID, facts.Family, facts.OSVersion)
+		if want != "" && !strings.Contains(fmt.Sprint(facts.Check()), want) {
+			t.Errorf("%s: the check over SSH does not say %q: %v", filepath.Base(sample), want, facts.Check())
+		}
+		wants[sample] = want
+	}
+	if refused := len(slices.DeleteFunc(slices.Collect(maps.Values(wants)), func(s string) bool { return s == "" })); refused != 14 {
+		t.Errorf("%d of the samples are refused, want 14: %q", refused, wants)
+	}
+	for name, argv := range machineShells(t) {
+		t.Run(name, func(t *testing.T) {
+			for _, sample := range samples {
+				prog := helpers + "\nos_too_old \"$(os_release ID)\" \"$(family_of \"$(os_release ID)\" \"$(os_release ID_LIKE)\")\" \"$(os_release VERSION_ID)\"\n"
+				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+				c.Env = []string{"PATH=/usr/bin:/bin", "NORCA_OS_RELEASE=" + sample, "TMPDIR=" + t.TempDir()}
+				out, err := c.CombinedOutput()
+				if err != nil || strings.TrimSpace(string(out)) != wants[sample] {
+					t.Errorf("%s: the script says %q (%v), the deployer %q", filepath.Base(sample), out, err, wants[sample])
+				}
+			}
+		})
+	}
+
+	// The script stops on such a machine after it found the family, with
+	// the reason.
+	_, rest, _ := strings.Cut(script, "\n# The family of this machine")
+	familyPart, _, found := strings.Cut(rest, "\nfor tool in")
+	if !found {
+		t.Fatal("no family part in the script")
+	}
+	for name, argv := range machineShells(t) {
+		t.Run(name+" stops", func(t *testing.T) {
+			c := exec.Command(argv[0], append(argv[1:], "-c", helpers+familyPart+"\necho went on\n")...)
+			c.Env = []string{"PATH=/usr/bin:/bin", "NORCA_OS_RELEASE=" + filepath.Join("..", "host", "testdata", "os-release", "debian-10"), "TMPDIR=" + t.TempDir()}
+			out, err := c.CombinedOutput()
+			want := "[norca-node-install] ERROR: this machine is not supported: it runs debian 10, but Debian is supported from version 11: " +
+				"the Norca binary needs glibc 2.31"
+			if err == nil || !strings.Contains(string(out), want) || strings.Contains(string(out), "went on") {
+				t.Fatalf("debian 10: %v\n%s", err, out)
+			}
+		})
+	}
+}

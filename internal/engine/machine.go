@@ -10,6 +10,7 @@ import (
 	"github.com/bacanoo-io/norca-deployer/internal/artifacts"
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/crypto"
+	"github.com/bacanoo-io/norca-deployer/internal/host"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/dns"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/packages"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/selinux"
@@ -85,6 +86,9 @@ type machineScriptData struct {
 	// The rendered steps common to the families.
 	Tuning, DNS, Dirs, Binary, CNI string
 	Join                           machineJoin
+	// Minimums are the first versions of the distributions, those of the
+	// check of a node over SSH (host.Minimums).
+	Minimums []host.Minimum
 }
 
 // machineFamily is the part of the install script of one family: its host
@@ -173,8 +177,9 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	paths := storage.ResolveNodePaths(node, plan)
 	data := &machineScriptData{
 		Cluster: plan.Metadata.Name, Region: plan.Metadata.Region, Mode: mode, Arch: arch,
-		Version: plan.Release.Version,
-		Join:    machineJoin{Path: machine.JoinBinaryPath()},
+		Version:  plan.Release.Version,
+		Join:     machineJoin{Path: machine.JoinBinaryPath()},
+		Minimums: host.Minimums(),
 	}
 	var all []step.Step
 	render := func(steps []step.Step) (string, error) {

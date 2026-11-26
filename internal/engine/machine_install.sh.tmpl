@@ -18,7 +18,8 @@
 #
 # The steps are those the deployer runs over SSH on the nodes of its
 # inventory. It is POSIX sh (dash, bash, busybox ash). A second run changes
-# nothing.
+# nothing. It stops on a system of another family and on a version older
+# than the deployer installs on, as the deployer stops on such a node.
 set -eu
 umask 022
 
@@ -179,6 +180,46 @@ family_of() {
   done
   echo unknown
 }
+
+# os_too_old ID FAMILY VERSION_ID prints why this version of the operating
+# system is older than the deployer installs on, or nothing: the minimum of
+# the ID, else the one of the family, as the deployer checks a node over
+# SSH. The major version is the number before the first dot, the minor one
+# the digits after it; a version it cannot read is not older.
+os_too_old() {
+  min_name=
+  case $1 in
+{{- range .Minimums}}{{if .ID}}
+  {{.ID}}) min_name={{q .Name}} min_major={{.Major}} min_minor={{.Minor}} min_version={{q .Version}} min_reason={{q .Reason}} ;;
+{{- end}}{{end}}
+  esac
+  if [ -z "$min_name" ]; then
+    case $2 in
+{{- range .Minimums}}{{if not .ID}}
+    {{.Family}}) min_name={{q .Name}} min_major={{.Major}} min_minor={{.Minor}} min_version={{q .Version}} min_reason={{q .Reason}} ;;
+{{- end}}{{end}}
+    esac
+  fi
+  [ -n "$min_name" ] || return 0
+  ver_major=${3%%.*}
+  case $ver_major in
+  '' | *[!0-9]* | ??????????*) return 0 ;;
+  esac
+  if [ "$ver_major" -eq "$min_major" ]; then
+    ver_minor=0
+    if [ "${3#*.}" != "$3" ]; then
+      ver_rest=${3#*.}
+      ver_minor=${ver_rest%%[!0-9]*}
+      case $ver_minor in
+      '' | ??????????*) return 0 ;;
+      esac
+    fi
+    [ "$ver_minor" -lt "$min_minor" ] || return 0
+  elif [ "$ver_major" -gt "$min_major" ]; then
+    return 0
+  fi
+  printf 'it runs %s %s, but %s is supported from version %s: %s\n' "$1" "$3" "$min_name" "$min_version" "$min_reason"
+}
 {{- if .Functions}}
 
 # The functions of the steps
@@ -192,6 +233,8 @@ case $os_family in
 {{.FamilyPattern}}) log "family $os_family (${os_id})" ;;
 *) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: {{.Families}}" ;;
 esac
+os_problem=$(os_too_old "$os_id" "$os_family" "$(os_release VERSION_ID)")
+[ -z "$os_problem" ] || die "this machine is not supported: $os_problem"
 for tool in sha256sum tar install stat mktemp base64 find; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is missing"
 done
