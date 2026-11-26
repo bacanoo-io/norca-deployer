@@ -423,7 +423,10 @@ ncd_prepare_resolved() {
     ncd_error "runs $(ncd_version): consul.dns_forwarding.docker needs DNSStubListenerExtra= of systemd 247 or newer; set docker = false"
     return 1
   fi
-  ncd_bridge=$(ip -4 -o addr show dev docker0 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); exit } }') || ncd_bridge=
+  # Through a file, not a pipe: awk exits at the first address, and under
+  # pipefail the ip it leaves writing (SIGPIPE) would lose that address.
+  ip -4 -o addr show dev docker0 >"$ncd_tmp/docker0" 2>/dev/null || :
+  ncd_bridge=$(awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); exit } }' "$ncd_tmp/docker0") || ncd_bridge=
   if [ -z "$ncd_bridge" ]; then
     if [ "$ncd_online" != 1 ]; then
       ncd_say "warn docker0 is not there while systemd does not run: the containers are left out; run the script again on a running machine for them"
@@ -543,6 +546,15 @@ ncd_dnsmasq_cmdline() {
   done
 }
 
+# ncd_dnsmasq_cmdline_has reports whether a command line of the running
+# dnsmasq matches the extended regular expression $1. The lines go through
+# a file, not a pipe: grep -q exits at its first match, and under pipefail
+# the writer it leaves behind (SIGPIPE) would turn the match into a miss.
+ncd_dnsmasq_cmdline_has() {
+  ncd_dnsmasq_cmdline >"$ncd_tmp/dnsmasq-cmdline"
+  grep -Eq -- "$1" "$ncd_tmp/dnsmasq-cmdline"
+}
+
 # ncd_prepare_dnsmasq checks that dnsmasq reads /etc/dnsmasq.d: a conf-dir
 # line in /etc/dnsmasq.conf (the package of Alpine has it), or on the
 # command line of the running dnsmasq (the unit of Debian passes it).
@@ -551,7 +563,7 @@ ncd_prepare_dnsmasq() {
     return 0
   fi
   if [ "$ncd_online" = 1 ]; then
-    if ncd_dnsmasq_cmdline | grep -Eq -- '(--conf-dir=|-7 ?)/etc/dnsmasq\.d/?(,| |$)'; then
+    if ncd_dnsmasq_cmdline_has '(--conf-dir=|-7 ?)/etc/dnsmasq\.d/?(,| |$)'; then
       return 0
     fi
   elif [ "$ncd_init" = openrc ]; then
@@ -588,11 +600,13 @@ ncd_check_dnsmasq_upstream() {
     *) return 0 ;;
     esac
   done
-  if cat "$ncd_root/etc/dnsmasq.conf" "$ncd_root"/etc/dnsmasq.d/*.conf 2>/dev/null |
-    grep -Eq '^[[:space:]]*(resolv-file=|server=[^/])'; then
+  # grep reads the files itself (no cat | grep -q, see
+  # ncd_dnsmasq_cmdline_has); with -q a match is success even when one of
+  # them is missing (POSIX).
+  if grep -Eqs '^[[:space:]]*(resolv-file=|server=[^/])' "$ncd_root/etc/dnsmasq.conf" "$ncd_root"/etc/dnsmasq.d/*.conf 2>/dev/null; then
     return 0
   fi
-  if ncd_dnsmasq_cmdline | grep -Eq -- '(^| )(--resolv-file=|-r |--server=[^/]|-S [^/])'; then
+  if ncd_dnsmasq_cmdline_has '(^| )(--resolv-file=|-r |--server=[^/]|-S [^/])'; then
     return 0
   fi
   ncd_say "warn dnsmasq has no DNS server for names outside the $ncd_domain domain: /etc/resolv.conf names only $ncd_ns, which dnsmasq does not ask, and no resolv-file= or server= gives it another. Give it the servers of the network: with udhcpc, RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf and resolv-file=/etc/resolv.dnsmasq in a file of /etc/dnsmasq.d"

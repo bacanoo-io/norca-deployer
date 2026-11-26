@@ -1161,6 +1161,103 @@ func TestScriptOpenRCDnsmasqWithoutUpstream(t *testing.T) {
 	}
 }
 
+// A caller may run the script with pipefail (bash -o pipefail, or
+// SHELLOPTS): then a pipeline fails when its reader has what it needs and
+// exits while the writer still writes (SIGPIPE). No check of the script may
+// depend on that: each case has more output after the line that decides
+// than a pipe holds.
+func TestScriptUnderPipefail(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the script runs on Linux")
+	}
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash is not installed")
+	}
+	sh := shell{name: "bash-pipefail", argv: []string{bash, "-o", "pipefail"}, path: systemPath}
+	// twoDnsmasq: pidof finds two dnsmasq (no pid file); the first has the
+	// option on its command line, the second a long one.
+	twoDnsmasq := func(h *host, first string) {
+		h.t.Helper()
+		if err := os.Remove(filepath.Join(h.root, "run/dnsmasq.pid")); err != nil {
+			h.t.Fatal(err)
+		}
+		h.write(filepath.Join(h.state, "pidof-dnsmasq"), "513 514\n", 0o644)
+		h.file("/proc/513/cmdline", first)
+		h.file("/proc/514/cmdline", "/usr/sbin/dnsmasq\x00"+strings.Repeat("--address=/ads.example.com/0.0.0.0\x00", 8192))
+	}
+	noWarnings := func(t *testing.T, res *Result) {
+		t.Helper()
+		if res.Method != config.DNSMethodDnsmasq || len(res.Warnings) != 0 {
+			t.Fatalf("result = %+v", res)
+		}
+	}
+	tests := []struct {
+		name   string
+		setup  func(h *host)
+		docker bool
+		check  func(t *testing.T, res *Result)
+	}{
+		{
+			name: "resolv-file in /etc/dnsmasq.d, a long blocklist after it",
+			setup: func(h *host) {
+				h.openrc()
+				h.alpineDnsmasq()
+				h.file("/etc/dnsmasq.d/zz-blocklist.conf", strings.Repeat("address=/ads.example.com/0.0.0.0\n", 8192))
+			},
+			check: noWarnings,
+		},
+		{
+			name: "conf-dir on the command line of the first dnsmasq, a long one after it",
+			setup: func(h *host) {
+				h.openrc()
+				h.alpineDnsmasq()
+				h.file("/etc/dnsmasq.conf", "local-service\n")
+				twoDnsmasq(h, "/usr/sbin/dnsmasq\x00-7\x00/etc/dnsmasq.d/\x00")
+			},
+			check: noWarnings,
+		},
+		{
+			name: "resolv-file on the command line of the first dnsmasq, a long one after it",
+			setup: func(h *host) {
+				h.openrc()
+				h.alpineDnsmasq()
+				h.file("/etc/dnsmasq.d/local.conf", "")
+				twoDnsmasq(h, "/usr/sbin/dnsmasq\x00--resolv-file=/etc/resolv.dnsmasq\x00")
+			},
+			check: noWarnings,
+		},
+		{
+			name: "docker0 with a long list of addresses after the first",
+			setup: func(h *host) {
+				h.resolved()
+				h.docker0("10.230.0.1/24")
+				p := filepath.Join(h.state, "docker0")
+				first, err := os.ReadFile(p)
+				if err != nil {
+					h.t.Fatal(err)
+				}
+				h.write(p, string(first)+strings.Repeat("4: docker0    inet 10.231.0.1/32 scope global secondary docker0\\       valid_lft forever preferred_lft forever\n", 4096), 0o644)
+			},
+			docker: true,
+			check: func(t *testing.T, res *Result) {
+				t.Helper()
+				if res.Bridge.String() != "10.230.0.1/24" {
+					t.Fatalf("result = %+v", res)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			h := newHost(t, sh)
+			tt.setup(h)
+			tt.check(t, h.mustApply(forward(config.DNSMethodAuto, tt.docker)))
+		})
+	}
+}
+
 // OpenRC not started (an image built in a container): dnsmasq in a
 // runlevel counts as started, /etc/resolv.conf is not checked, and nothing
 // is restarted. Without dnsmasq in a runlevel the node is refused.
