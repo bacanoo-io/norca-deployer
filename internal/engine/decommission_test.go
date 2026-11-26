@@ -222,3 +222,16 @@ func TestDecommissionNeedsTokenWithACLs(t *testing.T) {
 		t.Fatalf("expected a token error, got %v", err)
 	}
 }
+
+// The uninstall of a Windows node removes the directory of the deployer
+// (the scripts of the plan and their markers), as it removes
+// /var/lib/norca-deployer on Linux.
+func TestWindowsUninstallRemovesTheScripts(t *testing.T) {
+	paths := storage.ResolveNodePaths(&config.NodeConfig{Platform: "windows"}, loadPlan(t, "metadata: {name: prod, region: eu}\ninventory: {masters: [{host: 10.0.0.1}]}\n"))
+	want := `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath 'C:\ProgramData\norca-deployer';`
+	for _, purge := range []bool{false, true} {
+		if got := windowsUninstallScript(paths, purge); !strings.Contains(got, want) {
+			t.Errorf("purge %t: %s", purge, got)
+		}
+	}
+}

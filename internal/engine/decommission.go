@@ -9,6 +9,7 @@ import (
 
 	"github.com/bacanoo-io/norca-deployer/internal/connector"
 	"github.com/bacanoo-io/norca-deployer/internal/platform"
+	"github.com/bacanoo-io/norca-deployer/internal/platform/scripts"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/step"
 	"github.com/bacanoo-io/norca-deployer/internal/platform/storage"
 	config "github.com/bacanoo-io/norca-deployer/pkg/plan"
@@ -273,6 +274,9 @@ func windowsUninstallScript(p *storage.ResolvedPaths, purge bool) string {
 	for _, f := range files {
 		sb.WriteString("Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath " + q(f) + "; ")
 	}
+	// The scripts of the plan and their markers, as /var/lib/norca-deployer
+	// on Linux.
+	sb.WriteString("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath " + q(scripts.WindowsDeployerDir) + "; ")
 	if purge {
 		for _, dir := range []string{p.DataDir, p.LogDir, p.AppsDir} {
 			sb.WriteString("Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath " + q(dir) + "; ")
