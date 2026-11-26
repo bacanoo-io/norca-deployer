@@ -1,0 +1,9 @@
+$dir = 'C:\ProgramData\norca-deployer\scripts'
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+$acl = New-Object System.Security.AccessControl.DirectorySecurity
+$acl.SetAccessRuleProtection($true, $false)
+foreach ($sid in 'S-1-5-32-544', 'S-1-5-18') {
+  $id = New-Object System.Security.Principal.SecurityIdentifier $sid
+  $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule $id, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+}
+(Get-Item -LiteralPath $dir).SetAccessControl($acl)

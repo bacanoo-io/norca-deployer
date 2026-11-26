@@ -227,23 +227,37 @@ func DebArch(goArch string) string {
 	}
 }
 
-// The interpreters of a script.
+// The interpreters of a script: bash and sh on Linux nodes, Windows
+// PowerShell 5.1 (powershell.exe) on Windows nodes.
 const (
-	InterpreterBash = "bash"
-	InterpreterSh   = "sh"
+	InterpreterBash       = "bash"
+	InterpreterSh         = "sh"
+	InterpreterPowerShell = "powershell"
 )
 
 // FamilyWindows is the family of a Windows node, for the families of a
 // script.
 const FamilyWindows = "windows"
 
-// ScriptInterpreter returns the interpreter of a script on Linux: bash
-// when the plan names none.
-func ScriptInterpreter(s *ScriptConfig) string {
-	if s.Interpreter == "" {
+// ScriptInterpreter returns the interpreter of a script on a node: the one
+// the plan names, else bash on a Linux node and powershell on a Windows
+// node.
+func ScriptInterpreter(s *ScriptConfig, windows bool) string {
+	switch {
+	case s.Interpreter != "":
+		return s.Interpreter
+	case windows:
+		return InterpreterPowerShell
+	default:
 		return InterpreterBash
 	}
-	return s.Interpreter
+}
+
+// ScriptRunsOn reports whether a script runs on a node of the platform: a
+// powershell script only on Windows nodes, a bash or sh script only on
+// Linux nodes. A script of the other platform is skipped there.
+func ScriptRunsOn(s *ScriptConfig, windows bool) bool {
+	return (ScriptInterpreter(s, windows) == InterpreterPowerShell) == windows
 }
 
 // ScriptBody returns the content of a script.
@@ -738,19 +752,8 @@ func (p *DeploymentPlan) validateScripts() error {
 			return fmt.Errorf("%s: phase %q must be one of %s, %s, %s", what, s.Phase,
 				PhasePreInstall, PhasePostPackages, PhasePostInstall)
 		}
-		switch s.Interpreter {
-		case "", InterpreterBash, InterpreterSh:
-		case "powershell":
-			return fmt.Errorf("%s: interpreter powershell is not supported yet (scripts of Windows nodes follow in a later phase)", what)
-		default:
-			return fmt.Errorf("%s: interpreter %q must be bash or sh", what, s.Interpreter)
-		}
-		for _, f := range s.Families {
-			switch f {
-			case FamilyDebian, FamilyRHEL, FamilyAlpine, FamilyWindows:
-			default:
-				return fmt.Errorf("%s: family %q must be debian, rhel, alpine or windows", what, f)
-			}
+		if err := p.validateScriptPlatform(what, s); err != nil {
+			return err
 		}
 		if (s.Path == "") == (s.Inline == "") {
 			return fmt.Errorf("%s: exactly one of path or inline is required", what)
@@ -769,6 +772,67 @@ func (p *DeploymentPlan) validateScripts() error {
 		if err := validateRoles(what, s.Roles); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateScriptPlatform checks that a script is written for one platform:
+// its interpreter and its families name Linux or Windows, not both. A
+// script without an interpreter runs with bash on the Linux nodes and with
+// powershell on the Windows nodes, so it must not select nodes of both.
+func (p *DeploymentPlan) validateScriptPlatform(what string, s *ScriptConfig) error {
+	switch s.Interpreter {
+	case "", InterpreterBash, InterpreterSh, InterpreterPowerShell:
+	default:
+		return fmt.Errorf("%s: interpreter %q must be bash, sh or powershell", what, s.Interpreter)
+	}
+	var linuxFamily string
+	var windowsFamily bool
+	for _, f := range s.Families {
+		switch f {
+		case FamilyDebian, FamilyRHEL, FamilyAlpine:
+			if linuxFamily == "" {
+				linuxFamily = f
+			}
+		case FamilyWindows:
+			windowsFamily = true
+		default:
+			return fmt.Errorf("%s: family %q must be debian, rhel, alpine or windows", what, f)
+		}
+	}
+	switch {
+	case s.Interpreter == InterpreterPowerShell && linuxFamily != "":
+		return fmt.Errorf("%s: interpreter powershell runs on Windows nodes, but families names %s", what, linuxFamily)
+	case s.Interpreter != "" && s.Interpreter != InterpreterPowerShell && windowsFamily:
+		return fmt.Errorf("%s: interpreter %s runs on Linux nodes, but families names windows", what, s.Interpreter)
+	case s.Interpreter == "" && windowsFamily && linuxFamily != "":
+		return fmt.Errorf("%s: families names windows and %s, but a script is written for Linux or for Windows: "+
+			"make two scripts, each with its interpreter or its families", what, linuxFamily)
+	case s.Interpreter != "" || len(s.Families) > 0:
+		return nil
+	}
+	var linux, windows []string
+	for _, nodes := range []struct {
+		list     []NodeConfig
+		isMaster bool
+	}{{p.Inventory.Masters, true}, {p.Inventory.Clients, false}} {
+		for i := range nodes.list {
+			n := &nodes.list[i]
+			if !AppliesTo(s.Roles, s.Hosts, n, nodes.isMaster) {
+				continue
+			}
+			if n.Platform == "windows" {
+				windows = append(windows, n.Host)
+			} else {
+				linux = append(linux, n.Host)
+			}
+		}
+	}
+	if len(linux) > 0 && len(windows) > 0 {
+		return fmt.Errorf("%s: the script selects Linux nodes (%s) and Windows nodes (%s), but names no interpreter: "+
+			"it would run with bash on the Linux nodes and with powershell on the Windows nodes; "+
+			"set interpreter (bash, sh or powershell) or families to the platform it is written for",
+			what, strings.Join(linux, ", "), strings.Join(windows, ", "))
 	}
 	return nil
 }

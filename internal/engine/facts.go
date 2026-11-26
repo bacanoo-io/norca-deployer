@@ -158,7 +158,7 @@ func (r *Runner) checkNodeFacts(t *target) error {
 				// bash installed by host_packages is there for the
 				// scripts after the packages.
 				installed := phase != config.PhasePreInstall && own.Installs("bash")
-				if config.ScriptInterpreter(s) == config.InterpreterBash && !installed {
+				if config.ScriptInterpreter(s, false) == config.InterpreterBash && !installed {
 					errs = append(errs, fmt.Errorf("script %q runs with bash, which the node does not have: install bash with host_packages (for a script after pre_install) or set interpreter: sh",
 						s.Name))
 				}

@@ -240,11 +240,14 @@ type HostPackage struct {
 	Hosts      []string `yaml:"hosts,omitempty" json:"hosts,omitempty"` // host or hostname; empty = all nodes of the roles
 }
 
-// ScriptConfig is a script run on the Linux nodes at a given phase.
+// ScriptConfig is a script run on the nodes at a given phase.
 type ScriptConfig struct {
 	Name  string `yaml:"name" json:"name"`
 	Phase string `yaml:"phase" json:"phase"` // pre_install, post_packages, post_install
-	// Interpreter runs the script: bash (the default) or sh.
+	// Interpreter runs the script: bash or sh on Linux nodes, powershell
+	// (Windows PowerShell 5.1) on Windows nodes. Empty: bash on Linux and
+	// powershell on Windows. A script runs only on the nodes of the
+	// platform of its interpreter.
 	Interpreter string `yaml:"interpreter,omitempty" json:"interpreter,omitempty"`
 	// Families limits the script to nodes of these families (debian, rhel,
 	// alpine, windows); empty: every node.

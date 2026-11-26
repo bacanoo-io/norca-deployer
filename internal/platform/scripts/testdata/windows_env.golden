@@ -1,0 +1,8 @@
+$env:BACKTICK = 'a`nb`'
+$env:DOLLAR = '$HOME $(Get-Date) ${x}'
+$env:EMPTY = ''
+$env:NEWLINE = 'line1
+line2'
+$env:PLAIN = '/dev/sdb'
+$env:QUOTE = 'it''s'
+$env:TYPO = '‘‘a’’ ‚‚b‛‛'

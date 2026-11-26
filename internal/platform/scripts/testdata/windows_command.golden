@@ -1,0 +1,13 @@
+. 'C:\ProgramData\norca-deployer\scripts\prep.env.ps1'
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = "$PSHOME\powershell.exe"
+$psi.Arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\ProgramData\norca-deployer\scripts\prep.ps1"'
+$psi.UseShellExecute = $false
+$run = [System.Diagnostics.Process]::Start($psi)
+if (-not $run.WaitForExit(30000)) {
+  Start-Process -FilePath taskkill.exe -ArgumentList '/T', '/F', '/PID', $run.Id -NoNewWindow -Wait
+  [void]$run.WaitForExit(10000)
+  [Console]::Error.WriteLine('the script ran longer than its timeout of 30 s: it and the processes it started were stopped')
+  exit 124
+}
+exit $run.ExitCode

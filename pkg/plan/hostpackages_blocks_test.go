@@ -291,24 +291,69 @@ func TestHostPackageListedInDnf(t *testing.T) {
 	}
 }
 
+// The interpreter of a script and its families must name one platform: a
+// script is written for Linux or for Windows. A script without an
+// interpreter takes the one of each node, so it must not select nodes of
+// both platforms.
 func TestScriptInterpreterAndFamilies(t *testing.T) {
+	windowsClient := func(p *DeploymentPlan) {
+		p.Inventory.Clients = append(p.Inventory.Clients, NodeConfig{Host: "10.0.0.9", Hostname: "win-1", Platform: "windows", Arch: "amd64"})
+	}
 	tests := []struct {
 		name   string
-		mutate func(s *ScriptConfig)
+		mutate func(p *DeploymentPlan, s *ScriptConfig)
 		err    string
 	}{
-		{"default bash", func(*ScriptConfig) {}, ""},
-		{"sh", func(s *ScriptConfig) { s.Interpreter = InterpreterSh }, ""},
-		{"bash", func(s *ScriptConfig) { s.Interpreter = InterpreterBash }, ""},
-		{"powershell follows", func(s *ScriptConfig) { s.Interpreter = "powershell" }, "not supported yet"},
-		{"unknown interpreter", func(s *ScriptConfig) { s.Interpreter = "zsh" }, "must be bash or sh"},
-		{"families", func(s *ScriptConfig) { s.Families = []string{FamilyDebian, FamilyRHEL, FamilyAlpine, FamilyWindows} }, ""},
-		{"unknown family", func(s *ScriptConfig) { s.Families = []string{"suse"} }, "family \"suse\""},
+		{"default", func(*DeploymentPlan, *ScriptConfig) {}, ""},
+		{"sh", func(_ *DeploymentPlan, s *ScriptConfig) { s.Interpreter = InterpreterSh }, ""},
+		{"bash", func(_ *DeploymentPlan, s *ScriptConfig) { s.Interpreter = InterpreterBash }, ""},
+		{"powershell", func(_ *DeploymentPlan, s *ScriptConfig) { s.Interpreter = InterpreterPowerShell }, ""},
+		{"unknown interpreter", func(_ *DeploymentPlan, s *ScriptConfig) { s.Interpreter = "pwsh" }, "must be bash, sh or powershell"},
+		{"linux families", func(_ *DeploymentPlan, s *ScriptConfig) {
+			s.Families = []string{FamilyDebian, FamilyRHEL, FamilyAlpine}
+		}, ""},
+		{"windows family", func(_ *DeploymentPlan, s *ScriptConfig) { s.Families = []string{FamilyWindows} }, ""},
+		{"unknown family", func(_ *DeploymentPlan, s *ScriptConfig) { s.Families = []string{"suse"} }, "family \"suse\""},
+		{"bash on windows", func(_ *DeploymentPlan, s *ScriptConfig) {
+			s.Interpreter, s.Families = InterpreterBash, []string{FamilyWindows}
+		}, "scripts[0]: interpreter bash runs on Linux nodes, but families names windows"},
+		{"sh on windows and debian", func(_ *DeploymentPlan, s *ScriptConfig) {
+			s.Interpreter, s.Families = InterpreterSh, []string{FamilyDebian, FamilyWindows}
+		}, "interpreter sh runs on Linux nodes, but families names windows"},
+		{"powershell on debian", func(_ *DeploymentPlan, s *ScriptConfig) {
+			s.Interpreter, s.Families = InterpreterPowerShell, []string{FamilyDebian}
+		}, "interpreter powershell runs on Windows nodes, but families names debian"},
+		{"no interpreter for both platforms", func(_ *DeploymentPlan, s *ScriptConfig) {
+			s.Families = []string{FamilyWindows, FamilyAlpine}
+		}, "families names windows and alpine, but a script is written for Linux or for Windows"},
+		{"no interpreter in a mixed cluster", func(p *DeploymentPlan, _ *ScriptConfig) { windowsClient(p) },
+			"scripts[0]: the script selects Linux nodes (10.0.0.1) and Windows nodes (10.0.0.9), but names no interpreter"},
+		{"bash in a mixed cluster", func(p *DeploymentPlan, s *ScriptConfig) {
+			windowsClient(p)
+			s.Interpreter = InterpreterBash
+		}, ""},
+		{"powershell in a mixed cluster", func(p *DeploymentPlan, s *ScriptConfig) {
+			windowsClient(p)
+			s.Interpreter = InterpreterPowerShell
+		}, ""},
+		{"families in a mixed cluster", func(p *DeploymentPlan, s *ScriptConfig) {
+			windowsClient(p)
+			s.Families = []string{FamilyWindows}
+		}, ""},
+		{"roles in a mixed cluster", func(p *DeploymentPlan, s *ScriptConfig) {
+			windowsClient(p)
+			s.Roles = []string{RoleMaster}
+		}, ""},
+		{"hosts in a mixed cluster", func(p *DeploymentPlan, s *ScriptConfig) {
+			windowsClient(p)
+			s.Hosts = []string{"win-1"}
+		}, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := validPlan()
-			tt.mutate(&p.Scripts[0])
+			tt.mutate(p, &p.Scripts[0])
+			p.SetDefaults()
 			err := p.Validate()
 			if tt.err == "" && err != nil {
 				t.Fatal(err)
@@ -318,8 +363,56 @@ func TestScriptInterpreterAndFamilies(t *testing.T) {
 			}
 		})
 	}
-	if got := ScriptInterpreter(&ScriptConfig{}); got != InterpreterBash {
-		t.Fatalf("the default interpreter is %q", got)
+}
+
+// Without an interpreter in the plan, a script runs with bash on Linux and
+// with powershell on Windows; a script runs only on the platform of its
+// interpreter.
+func TestScriptInterpreterOfNode(t *testing.T) {
+	tests := []struct {
+		interpreter    string
+		linux, windows string
+		onLinux, onWin bool
+	}{
+		{"", InterpreterBash, InterpreterPowerShell, true, true},
+		{InterpreterBash, InterpreterBash, InterpreterBash, true, false},
+		{InterpreterSh, InterpreterSh, InterpreterSh, true, false},
+		{InterpreterPowerShell, InterpreterPowerShell, InterpreterPowerShell, false, true},
+	}
+	for _, tt := range tests {
+		s := &ScriptConfig{Interpreter: tt.interpreter}
+		if got := ScriptInterpreter(s, false); got != tt.linux {
+			t.Errorf("%q on Linux: %q, want %q", tt.interpreter, got, tt.linux)
+		}
+		if got := ScriptInterpreter(s, true); got != tt.windows {
+			t.Errorf("%q on Windows: %q, want %q", tt.interpreter, got, tt.windows)
+		}
+		if got := ScriptRunsOn(s, false); got != tt.onLinux {
+			t.Errorf("%q runs on Linux: %t", tt.interpreter, got)
+		}
+		if got := ScriptRunsOn(s, true); got != tt.onWin {
+			t.Errorf("%q runs on Windows: %t", tt.interpreter, got)
+		}
+	}
+}
+
+// interpreter: powershell and families load from YAML and HCL alike.
+func TestScriptPowerShellYAMLAndHCL(t *testing.T) {
+	const yamlBody = "scripts:\n  - {name: win-prep, phase: pre_install, interpreter: powershell, families: [windows], inline: \"Write-Output 1\"}\n" +
+		"inventory:\n  masters:\n    - host: 10.0.0.1\n  clients:\n    - {host: 10.0.0.9, platform: windows}\n"
+	const hclBody = "scripts {\n  name = \"win-prep\"\n  phase = \"pre_install\"\n  interpreter = \"powershell\"\n  families = [\"windows\"]\n  inline = \"Write-Output 1\"\n}\n" +
+		"inventory {\n  masters {\n    host = \"10.0.0.1\"\n  }\n  clients {\n    host = \"10.0.0.9\"\n    platform = \"windows\"\n  }\n}\n"
+	for file, body := range map[string]string{"p.yaml": yamlBody, "p.hcl": hclBody} {
+		t.Run(file, func(t *testing.T) {
+			plan, err := loadBody(t, file, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := plan.Scripts[0]
+			if s.Interpreter != InterpreterPowerShell || !reflect.DeepEqual(s.Families, []string{FamilyWindows}) {
+				t.Fatalf("script %+v", s)
+			}
+		})
 	}
 }
 
