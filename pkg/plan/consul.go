@@ -14,6 +14,17 @@ func (c *ConsulConfig) DNSForwardingEnabled() bool {
 	return c != nil && c.DNSForwarding != nil && c.DNSForwarding.Enabled
 }
 
+// DNSForwardingNeedsResolved reports whether the forwarding is on and can
+// only be done with systemd-resolved: method systemd-resolved, or docker
+// (DNSStubListenerExtra=). A node without systemd (OpenRC) cannot have it.
+func (c *ConsulConfig) DNSForwardingNeedsResolved() bool {
+	if !c.DNSForwardingEnabled() {
+		return false
+	}
+	f := c.DNSForwarding
+	return f.Method == DNSMethodResolved || f.Docker
+}
+
 // setConsulDefaults fills the defaults of consul.dns_forwarding.
 func (p *DeploymentPlan) setConsulDefaults() {
 	if p.Consul == nil || p.Consul.DNSForwarding == nil {

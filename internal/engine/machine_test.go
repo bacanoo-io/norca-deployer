@@ -490,6 +490,108 @@ func TestInstallScriptConsulDNSRun(t *testing.T) {
 	}
 }
 
+// machineRCServiceStub is rc-service of OpenRC for the run of the DNS part:
+// the services of STARTED are started; a restart is recorded in RESTARTS.
+const machineRCServiceStub = `#!/bin/sh
+case $2 in
+status)
+  case " $STARTED " in
+  *" $1 "*) exit 0 ;;
+  esac
+  exit 3
+  ;;
+restart) echo "$1" >>"$RESTARTS" ;;
+*) exit 1 ;;
+esac
+`
+
+// The DNS part of the script of a plan with the Debian and the Alpine
+// family, run as an Alpine machine: NCD_INIT is openrc, so dnsmasq is
+// driven with rc-service and systemctl is not called; run as a Debian
+// machine, the same part uses systemd.
+func TestInstallScriptConsulDNSRunAlpine(t *testing.T) {
+	plan := strings.Replace(alpineMachinePlan(), "node_scaling:", "consul:\n  dns_forwarding: {enabled: true}\nnode_scaling:", 1)
+	script := generate(t, loadPlan(t, plan), MachineScriptOptions{})
+	if !strings.Contains(script, "case $os_family in\ndebian) NCD_INIT=systemd ;;\nalpine) NCD_INIT=openrc ;;\nesac\nexport NCD_INIT\n") {
+		t.Fatalf("no NCD_INIT of the families in:\n%s", script)
+	}
+	start, end := strings.Index(script, "# DNS of the host:"), strings.Index(script, "\n# directories")
+	if start < 0 || end < start {
+		t.Fatal("no DNS part in the script")
+	}
+	block := script[start:end]
+	helpers := scriptHelpers(t, script)
+
+	for name, argv := range machineShells(t) {
+		t.Run(name, func(t *testing.T) {
+			// run runs the DNS part on a machine of the family below root.
+			run := func(t *testing.T, root, family string) (string, string, error) {
+				t.Helper()
+				bin, state := t.TempDir(), t.TempDir()
+				systemctl := "#!/bin/sh\necho \"$*\" >>" + connector.ShellQuote(filepath.Join(state, "systemctl")) + "\nexit 1\n"
+				for name, stub := range map[string]string{"rc-service": machineRCServiceStub, "systemctl": systemctl} {
+					if err := os.WriteFile(filepath.Join(bin, name), []byte(stub), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				scriptDir := filepath.ToSlash(filepath.Dir(dns.ScriptPath))
+				b := strings.ReplaceAll(block, scriptDir, root+scriptDir)
+				b = strings.Replace(b, "NCD_ROOT=''", "NCD_ROOT="+connector.ShellQuote(root), 1)
+				prog := helpers + "\nos_family=" + family + "\n" + b + "\necho \"changed=$changed\"\n"
+				c := exec.Command(argv[0], append(argv[1:], "-c", prog)...)
+				c.Env = []string{"PATH=" + bin + ":/usr/bin:/bin", "STARTED=dnsmasq", "RESTARTS=" + filepath.Join(state, "restarts"),
+					"TMPDIR=" + t.TempDir(), "LC_ALL=C"}
+				out, err := c.CombinedOutput()
+				calls, _ := os.ReadFile(filepath.Join(state, "systemctl"))
+				return string(out), string(calls), err
+			}
+			// An Alpine machine with OpenRC booted and dnsmasq set up.
+			root := t.TempDir()
+			for p, content := range map[string]string{
+				"run/openrc/softlevel":     "default\n",
+				"etc/resolv.conf":          "nameserver 127.0.0.1\n",
+				"etc/dnsmasq.conf":         "local-service\nconf-dir=/etc/dnsmasq.d/,*.conf\n",
+				"etc/dnsmasq.d/local.conf": "resolv-file=/etc/resolv.dnsmasq\n",
+				"usr/sbin/dnsmasq":         "",
+				"etc/resolv.dnsmasq":       "nameserver 10.0.0.2\n",
+			} {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(root, p), []byte(content), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out, calls, err := run(t, root, config.FamilyAlpine)
+			if err != nil {
+				t.Fatalf("%v:\n%s", err, out)
+			}
+			for _, want := range []string{
+				"consul.dns_forwarding: method dnsmasq\n", "consul.dns_forwarding: changed " + dns.DnsmasqConf + "\n",
+				"consul.dns_forwarding: restarted dnsmasq\n", "changed=1\n",
+			} {
+				if !strings.Contains(out, want) {
+					t.Errorf("no %q in:\n%s", want, out)
+				}
+			}
+			if calls != "" {
+				t.Errorf("systemctl called on an Alpine machine: %s", calls)
+			}
+			out, _, err = run(t, root, config.FamilyAlpine)
+			if err != nil || !strings.HasSuffix(out, "changed=0\n") || strings.Contains(out, "restarted") {
+				t.Fatalf("second run: %v:\n%s", err, out)
+			}
+
+			// The same root as a Debian machine: systemd, which does not run
+			// there, so its dnsmasq unit is not enabled.
+			out, calls, err = run(t, root, config.FamilyDebian)
+			if err == nil || !strings.Contains(out, "systemd-resolved not installed, dnsmasq inactive") || calls == "" {
+				t.Fatalf("as a Debian machine: %v, systemctl %q:\n%s", err, calls, out)
+			}
+		})
+	}
+}
+
 // The bootstrap Variable: join_binary only when the plan sets it, the
 // install script only with install: boot; a plan without the machine block
 // keeps the items it had.
@@ -629,7 +731,13 @@ func TestInstallScriptFamilies(t *testing.T) {
 		{name: "no host packages", plan: noPackages, families: "debian, rhel, alpine"},
 		{name: "an apt block of the servers only", plan: aptServersOnly, families: "debian, rhel"},
 		{name: "apt and apk", plan: alpineMachinePlan(), families: "debian, alpine"},
-		{name: "consul dns forwarding leaves alpine out", plan: strings.Replace(noPackages, "security:", "consul:\n  dns_forwarding: {enabled: true}\nsecurity:", 1),
+		{name: "consul dns forwarding keeps alpine", plan: strings.Replace(noPackages, "security:", "consul:\n  dns_forwarding: {enabled: true}\nsecurity:", 1),
+			families: "debian, rhel, alpine"},
+		{name: "consul dns forwarding with systemd-resolved leaves alpine out",
+			plan:     strings.Replace(noPackages, "security:", "consul:\n  dns_forwarding: {enabled: true, method: systemd-resolved}\nsecurity:", 1),
+			families: "debian, rhel"},
+		{name: "consul dns forwarding with docker leaves alpine out",
+			plan:     strings.Replace(noPackages, "security:", "consul:\n  dns_forwarding: {enabled: true, docker: true}\nsecurity:", 1),
 			families: "debian, rhel"},
 	}
 	for _, tt := range tests {
@@ -732,12 +840,18 @@ func TestInstallScriptAlpine(t *testing.T) {
 	if strings.Count(script, "\napk_version() {\n") != 1 || strings.Count(script, "\nexpect_package() {\n") != 1 {
 		t.Error("a function is defined twice")
 	}
-	// Only the apk block, with consul.dns_forwarding: no family is left.
+	// Only the apk block, with consul.dns_forwarding: Alpine with dnsmasq
+	// (NCD_INIT openrc); with docker, which needs systemd-resolved, no
+	// family is left.
 	base := machinePlan(officialRelease, "")
 	apkOnly := base[:strings.Index(base, "host_packages:")] + "consul:\n  dns_forwarding: {enabled: true}\nhost_packages:\n" + apkBlock + base[strings.Index(base, "node_scaling:"):]
-	plan := loadPlan(t, apkOnly)
+	if script := generate(t, loadPlan(t, apkOnly), MachineScriptOptions{}); !strings.Contains(script, "# Architecture: amd64. Families: alpine.\n") ||
+		!strings.Contains(script, "case $os_family in\nalpine) NCD_INIT=openrc ;;\nesac\nexport NCD_INIT\n") {
+		t.Fatalf("the Alpine script with consul.dns_forwarding:\n%s", script)
+	}
+	plan := loadPlan(t, strings.Replace(apkOnly, "{enabled: true}", "{enabled: true, docker: true}", 1))
 	if _, err := GenerateInstallScript(t.Context(), plan, artifacts.NewResolver(plan, t.TempDir()), MachineScriptOptions{}); err == nil ||
-		!strings.Contains(err.Error(), "no family to install on") {
+		!strings.Contains(err.Error(), "no family to install on") || !strings.Contains(err.Error(), "(Alpine) consul.dns_forwarding needs systemd-resolved") {
 		t.Fatalf("a script without a family: %v", err)
 	}
 }
@@ -756,6 +870,8 @@ func machineScriptPlans() map[string]string {
 		"auth": strings.Replace(machinePlan(officialRelease, ""), "        pin_priority: 600",
 			"        pin_priority: 600\n        auth: {username: u, password: p}", 1),
 		"consul-dns": consulDNSMachinePlan(),
+		"alpine-consul-dns": strings.Replace(alpineMachinePlan(), "node_scaling:",
+			"consul:\n  dns_forwarding: {enabled: true}\nnode_scaling:", 1),
 	}
 }
 

@@ -128,15 +128,16 @@ var machineFamilies = []struct {
 // apply does for a client: a family whose manager has no block in
 // host_packages while another block selects packages for a client is left
 // out (the script stops on such a machine, as apply stops on such a node),
-// and so is an OpenRC family when the plan forwards the consul domain
-// (consul.dns_forwarding needs systemd).
+// and so is an OpenRC family when the forwarding of the consul domain needs
+// systemd-resolved (method systemd-resolved, or docker), as apply refuses
+// such a node.
 func scriptFamilies(plan *config.DeploymentPlan, node *config.NodeConfig) []int {
 	var res []int
 	for i, f := range machineFamilies {
 		if _, has := packages.Block(plan.HostPackages, f.manager, node, false); !has && otherBlockSelects(plan, node, f.manager) {
 			continue
 		}
-		if _, openrc := f.service.(service.OpenRC); openrc && plan.Consul.DNSForwardingEnabled() {
+		if f.init == config.InitOpenRC && plan.Consul.DNSForwardingNeedsResolved() {
 			continue
 		}
 		res = append(res, i)
@@ -247,7 +248,8 @@ func GenerateInstallScript(ctx context.Context, plan *config.DeploymentPlan, res
 	}
 	if len(names) == 0 {
 		return "", fmt.Errorf("the install script has no family to install on: every family's package manager lacks its block " +
-			"of host_packages while another block selects packages for a client, or (Alpine) consul.dns_forwarding needs systemd")
+			"of host_packages while another block selects packages for a client, or (Alpine) consul.dns_forwarding needs systemd-resolved " +
+			"(method systemd-resolved, or docker)")
 	}
 	data.Families, data.FamilyPattern = strings.Join(names, ", "), strings.Join(names, " | ")
 	for i := range data.DNSInits {

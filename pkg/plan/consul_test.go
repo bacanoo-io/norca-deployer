@@ -129,6 +129,28 @@ func TestConsulDNSForwardingEnabled(t *testing.T) {
 	}
 }
 
+func TestConsulDNSForwardingNeedsResolved(t *testing.T) {
+	tests := []struct {
+		name string
+		c    *ConsulConfig
+		want bool
+	}{
+		{name: "no consul block", c: nil},
+		{name: "disabled with systemd-resolved", c: &ConsulConfig{DNSForwarding: &ConsulDNSForwarding{Method: DNSMethodResolved, Docker: true}}},
+		{name: "auto", c: &ConsulConfig{DNSForwarding: &ConsulDNSForwarding{Enabled: true, Method: DNSMethodAuto}}},
+		{name: "dnsmasq", c: &ConsulConfig{DNSForwarding: &ConsulDNSForwarding{Enabled: true, Method: DNSMethodDnsmasq}}},
+		{name: "systemd-resolved", c: &ConsulConfig{DNSForwarding: &ConsulDNSForwarding{Enabled: true, Method: DNSMethodResolved}}, want: true},
+		{name: "auto with docker", c: &ConsulConfig{DNSForwarding: &ConsulDNSForwarding{Enabled: true, Method: DNSMethodAuto, Docker: true}}, want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.c.DNSForwardingNeedsResolved(); got != tt.want {
+				t.Fatalf("DNSForwardingNeedsResolved() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConsulDNSForwardingValidation(t *testing.T) {
 	tests := []struct {
 		name string

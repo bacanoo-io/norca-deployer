@@ -120,8 +120,9 @@ func (r *Runner) checkFacts(ts []*target) error {
 }
 
 // checkNodeFacts checks the plan against the facts of one node: the block
-// of host_packages of its package manager, the package of release.source
-// host-package, and the interpreters of its scripts.
+// of host_packages of its package manager, consul.dns_forwarding on OpenRC,
+// the package of release.source host-package, and the interpreters of its
+// scripts.
 func (r *Runner) checkNodeFacts(t *target) error {
 	f := t.facts
 	if f.Platform == "windows" {
@@ -144,9 +145,18 @@ func (r *Runner) checkNodeFacts(t *target) error {
 				f.PackageManager, strings.Join(others, ", ")))
 		}
 	}
-	if f.Init == host.InitOpenRC && r.plan.Consul.DNSForwardingEnabled() {
-		errs = append(errs, fmt.Errorf("consul.dns_forwarding needs systemd (systemd-resolved, or dnsmasq run by systemd), but the node runs OpenRC: "+
-			"set consul.dns_forwarding.enabled = false for a plan with Alpine nodes"))
+	// OpenRC has dnsmasq but no systemd-resolved: what only systemd-resolved
+	// does is refused before anything is changed.
+	if f.Init == host.InitOpenRC && r.plan.Consul.DNSForwardingNeedsResolved() {
+		fwd := r.plan.Consul.DNSForwarding
+		if fwd.Method == config.DNSMethodResolved {
+			errs = append(errs, fmt.Errorf("consul.dns_forwarding.method %s needs systemd, but the node runs OpenRC, which has no systemd-resolved: "+
+				"use method %s or %s for a plan with Alpine nodes", config.DNSMethodResolved, config.DNSMethodAuto, config.DNSMethodDnsmasq))
+		}
+		if fwd.Docker {
+			errs = append(errs, errors.New("consul.dns_forwarding.docker needs systemd-resolved (DNSStubListenerExtra=), but the node runs OpenRC: "+
+				"set consul.dns_forwarding.docker = false for a plan with Alpine nodes"))
+		}
 	}
 	if r.plan.Release.Source == config.ReleaseHostPackage && !own.Installs(r.plan.Release.Package) {
 		errs = append(errs, fmt.Errorf("release.source host-package: the block of host_packages of the node's package manager (%s) does not install %q on it",

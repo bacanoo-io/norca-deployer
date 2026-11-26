@@ -154,11 +154,17 @@ func TestPrepareNodeAlpine(t *testing.T) {
 }
 
 // The facts checks of an Alpine node: the apk block, and consul DNS
-// forwarding, which needs systemd.
+// forwarding, which OpenRC has with dnsmasq but not with systemd-resolved
+// (method systemd-resolved, docker).
 func TestCheckFactsAlpine(t *testing.T) {
 	apt := &config.AptPackages{Install: []config.HostPackage{{Name: "jq"}}}
 	apk := &config.ApkPackages{Install: []config.HostPackage{{Name: "jq"}}}
-	dns := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true}}
+	dns := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true, Method: config.DNSMethodAuto}}
+	dnsmasq := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true, Method: config.DNSMethodDnsmasq}}
+	resolved := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true, Method: config.DNSMethodResolved}}
+	docker := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true, Method: config.DNSMethodAuto, Docker: true}}
+	both := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Enabled: true, Method: config.DNSMethodResolved, Docker: true}}
+	off := &config.ConsulConfig{DNSForwarding: &config.ConsulDNSForwarding{Method: config.DNSMethodResolved, Docker: true}}
 	tests := []struct {
 		name   string
 		plan   *config.DeploymentPlan
@@ -170,9 +176,19 @@ func TestCheckFactsAlpine(t *testing.T) {
 			errors: []string{"node [10.0.0.5]: the node uses apk, but host_packages has packages for its roles only in apt"}},
 		{name: "debian without its block", plan: &config.DeploymentPlan{HostPackages: &config.HostPackages{Apk: apk}}, probe: debianProbe,
 			errors: []string{"the node uses apt, but host_packages has packages for its roles only in apk"}},
-		{name: "dns forwarding on alpine", plan: &config.DeploymentPlan{Consul: dns}, probe: alpineProbe,
-			errors: []string{"consul.dns_forwarding needs systemd", "the node runs OpenRC"}},
+		{name: "dns forwarding on alpine", plan: &config.DeploymentPlan{Consul: dns}, probe: alpineProbe},
+		{name: "dns forwarding with dnsmasq on alpine", plan: &config.DeploymentPlan{Consul: dnsmasq}, probe: alpineProbe},
+		{name: "dns forwarding with systemd-resolved on alpine", plan: &config.DeploymentPlan{Consul: resolved}, probe: alpineProbe,
+			errors: []string{"node [10.0.0.5]: consul.dns_forwarding.method systemd-resolved needs systemd, but the node runs OpenRC, which has no systemd-resolved: " +
+				"use method auto or dnsmasq for a plan with Alpine nodes"}},
+		{name: "dns forwarding with docker on alpine", plan: &config.DeploymentPlan{Consul: docker}, probe: alpineProbe,
+			errors: []string{"node [10.0.0.5]: consul.dns_forwarding.docker needs systemd-resolved (DNSStubListenerExtra=), but the node runs OpenRC: " +
+				"set consul.dns_forwarding.docker = false for a plan with Alpine nodes"}},
+		{name: "dns forwarding with systemd-resolved and docker on alpine", plan: &config.DeploymentPlan{Consul: both}, probe: alpineProbe,
+			errors: []string{"consul.dns_forwarding.method systemd-resolved needs systemd", "consul.dns_forwarding.docker needs systemd-resolved"}},
+		{name: "dns forwarding off on alpine", plan: &config.DeploymentPlan{Consul: off}, probe: alpineProbe},
 		{name: "dns forwarding on debian", plan: &config.DeploymentPlan{Consul: dns}, probe: debianProbe},
+		{name: "dns forwarding with docker on debian", plan: &config.DeploymentPlan{Consul: docker}, probe: debianProbe},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
