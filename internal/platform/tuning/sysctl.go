@@ -108,13 +108,11 @@ openrc_enabled() {
   return 1
 }
 
-# openrc_cgroups is true when a cgroup file system is mounted (cgroup2fs:
-# v2; tmpfs: the hierarchies of v1).
+# openrc_cgroups is true when a cgroup file system is mounted on
+# /sys/fs/cgroup (cgroup2: v2; tmpfs: the hierarchies of v1). It reads
+# /proc/mounts: the stat of busybox names no cgroup2 (UNKNOWN).
 openrc_cgroups() {
-  case $(stat -fc %T /sys/fs/cgroup 2>/dev/null) in
-  cgroup2fs | tmpfs) return 0 ;;
-  esac
-  return 1
+  awk '$2 == "/sys/fs/cgroup" && ($3 == "cgroup2" || $3 == "tmpfs") { f = 1 } END { exit !f }' /proc/mounts 2>/dev/null
 }
 `
 

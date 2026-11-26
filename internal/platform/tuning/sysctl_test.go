@@ -107,9 +107,10 @@ func TestOpenRCSysctl(t *testing.T) {
 // openrcNode is a node of OpenRC below a test directory: its init scripts
 // and runlevels, /run/openrc while OpenRC runs, and the commands rc-update
 // and rc-service (commands: their names are no function names of ash),
-// which record what they are asked. rc-service cgroups start mounts the
-// cgroups (the stat of the step answers cgroup2fs then) unless
-// RC_SERVICE_FAIL is set; RC_UPDATE_FAIL makes rc-update fail.
+// which record what they are asked; proc/mounts stands for /proc/mounts.
+// rc-service cgroups start mounts the cgroups (a cgroup2 line in
+// proc/mounts) unless RC_SERVICE_FAIL is set; RC_UPDATE_FAIL makes
+// rc-update fail.
 type openrcNode struct {
 	root, bin string
 }
@@ -118,17 +119,21 @@ func newOpenRCNode(t *testing.T, files ...string) *openrcNode {
 	t.Helper()
 	n := &openrcNode{root: t.TempDir()}
 	n.bin = filepath.Join(n.root, "bin")
-	for _, d := range []string{"bin", "etc/init.d", "etc/runlevels/boot", "etc/runlevels/sysinit", "etc/runlevels/default"} {
+	for _, d := range []string{"bin", "proc", "etc/init.d", "etc/runlevels/boot", "etc/runlevels/sysinit", "etc/runlevels/default"} {
 		if err := os.MkdirAll(filepath.Join(n.root, d), 0o750); err != nil {
 			t.Fatal(err)
 		}
+	}
+	// Mounted: sysfs, and a cgroup2 elsewhere than on /sys/fs/cgroup.
+	if err := os.WriteFile(filepath.Join(n.root, "proc/mounts"), []byte(otherMounts), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	n.add(t, files...)
 	// They record to descriptor 3, which the step does not redirect.
 	commands := map[string]string{
 		"rc-update": "#!/bin/sh\nprintf 'rc-update %s\\n' \"$*\" >&3\nif [ -n \"${RC_UPDATE_FAIL:-}\" ]; then\n  echo 'rc-update: failed' >&2\n  exit 1\nfi\n",
 		"rc-service": "#!/bin/sh\nprintf 'rc-service %s\\n' \"$*\" >&3\n[ -z \"${RC_SERVICE_FAIL:-}\" ] || exit 1\n" +
-			"if [ \"$*\" = 'cgroups start' ]; then\n  : >\"$NODE_ROOT/mounted\"\nfi\n",
+			"if [ \"$*\" = 'cgroups start' ]; then\n  echo '" + cgroupMount + "' >>\"$NODE_ROOT/proc/mounts\"\nfi\n",
 	}
 	for name, body := range commands {
 		if err := os.WriteFile(filepath.Join(n.bin, name), []byte(body), 0o700); err != nil {
@@ -138,13 +143,27 @@ func newOpenRCNode(t *testing.T, files ...string) *openrcNode {
 	return n
 }
 
+// The lines of proc/mounts: the cgroups the cgroups service mounts, and
+// mounts that are no cgroups on /sys/fs/cgroup.
+const (
+	cgroupMount = "cgroup2 /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate 0 0"
+	otherMounts = "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n" +
+		"cgroup2 /mnt/cgroup cgroup2 rw,relatime 0 0\n"
+)
+
 // add creates files of the node (empty), such as an init script, a service
 // in a runlevel, run/openrc (OpenRC runs) or mounted (the cgroups are).
 func (n *openrcNode) add(t *testing.T, files ...string) {
 	t.Helper()
 	for _, f := range files {
-		if f == "run/openrc" {
+		switch f {
+		case "run/openrc":
 			if err := os.MkdirAll(filepath.Join(n.root, f), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		case "mounted":
+			if err := os.WriteFile(filepath.Join(n.root, "proc/mounts"), []byte(otherMounts+cgroupMount+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			continue
@@ -160,9 +179,8 @@ func (n *openrcNode) add(t *testing.T, files ...string) {
 // recorded and the log of the step.
 func (n *openrcNode) run(t *testing.T, argv []string, s step.Step, env ...string) string {
 	t.Helper()
-	fix := strings.NewReplacer("/etc/", n.root+"/etc/", "/run/openrc", n.root+"/run/openrc").Replace
-	stubs := "log() { printf 'log %s\\n' \"$*\"; }\nwarn() { printf 'warn %s\\n' \"$*\"; }\n" +
-		"stat() { if [ -e \"$NODE_ROOT/mounted\" ]; then echo cgroup2fs; else echo sysfs; fi; }\n"
+	fix := strings.NewReplacer("/etc/", n.root+"/etc/", "/run/openrc", n.root+"/run/openrc", "/proc/mounts", n.root+"/proc/mounts").Replace
+	stubs := "log() { printf 'log %s\\n' \"$*\"; }\nwarn() { printf 'warn %s\\n' \"$*\"; }\n"
 	prog := stubs + "set -eu\nexec 3>&2\n" + fix(s.Functions) + "\n"
 	if s.Check != "" {
 		prog += "if {\n" + fix(s.Check) + "\n}; then\n  echo done\n  exit 0\nfi\n"
