@@ -4,11 +4,11 @@ A single-binary installer and lifecycle tool for [Norca](https://github.com/baca
 
 ## Features
 
-- **Servers and clients** on Linux and Windows nodes, per-node datacenter, multi-region federation (`authoritative_region`, ACL replication).
+- **Servers and clients** on Linux (Debian, Ubuntu, RHEL and its rebuilds, Alpine) and Windows nodes, per-node datacenter, multi-region federation (`authoritative_region`, ACL replication). The deployer finds out each node's family, package manager and init system (systemd, OpenRC) before it changes anything.
 - **Rolling restarts:** only changed nodes restart. Servers restart one at a time and the deployer waits until each one is healthy, has a leader and sees all Raft peers. Clients restart in batches. A new cluster starts all servers at once.
 - **Security:** an internal CA with mTLS certificates (`server.<region>.norca`, `client.<region>.norca`), gossip encryption (`AUTO_GENERATE`), ACL bootstrap with the management token stored locally, encrypted with AES-256-GCM when a master key exists. Optional SPIFFE IDs in all certificates, and intermediate CAs for systems with a PKI of their own. Secrets in the plan can be inline `!enc:v1:...` values.
-- **Artifacts:** the Norca binary and the CNI plugins are downloaded on the deployer machine (SHA-256 verified and cached) or taken from local files, then copied to the nodes. The nodes need no internet access.
-- **Debian packages:** APT repositories (deb822 with `Signed-By` keyring, pin priority, repository auth) and local `.deb` files copied from the deployer machine, with version pinning and `apt-mark hold`.
+- **Artifacts:** the Norca binary (the musl build on Alpine) and the CNI plugins are downloaded on the deployer machine (SHA-256 verified and cached) or taken from local files, then copied to the nodes. The nodes need no internet access.
+- **Host packages** in one block per package manager: APT repositories (deb822 with `Signed-By` keyring, pin priority, repository auth) and local `.deb` files, with `apt-mark hold`; dnf repositories (`gpgcheck`, priority, package filters, auth) and local `.rpm` files, with versionlock; apk repositories (their RSA keys, tagged repositories) and local `.apk` files, with the version in `/etc/apk/world` as the hold. Versions are pinned in every block.
 - **Bash scripts** in the phases `pre_install`, `post_packages` and `post_install`. A script runs again only when the script or its environment changed.
 - **Network exposure:** by default the agent listens only on each node's cluster address (and on loopback for the local CLI). Firewall rules on Linux nodes (ufw, firewalld, nftables or iptables) limit the API, the cluster ports and the allocation ports to given CIDRs; `default_deny` denies the rest without locking out SSH.
 - **Tuning:** sysctl, kernel modules and log rotation.
@@ -33,7 +33,7 @@ The deployer runs on Linux, macOS and Windows (amd64 and arm64) and needs no cgo
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/norca-deployer-linux-amd64 ./cmd/norca-deployer
 ```
 
-`connection.mode: local` (installing on the machine the deployer runs on) needs a Linux host with systemd.
+`connection.mode: local` (installing on the machine the deployer runs on) needs a Linux host with systemd or OpenRC.
 
 ## Quick start
 

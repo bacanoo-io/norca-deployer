@@ -229,6 +229,19 @@ host_packages {
       name = "chrony"
     }
   }
+
+  apk {                                # Nodes whose package manager is apk (Alpine 3.22+).
+    install {
+      name  = "docker"                   # From the community repository of the node.
+      roles = ["client"]
+    }
+    install {
+      name = "chrony"
+    }
+    install {
+      name = "nftables"                  # nft, for the firewall of default_deny.
+    }
+  }
 }
 
 scripts {
@@ -243,9 +256,10 @@ scripts {
 }
 
 scripts {
-  name   = "docker-log-limits"
-  phase  = "post_packages"             # After Docker is installed.
-  roles  = ["client"]
+  name     = "docker-log-limits"
+  phase    = "post_packages"           # After Docker is installed.
+  roles    = ["client"]
+  families = ["debian", "rhel"]        # systemctl: not on Alpine.
   inline = <<EOT
 cat > /etc/docker/daemon.json <<'EOF'
 {"log-driver": "json-file", "log-opts": {"max-size": "50m", "max-file": "3"}}

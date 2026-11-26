@@ -14,12 +14,12 @@ A scaled node is a Linux client of the plan. Before its bootstrap runs, the mach
 
 | What | Where (plan defaults) | From |
 | --- | --- | --- |
-| The `norca` binary of the release | `paths.linux.bin_dir` (`/usr/local/bin/norca`) | `release` |
+| The `norca` binary of the release (the musl build on Alpine) | `paths.linux.bin_dir` (`/usr/local/bin/norca`) | `release` |
 | The CNI plugins | `paths.linux.cni_bin_dir` (`/opt/cni/bin`) | `cni`, when `cni.install` is true |
-| `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download` |
+| `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download`; build it with `CGO_ENABLED=0` (a static binary) so that it runs on Alpine too |
 | The directories: bin `0755`, config `0750`, data `0750`, log `0750`, tls `0700`, CNI bin and config `0755` | `paths.linux` | the same modes as `apply` |
-| The systemd unit of the agent, enabled but not started | `/etc/systemd/system/norca.service` | the unit `apply` writes, with `tuning.file_descriptor_limit` |
-| The host packages of a client (Docker, for example) | APT (Debian, Ubuntu) or dnf (RHEL, Rocky Linux, AlmaLinux) | `host_packages.apt` and `host_packages.dnf` with the role `client` (or no role) |
+| The service of the agent, enabled but not started | `/etc/systemd/system/norca.service`; on Alpine the OpenRC service `/etc/init.d/norca` in the default runlevel | the service `apply` writes, with `tuning.file_descriptor_limit` |
+| The host packages of a client (Docker, for example) | APT (Debian, Ubuntu), dnf (RHEL, Rocky Linux, AlmaLinux) or apk (Alpine) | `host_packages.apt`, `host_packages.dnf` and `host_packages.apk` with the role `client` (or no role) |
 | The sysctl tuning and the kernel modules | `/etc/sysctl.d/99-norca-production.conf`, `/etc/modules-load.d/norca-bridge.conf` | `tuning.apply_sysctl` |
 | A TPM 2.0, only for keys in the TPM (`join_key_store` of the operator `tpm` or `auto`) | `/dev/tpmrm0` | the machine: a virtual TPM on clouds (Google Shielded VM, Azure Trusted Launch, AWS NitroTPM), the firmware TPM on hardware |
 
@@ -68,15 +68,15 @@ The keys are in the [configuration reference](configuration.md#node_scaling).
 - The release and the CNI plugins must be downloadable: `release.source` `official`,
   `custom-url` or `host-package`, and `cni.source` not `local-path`. The plan check refuses
   `local-path` with `boot`.
-- An APT or dnf repository with `auth` is refused: its password would travel in the user data of
+- An APT or dnf repository with `auth` is refused (apk repositories take no credentials at all): its password would travel in the user data of
   every machine (`... has credentials: at boot they would travel in the user data of the machine;
   use node_scaling.machine.install: image`).
 - One region has one bootstrap Variable, so the script is for one architecture
   (`node_scaling.machine.arch`). Machines of another architecture need an image built with
   `install-script --arch`.
 - The script travels in the user data, base64 encoded. A plan with repositories and their keys,
-  and with both `apt` and `dnf` blocks, makes it larger: a cloud with a small user data limit
-  (16 KB on some) may need `image`.
+  and with several blocks (`apt`, `dnf`, `apk`), makes it larger: a cloud with a small user data
+  limit (16 KB on some) may need `image`.
 
 ### Generate the script
 
@@ -113,11 +113,15 @@ it writes a file only when its content or mode differs, and a second run changes
 with `done: nothing to change`). It first finds out the family of the machine from
 `/etc/os-release` (its `ID`, then `ID_LIKE`, as `apply` does over SSH) and runs the packages and
 the service of that family. It has the steps of the families a client of `apply` would be
-installed on: the Debian family (Debian, Ubuntu; `host_packages.apt`) and the RHEL family (RHEL,
-Rocky Linux, AlmaLinux; `host_packages.dnf`). A family whose block is missing while the other
-block has packages for the clients is left out, as `apply` refuses such a node; on a machine of a
+installed on: the Debian family (Debian, Ubuntu; `host_packages.apt`), the RHEL family (RHEL,
+Rocky Linux, AlmaLinux; `host_packages.dnf`) and the Alpine family (`host_packages.apk`, OpenRC).
+A family whose block is missing while another block has packages for the clients is left out, as
+`apply` refuses such a node, and so is the Alpine family when `consul.dns_forwarding` is on (it
+needs systemd); a plan that leaves no family is an error of `install-script`. On a machine of a
 family it has no steps of, the script stops before it changes anything: `this script has no
-install for rocky (family rhel); it installs on the families: debian`. In order:
+install for rocky (family rhel); it installs on the families: debian`. The tuning and the norca
+binary of a family that differ from the others' (on Alpine: the tuning of OpenRC and the musl
+build) are functions of that family. In order:
 
 1. **Host packages** of a client, with the manager of the family:
    - `host_packages.apt`: the keyring, the deb822 source, the pin and the credentials of each
@@ -128,15 +132,22 @@ install for rocky (family rhel); it installs on the families: debian`. In order:
      of it when they changed), `dnf install` of the packages that are missing or not at their
      version, the versionlock command (installed when a package is held) and the holds, and a
      check of the installed versions.
+   - `host_packages.apk`: the keys and `/etc/apk/repositories.d/norca.list` (with `apk update`
+     when they changed), the removal of the keys of dropped repositories, `apk add` of the
+     packages that are missing, not at their version or without their world entry (the hold of
+     apk), and a check of the installed versions.
 
-   It writes the same files as `apply`. A package from a local `.deb` or `.rpm` file cannot be
-   downloaded: the script checks that it is installed and says to install it into the image
-   first.
+   It writes the same files as `apply`. A package from a local `.deb`, `.rpm` or `.apk` file
+   cannot be downloaded: the script checks that it is installed and says to install it into the
+   image first.
 2. **sysctl tuning**: the modules file (`/etc/modules-load.d/norca-bridge.conf`, so the modules
    load at boot) and the sysctl file, `modprobe` and `sysctl --system`. A module that cannot be
    loaded now is a warning; a failed `sysctl --system` is a warning where `/proc/sys` cannot be
    written (an image built in a container: systemd applies the files at the next boot) and an
-   error elsewhere.
+   error elsewhere. On Alpine the same files (the `modules` and `sysctl` services of OpenRC read
+   them at boot), applied with `sysctl -p`; a key the machine does not have, or one that is
+   read-only there (a container), is a warning; the `modules`, `sysctl` and `cgroups` services
+   are put into their runlevels when they are in none.
    - With `consul.dns_forwarding` enabled, **the DNS forwarding of the consul domain**: the script
      writes the POSIX `sh` script `apply` runs on the nodes of the inventory to
      `/var/lib/norca-deployer/consul-dns.sh` and runs it (see
@@ -147,8 +158,8 @@ install for rocky (family rhel); it installs on the families: debian`. In order:
      checked, nothing is restarted, and with `docker: true` the containers are left out when
      `docker0` is missing (a warning).
 3. **Directories** with the modes above, and `/var/lib/norca-deployer` (`0700`).
-4. **The norca binary**: download the release archive, check its SHA-256, extract `norca` and
-   install it. A marker with the digests of the archive and of the binary skips the download on
+4. **The norca binary**: download the release archive (on Alpine the `_musl` archive), check its
+   SHA-256, extract `norca` and install it. A marker with the digests of the archive and of the binary skips the download on
    the next run, but a binary that was changed since is replaced.
    - `release.source: local-path`: the image build names the file in `NORCA_BINARY` (the binary,
      or a `.tar.gz` release archive); with `release.checksum_sha256` it is checked.
@@ -165,15 +176,22 @@ install for rocky (family rhel); it installs on the families: debian`. In order:
    starts it once the configuration and the certificate exist. Without `systemctl` (an image
    built in a container) the script enables the unit with the link
    `/etc/systemd/system/multi-user.target.wants/norca.service`, which is what `systemctl enable`
-   creates, and says so.
+   creates, and says so. On Alpine: the OpenRC service `/etc/init.d/norca` and `rc-update add
+   norca default` (without `rc-update`, the link `/etc/runlevels/default/norca`).
 8. **On RHEL, the SELinux labels**: when the run changed something and `getenforce` says
    SELinux is not disabled, `restorecon` restores the labels of what the script wrote, as `apply`
    does (see [SELinux](host-packages-and-scripts.md#selinux)). Under SELinux enforcing the script
    warns once at its start: Norca under SELinux enforcing is not verified yet.
 
-The downloads use `curl`, or `wget` when there is no `curl`. The script needs `sha256sum`, `tar`,
-`install`, `base64`, `find`, `stat` and `mktemp` (GNU coreutils or busybox; a minimal RHEL image
-has them all), and `apt-get` or `dnf` only with host packages. It needs no `bash` and no `cmp`.
+The downloads use `curl`, or `wget` when there is no `curl` (the `wget` of busybox on Alpine).
+The script needs `sha256sum`, `tar`, `install`, `base64`, `find`, `stat` and `mktemp` (GNU
+coreutils or busybox; a minimal RHEL image and Alpine have them all), and `apt-get`, `dnf` or
+`apk` only with host packages. It needs no `bash` and no `cmp`.
+
+**The bootstrap and Alpine.** The bootstrap of the operator (below) starts the agent with
+`systemctl enable --now` and writes a systemd unit for `norca-join`: on an Alpine machine those
+commands fail, so Alpine machines of the node scaling operator need an OpenRC variant of the
+bootstrap in `norca-platform`. The install script itself installs on Alpine.
 
 An excerpt of a generated script (defaults of the plan, `install: image`):
 

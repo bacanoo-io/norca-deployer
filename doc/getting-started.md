@@ -4,7 +4,7 @@
 
 **Operator machine:** the `norca-deployer` binary (build it with Go 1.26 or newer) and SSH access to every node.
 
-**Linux nodes:** a supported operating system (below) with systemd, `sha256sum` and `tar`. SSH as `root`, or as a user with `sudo` or `doas` (`connection.become: true`). The deployer's commands run in `sh`; `bash` is needed only for scripts of the plan with `interpreter: bash` (the default).
+**Linux nodes:** a supported operating system (below) with systemd (OpenRC on Alpine), `sha256sum` and `tar`. SSH as `root`, or as a user with `sudo` or `doas` (`connection.become: true`). The deployer's commands run in `sh`; `bash` is needed only for scripts of the plan with `interpreter: bash` (the default).
 
 **Windows nodes:** OpenSSH Server and an administrator account.
 
@@ -16,10 +16,12 @@ Before it changes anything, `apply` finds out what every node is (`/etc/os-relea
 | --- | --- | --- | --- |
 | Debian | Debian 11+, Ubuntu 20.04+ (and systems with `ID_LIKE=debian`) | `apt` (`host_packages.apt`) | supported |
 | RHEL | RHEL 9+, Rocky Linux 9+, AlmaLinux 9+ (RHEL 10 included; Fedora is detected as this family but not tested) | `dnf` (`host_packages.dnf`) | supported; SELinux enforcing: see below |
-| Alpine | Alpine with a musl build of Norca | `apk` | planned |
+| Alpine | Alpine 3.22+ (the branches Alpine supports) with OpenRC | `apk` (`host_packages.apk`) | supported; see below |
 | Windows | Windows Server with OpenSSH | none | supported (no `host_packages`) |
 
-RHEL 8 and its rebuilds are refused before anything is changed: the Norca binary needs glibc 2.34, which RHEL 8 (glibc 2.28) does not have.
+Older systems are refused before anything is changed, with the reason: RHEL 8 and its rebuilds (the Norca binary needs glibc 2.34, which RHEL 8 with glibc 2.28 does not have), Debian 10 and Ubuntu 18.04 (glibc 2.28 and 2.27; the Linux release needs glibc 2.31, and the deployer writes deb822 sources with `Signed-By`), and Alpine before 3.22 (no longer supported by Alpine).
+
+**Alpine:** the Linux release of Norca is built against glibc and does not run on Alpine, so an Alpine node gets the musl build of the release (the archive `norca_<version>_linux_<arch>_musl.tar.gz`; with `release.source: local-path`, `{musl}` in `local_binary_path`). The deployer checks every Linux binary against the C library of its node and refuses one of the other. The agent runs as an OpenRC service (`/etc/init.d/norca`, supervised by `supervise-daemon`), its tuning is applied with `sysctl -p`, and the `modules`, `sysctl` and `cgroups` services of OpenRC are put into their runlevels when they are in none. Alpine often has `doas` instead of `sudo`, busybox instead of the GNU tools, and no `bash` (write the scripts of the plan for `sh`, or install `bash` with `host_packages.apk`). `consul.dns_forwarding` needs systemd and is an error for an Alpine node. The agent's task drivers work with cgroup v1 and v2; OpenRC mounts cgroup v2 by default.
 
 **SELinux (RHEL):** the deployer restores the SELinux labels of what it writes (`restorecon`) when SELinux is enforcing or permissive. Norca under SELinux enforcing is not verified yet: `apply` prints one warning per node under enforcing and goes on; set SELinux to permissive if the agent or its drivers are denied.
 

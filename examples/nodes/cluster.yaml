@@ -157,9 +157,9 @@ bus:                                # The same bus block on every server (the sy
                                     # a write beyond it fails. Its values are encrypted with the keyring.
 
 host_packages:
-  update_cache: true                # apt-get update / dnf --refresh before installing (skipped on offline nodes).
-  lock_timeout: 300                 # Seconds to wait for the dpkg lock / for other dnf and rpm processes.
-  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); apk follows.
+  update_cache: true                # apt-get update / dnf --refresh / apk add -U before installing (skipped on offline nodes).
+  lock_timeout: 300                 # Seconds to wait for the dpkg or apk lock / for other dnf and rpm processes.
+  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu).
     repositories:
       - name: docker                  # -> /etc/apt/sources.list.d/norca-docker.sources
         uri: https://download.docker.com/linux/debian
@@ -219,6 +219,22 @@ host_packages:
         roles: [client]
       - name: chrony
       # The firewall of RHEL is firewalld, which runs by default.
+  apk:                              # Nodes whose package manager is apk (Alpine 3.22+).
+    # repositories:                 # The node's own repositories need no entry. One of your own,
+    #   - name: mycorp              # signed by your key, as /etc/apk/repositories.d/norca.list:
+    #     url: https://apk.mycorp.example/v3.22/main
+    #     key_file: keys/packager-6165ee59.rsa.pub   # Installed under its own name in /etc/apk/keys.
+    #     tagged: true              # @norca-mycorp: packages come from it only when they name it.
+    #                               # No credentials: apk keeps them in a world-readable file.
+    install:
+      - name: docker                  # From the community repository of the node.
+        roles: [client]
+      - name: chrony
+      - name: nftables                # nft, for the firewall of tuning.firewall.default_deny.
+      # - name: mycorp-agent
+      #   repository: mycorp          # mycorp-agent@norca-mycorp
+      #   version: "2.4.1-r0"         # version-rN
+      #   hold: true                  # The version stays in /etc/apk/world.
 
 scripts:
   - name: prepare-data-disk
@@ -231,6 +247,7 @@ scripts:
   - name: docker-log-limits
     phase: post_packages            # After Docker is installed, before the agent starts.
     roles: [client]
+    families: [debian, rhel]        # systemctl: not on Alpine (OpenRC: rc-service docker restart).
     inline: |
       cat > /etc/docker/daemon.json <<'EOF'
       {"log-driver": "json-file", "log-opts": {"max-size": "50m", "max-file": "3"}}

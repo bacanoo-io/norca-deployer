@@ -86,7 +86,7 @@ The body of the block is taken as it is written, one level of indentation less: 
 | `version` | `v0.1.0` | Release tag (`v1.2.3`) for `official` and `custom-url` |
 | `source` | `official` | `official`: GitHub release archive verified with `SHA256SUMS`. `custom-url`: same layout under `download_base_url`. `local-path`: binary or archive from the operator machine. `host-package`: the binary comes from a package installed by `host_packages` (apt or dnf) |
 | `download_base_url` | GitHub releases of Norca | Base URL for `official` / `custom-url` |
-| `local_binary_path` | | File for `local-path`: a binary or a `.tar.gz` / `.zip` archive; `{os}` and `{arch}` are replaced |
+| `local_binary_path` | | File for `local-path`: a binary or a `.tar.gz` / `.zip` archive; `{os}` and `{arch}` are replaced, and `{musl}` is `_musl` for an Alpine node and empty for the others (`norca_{os}_{arch}{musl}`) |
 | `checksum_sha256` | | Optional digest the artifact must match |
 | `package` | `norca` | Package name for `host-package`; it must be installed on every node |
 
@@ -248,7 +248,7 @@ Norca does not need Consul. Without this section every agent gets `auto_advertis
 
 ### consul.dns_forwarding
 
-Conditional forwarding: the Consul domain is answered by the DNS interface of the local Consul agent, every other name keeps being answered by the resolver the host has (systemd-resolved asks Consul for them too, in parallel; Consul refuses them). The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes only; a Windows node is skipped with a warning.
+Conditional forwarding: the Consul domain is answered by the DNS interface of the local Consul agent, every other name keeps being answered by the resolver the host has (systemd-resolved asks Consul for them too, in parallel; Consul refuses them). The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes with systemd only: a Windows node is skipped with a warning, and an Alpine node (OpenRC) is an error of the plan before anything is changed.
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -272,15 +272,16 @@ See [DNS of the hosts: the consul domain](networking-and-tuning.md#dns-of-the-ho
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `update_cache` | `true` | Refresh the package index before installing (`apt-get update`; `dnf install --refresh`) |
-| `lock_timeout` | `300` | Wait for the lock of the package manager (apt) or for the other dnf, yum and rpm processes (dnf) in seconds |
+| `update_cache` | `true` | Refresh the package index before installing (`apt-get update`; `dnf install --refresh`; `apk add -U`) |
+| `lock_timeout` | `300` | Wait for the lock of the package manager (apt, apk) or for the other dnf, yum and rpm processes (dnf) in seconds |
 | `apt.repositories[]` | | `name`, `uri`, `suite`, `components`, `architectures`, `key` or `key_file`, `roles`, `pin_priority`, `pin_packages`, `pin_release`, `auth.username`, `auth.password` |
 | `apt.install[]` | | `name`, `version` (Debian version), `hold`, `file` (`.deb`), `sha256`, `roles`, `hosts` |
 | `dnf.repositories[]` | | `name`, `baseurl` or `metalink`, `key` or `key_file` (ASCII-armored), `priority` (1-99), `include`, `exclude`, `auth.username`, `auth.password`, `roles` |
 | `dnf.install[]` | | `name`, `version` (`[epoch:]version-release`), `hold` (versionlock), `file` (`.rpm`), `sha256`, `roles`, `hosts` |
-| `apk` | | Planned (Alpine); refused for now |
+| `apk.repositories[]` | | `name`, `url`, `key_file`, or `key` with `key_name` (an RSA public key, installed under that name; none for a repository signed by a key apk has), `tagged`, `roles`; no credentials (`auth` is refused) |
+| `apk.install[]` | | `name`, `version` (`version-rN`), `hold` (the version in `/etc/apk/world`), `repository` (a tagged repository), `file` (`.apk`), `sha256`, `roles`, `hosts` |
 
-A node takes only the block of its package manager (`apt` on Debian and Ubuntu, `dnf` on RHEL, Rocky Linux and AlmaLinux). A key of the other block's repositories (`suite` in `dnf`, `baseurl` in `apt`) is an error. The lists `repositories` and `install` directly under `host_packages` are refused: they belong into `apt`.
+A node takes only the block of its package manager (`apt` on Debian and Ubuntu, `dnf` on RHEL, Rocky Linux and AlmaLinux, `apk` on Alpine). A key of another block's repositories (`suite` in `dnf`, `baseurl` in `apt`, `tagged` in `apt`) is an error, and so is `repository` in a package of `apt` or `dnf`. The lists `repositories` and `install` directly under `host_packages` are refused: they belong into `apt`.
 
 See [Host packages and scripts](host-packages-and-scripts.md).
 
@@ -458,8 +459,8 @@ Set a key of `host_facts` only when the detection is wrong; the value is taken a
 | Key | Values | Description |
 | --- | --- | --- |
 | `family` | `debian`, `rhel`, `alpine` | The family of the operating system (Ubuntu is `debian`) |
-| `package_manager` | `apt`, `dnf`, `none` | `none`: a system without a package manager; `host_packages` for the node are an error |
-| `init` | `systemd` | The init system that runs the agent |
+| `package_manager` | `apt`, `dnf`, `apk`, `none` | `none`: a system without a package manager; `host_packages` for the node are an error |
+| `init` | `systemd`, `openrc` | The init system that runs the agent |
 
 ### decommission
 

@@ -73,7 +73,7 @@ security:
                                     # .norca-deployer/management-token (encrypted when a master key exists).
 
 host_packages:
-  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); dnf and apk follow.
+  apt:                              # Nodes whose package manager is apt (Debian, Ubuntu); dnf and apk are blocks of their own.
     install:
       - name: jq                      # A package from the APT sources already configured on the node.
       - name: curl
