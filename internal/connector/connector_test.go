@@ -58,8 +58,30 @@ func TestPowerShellCommand(t *testing.T) {
 	if script := string(utf16.Decode(u)); !strings.Contains(script, `Write-Output 'a"b'`) {
 		t.Fatalf("decoded script = %s", script)
 	}
-	if got := PSQuote("it's"); got != "'it''s'" {
-		t.Fatalf("PSQuote = %s", got)
+}
+
+// PowerShell ends a single-quoted string at an ASCII quote and at the
+// typographic single quotes U+2018 to U+201B alike; each is doubled, so
+// that the string goes on. $, the backtick and line breaks are literal in
+// such a string.
+func TestPSQuote(t *testing.T) {
+	tests := []struct {
+		name, in, want string
+	}{
+		{"plain", `C:\Program Files\norca`, `'C:\Program Files\norca'`},
+		{"ascii quote", "it's", "'it''s'"},
+		{"left quote", "a\u2018b", "'a\u2018\u2018b'"},
+		{"right quote", "a\u2019; exit 7; \u2019", "'a\u2019\u2019; exit 7; \u2019\u2019'"},
+		{"low quote", "a\u201ab", "'a\u201a\u201ab'"},
+		{"reversed quote", "a\u201bb", "'a\u201b\u201bb'"},
+		{"literal characters", "$env:X `n\r\n\"", "'$env:X `n\r\n\"'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := PSQuote(tt.in); got != tt.want {
+				t.Fatalf("PSQuote(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 

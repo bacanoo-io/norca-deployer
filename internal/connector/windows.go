@@ -25,9 +25,21 @@ func PowerShellCommand(script string) string {
 		base64.StdEncoding.EncodeToString(b)
 }
 
+// psQuoteEscaper doubles the characters that end a PowerShell single-quoted
+// string: the ASCII quote and the typographic single quotes U+2018 to
+// U+201B, which PowerShell takes as quotes too. A doubled quote is one
+// literal quote; nothing else is special in such a string.
+var psQuoteEscaper = strings.NewReplacer(
+	"'", "''",
+	"‘", "‘‘",
+	"’", "’’",
+	"‚", "‚‚",
+	"‛", "‛‛",
+)
+
 // PSQuote quotes a string as a PowerShell single-quoted literal.
 func PSQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", "''") + "'"
+	return "'" + psQuoteEscaper.Replace(s) + "'"
 }
 
 // SFTPPath converts a Windows path (C:\dir\file) to the form the Windows
