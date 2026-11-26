@@ -84,10 +84,10 @@ The body of the block is taken as it is written, one level of indentation less: 
 | Key | Default | Description |
 | --- | --- | --- |
 | `version` | `v0.1.0` | Release tag (`v1.2.3`) for `official` and `custom-url` |
-| `source` | `official` | `official`: GitHub release archive verified with `SHA256SUMS`. `custom-url`: same layout under `download_base_url`. `local-path`: binary or archive from the operator machine. `host-package`: the binary comes from a package installed by `host_packages` (apt or dnf) |
+| `source` | `official` | `official`: GitHub release archive verified with `SHA256SUMS` (Alpine nodes get the `_musl` archive). `custom-url`: same layout under `download_base_url`. `local-path`: binary or archive from the operator machine. `host-package`: the binary comes from a package installed by `host_packages` (apt, dnf or apk) |
 | `download_base_url` | GitHub releases of Norca | Base URL for `official` / `custom-url` |
 | `local_binary_path` | | File for `local-path`: a binary or a `.tar.gz` / `.zip` archive; `{os}` and `{arch}` are replaced, and `{musl}` is `_musl` for an Alpine node and empty for the others (`norca_{os}_{arch}{musl}`) |
-| `checksum_sha256` | | Optional digest the artifact must match |
+| `checksum_sha256` | | Optional digest the artifact must match. It names one file: with nodes of several architectures, or Alpine nodes next to others, leave it empty (the `SHA256SUMS` of the release has each archive) |
 | `package` | `norca` | Package name for `host-package`; it must be installed on every node |
 
 ## cni
