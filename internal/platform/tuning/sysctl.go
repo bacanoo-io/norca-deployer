@@ -124,10 +124,10 @@ func (OpenRC) Steps() []step.Step {
 		"sysctl_ro=$(printf '%s\\n' \"$sysctl_out\" | sed -n \"s/.*setting key [\\\"']\\(.*\\)[\\\"']: Read-only file system.*/\\1/p\" | tr '\\n' ' ')\n" +
 		"sysctl_bad=$(printf '%s\\n' \"$sysctl_out\" | grep -i -e error -e cannot | grep -v -e 'is an unknown key' -e 'cannot stat /proc/sys/' -e 'Read-only file system' || true)\n" +
 		"if [ -n \"$sysctl_unknown\" ]; then\n" +
-		"  warn \"sysctl: keys this host does not have were skipped: ${sysctl_unknown% }\"\n" +
+		"  warn \"the sysctl keys this host does not have were skipped: ${sysctl_unknown% }\"\n" +
 		"fi\n" +
 		"if [ -n \"$sysctl_ro\" ]; then\n" +
-		"  warn \"sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: ${sysctl_ro% }\"\n" +
+		"  warn \"the sysctl keys that are read-only on this host were not set (a container?); they apply at the next boot: ${sysctl_ro% }\"\n" +
 		"fi\n" +
 		"if [ -n \"$sysctl_bad\" ] || { [ \"$sysctl_rc\" != 0 ] && [ -z \"$sysctl_unknown$sysctl_ro\" ]; }; then\n" +
 		"  if [ -w /proc/sys/net/ipv4/ip_forward ]; then\n" +

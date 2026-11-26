@@ -66,14 +66,14 @@ func TestOpenRCSysctl(t *testing.T) {
 		{name: "applied", out: "vm.swappiness = 1\nnet.ipv4.ip_forward = 1", want: ""},
 		{name: "keys of busybox the host does not have", out: "vm.swappiness = 1\n" +
 			"sysctl: error: 'net.ipv4.neigh.default/gc_thresh1' is an unknown key\nsysctl: error: 'net.bridge.bridge-nf-call-iptables' is an unknown key",
-			want: "warn sysctl: keys this host does not have were skipped: net.ipv4.neigh.default/gc_thresh1 net.bridge.bridge-nf-call-iptables"},
+			want: "warn the sysctl keys this host does not have were skipped: net.ipv4.neigh.default/gc_thresh1 net.bridge.bridge-nf-call-iptables"},
 		{name: "keys of procps the host does not have", rc: 255,
 			out:  "sysctl: cannot stat /proc/sys/net/bridge/bridge-nf-call-iptables: No such file or directory",
-			want: "warn sysctl: keys this host does not have were skipped: net/bridge/bridge-nf-call-iptables"},
+			want: "warn the sysctl keys this host does not have were skipped: net/bridge/bridge-nf-call-iptables"},
 		{name: "keys of busybox that are read-only here", out: "sysctl: error setting key 'vm.swappiness': Read-only file system\nnet.ipv4.ip_forward = 1",
-			want: "warn sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
+			want: "warn the sysctl keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
 		{name: "keys of procps that are read-only here", rc: 255, out: "sysctl: setting key \"vm.swappiness\": Read-only file system",
-			want: "warn sysctl: keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
+			want: "warn the sysctl keys that are read-only on this host were not set (a container?); they apply at the next boot: vm.swappiness"},
 		{name: "another error of busybox", out: "sysctl: error setting key 'vm.swappiness': Invalid argument",
 			want: "error sysctl -p " + SysctlConfigPath + " failed: sysctl: error setting key 'vm.swappiness': Invalid argument"},
 	}
