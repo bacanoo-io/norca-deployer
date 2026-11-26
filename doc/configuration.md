@@ -248,15 +248,15 @@ Norca does not need Consul. Without this section every agent gets `auto_advertis
 
 ### consul.dns_forwarding
 
-Conditional forwarding: the Consul domain is answered by the DNS interface of the local Consul agent, every other name keeps being answered by the resolver the host has (systemd-resolved asks Consul for them too, in parallel; Consul refuses them). The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes with systemd only: a Windows node is skipped with a warning, and an Alpine node (OpenRC) is an error of the plan before anything is changed.
+Conditional forwarding: the Consul domain is answered by the DNS interface of the local Consul agent, every other name keeps being answered by the resolver the host has (systemd-resolved asks Consul for them too, in parallel; Consul refuses them). The deployer configures systemd-resolved or dnsmasq that is already on the node; it never installs one. Linux nodes only: a Windows node is skipped with a warning. Alpine nodes (OpenRC) have no systemd-resolved, so they use dnsmasq (see [Alpine: dnsmasq](networking-and-tuning.md#alpine-dnsmasq)); `method: systemd-resolved` or `docker: true` with an Alpine node is an error of the plan before anything is changed.
 
 | Key | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Write the configuration. `false`, or no block, removes the files an earlier `apply` wrote |
 | `address` | `127.0.0.1:8600` | DNS interface of the Consul agent, `host:port` with an IP address (`[::1]:8600` for IPv6) |
 | `domain` | `consul` | The domain that is forwarded |
-| `method` | `auto` | `auto`, `systemd-resolved` or `dnsmasq` |
-| `docker` | `false` | Containers on the docker bridge resolve the domain too (systemd-resolved only; restarts Docker when it changes `/etc/docker/daemon.json`) |
+| `method` | `auto` | `auto`, `systemd-resolved` or `dnsmasq` (on Alpine `auto` takes dnsmasq) |
+| `docker` | `false` | Containers on the docker bridge resolve the domain too (systemd-resolved only, so not on Alpine; restarts Docker when it changes `/etc/docker/daemon.json`) |
 
 ```yaml
 consul:

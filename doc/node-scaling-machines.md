@@ -121,8 +121,9 @@ the service of that family. It has the steps of the families a client of `apply`
 installed on: the Debian family (Debian, Ubuntu; `host_packages.apt`), the RHEL family (RHEL,
 Rocky Linux, AlmaLinux; `host_packages.dnf`) and the Alpine family (`host_packages.apk`, OpenRC).
 A family whose block is missing while another block has packages for the clients is left out, as
-`apply` refuses such a node, and so is the Alpine family when `consul.dns_forwarding` is on (it
-needs systemd); a plan that leaves no family is an error of `install-script`. On a machine of a
+`apply` refuses such a node, and so is the Alpine family when `consul.dns_forwarding` needs
+systemd-resolved (`method: systemd-resolved` or `docker: true`), as `apply` refuses an Alpine
+node then; a plan that leaves no family is an error of `install-script`. On a machine of a
 family it has no steps of, the script stops before it changes anything: `this script has no
 install for rocky (family rhel); it installs on the families: debian`. It also stops on a version
 older than `apply` installs on (Debian 11, Ubuntu 20.04, RHEL and its rebuilds 9, Alpine 3.22;
@@ -161,11 +162,16 @@ build) are functions of that family. In order:
      writes the POSIX `sh` script `apply` runs on the nodes of the inventory to
      `/var/lib/norca-deployer/consul-dns.sh` and runs it (see
      [DNS of the hosts](networking-and-tuning.md#dns-of-the-hosts-the-consul-domain)); its lines
-     are logged as `consul.dns_forwarding: ...`. A machine without systemd-resolved or dnsmasq
-     stops the script with the error `apply` gives. When systemd does not run (an image built in
-     a container), the resolver is chosen by its enabled unit, `/etc/resolv.conf` is not
-     checked, nothing is restarted, and with `docker: true` the containers are left out when
-     `docker0` is missing (a warning).
+     are logged as `consul.dns_forwarding: ...`. The init system it drives is that of the
+     family of the machine: systemd on Debian and RHEL, OpenRC on Alpine (dnsmasq, with
+     `rc-service`). A machine without systemd-resolved or dnsmasq stops the script with the error
+     `apply` gives. When the init system does not run (an image built in a container), the
+     resolver is chosen by its enabled unit, on Alpine by dnsmasq in a runlevel;
+     `/etc/resolv.conf` is not checked, nothing is restarted, and with `docker: true` the
+     containers are left out when `docker0` is missing (a warning). The script does not run the
+     `scripts` of the plan, so the image build of an Alpine machine installs dnsmasq
+     (`apk add dnsmasq`) and runs the script of
+     [Alpine: dnsmasq](networking-and-tuning.md#alpine-dnsmasq) before the install script.
 3. **Directories** with the modes above, and `/var/lib/norca-deployer` (`0700`).
 4. **The norca binary**: download the release archive (on Alpine the `_musl` archive), check its
    SHA-256, extract `norca` and install it. A marker with the digests of the archive and of the binary skips the download on

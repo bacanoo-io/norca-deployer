@@ -142,7 +142,7 @@ This is **conditional forwarding**: the `consul` domain is answered by Consul, e
 **The deployer never installs a resolver.** It configures the one the node has, before the directories of the agent are made (after the host packages and the tuning):
 
 - **`systemd-resolved`**, when it runs and the lookups of the host go through it: `127.0.0.53` (or `127.0.0.54`) in `/etc/resolv.conf`, or `resolve` in the `hosts` line of `/etc/nsswitch.conf`. It needs systemd 246 or newer for a port other than 53 in `DNS=`.
-- **`dnsmasq`**, when it runs, `/etc/resolv.conf` names `127.0.0.1` (or `::1`), and it reads `/etc/dnsmasq.d` (the unit of Debian passes it; elsewhere `conf-dir=/etc/dnsmasq.d/,*.conf` in `/etc/dnsmasq.conf`).
+- **`dnsmasq`**, when it runs, `/etc/resolv.conf` names `127.0.0.1` (or `::1`), and it reads `/etc/dnsmasq.d` (the unit of Debian passes it; elsewhere `conf-dir=/etc/dnsmasq.d/,*.conf` in `/etc/dnsmasq.conf`, which the package of Alpine has). Alpine nodes (OpenRC) have only this one: see [Alpine: dnsmasq](#alpine-dnsmasq).
 
 `auto` takes the first that applies; an explicit `method` checks the same conditions for that one. A node where neither applies is an error of that node, found before anything is changed on it, with what was found:
 
@@ -172,7 +172,7 @@ host_packages:
 | systemd-resolved | `/etc/dnssec-trust-anchors.d/norca-consul.negative` | `consul`: a negative trust anchor, so that DNSSEC validation (`DNSSEC=yes` or `allow-downgrade`) skips the domain, whose answers Consul does not sign; DNSSEC stays as it is for every other name. A `.negative` file replaces the built-in negative trust anchors of systemd-resolved (the private zones: `10.in-addr.arpa`, `local`, `home.arpa`, ...), so the file lists them too (the list of systemd 252) |
 | dnsmasq | `/etc/dnsmasq.d/norca-consul.conf` | `server=/consul/127.0.0.1#8600` |
 
-A file is written only when its content differs, and the resolver is restarted (`systemctl restart systemd-resolved` or `dnsmasq`) only when a file changed or was removed; a second `apply` restarts nothing. The agent is not restarted for it. The work is done by a POSIX `sh` script that the deployer uploads to `/var/lib/norca-deployer/consul-dns.sh` and runs; the install script of [scaled machines](node-scaling-machines.md) runs the same functions.
+A file is written only when its content differs, and the resolver is restarted (`systemctl restart systemd-resolved` or `dnsmasq`; on Alpine `rc-service dnsmasq restart`) only when a file changed or was removed; a second `apply` restarts nothing. The agent is not restarted for it. The work is done by a POSIX `sh` script that the deployer uploads to `/var/lib/norca-deployer/consul-dns.sh` and runs; the install script of [scaled machines](node-scaling-machines.md) runs the same functions.
 
 **Docker containers** (`docker: true`, systemd-resolved only, systemd 247 or newer): containers do not use the stub on `127.0.0.53`, so systemd-resolved also listens on the address of `docker0` (`DNSStubListenerExtra=`, read from `ip -4 addr show dev docker0`, never assumed to be `172.17.0.1`), and the Docker daemon gives that address to its containers: `"dns": ["<docker0 address>"]` is merged into `/etc/docker/daemon.json` (every other key kept; the file is made when it is missing; a file that does not parse is refused; the merge uses `jq` or `python3`). Every name of a container then goes through systemd-resolved, so other names resolve as on the host. When `daemon.json` changed, the deployer restarts Docker and warns: **running containers are restarted unless `live-restore` is on**. A node without `docker0` is an error. With `tuning.apply_firewall_rules` the deployer allows TCP and UDP 53 from the `docker0` subnet (rule `norca:53/udp:<subnet>`), which `default_deny` would drop. This covers the default bridge; containers on other Docker networks come from other subnets.
 
@@ -189,6 +189,95 @@ docker run --rm busybox nslookup consul.service.consul   # with docker: true
 ```
 
 Consul answers DNS queries with the rights of its DNS token: with ACLs that deny by default (the `consul` module) the answers stay empty until the agents have a token that may read nodes and services (`consul acl set-agent-token dns <token>` on every agent).
+
+### Alpine: dnsmasq
+
+Alpine runs OpenRC and has no systemd-resolved, so an Alpine node forwards the domain with dnsmasq: `auto` takes it, and `method: systemd-resolved` or `docker: true` is an error of the plan before anything is changed on any node. The deployer drives dnsmasq through OpenRC: `rc-service dnsmasq status` tells whether it runs, and `rc-service dnsmasq restart` makes it read its new file (the `reload` of the Alpine service only clears the cache). The conditions are those of dnsmasq above: started, named in `/etc/resolv.conf` as `127.0.0.1`, and reading `/etc/dnsmasq.d`, which the `/etc/dnsmasq.conf` of the Alpine package does.
+
+Two things of an Alpine host need a setup that the plan does, because the deployer does not manage `/etc/resolv.conf`:
+
+- **dnsmasq needs servers other than those of `/etc/resolv.conf`.** dnsmasq asks the servers `/etc/resolv.conf` names. Once that names `127.0.0.1`, dnsmasq skips it as its own address (`ignoring nameserver 127.0.0.1 - local interface` in the log) and refuses every name it cannot answer itself. Give it the servers of the network in a file of their own (`resolv-file=`) or as `server=` lines. The deployer warns when dnsmasq has neither: `dnsmasq has no DNS server for names outside the consul domain`.
+- **udhcpc rewrites `/etc/resolv.conf`.** With DHCP (`iface eth0 inet dhcp` in `/etc/network/interfaces`, the default of Alpine and of its cloud images) udhcpc writes the servers of each lease into `/etc/resolv.conf`, and so drops `127.0.0.1` at the next renewal. `RESOLV_CONF` in `/etc/udhcpc/udhcpc.conf` makes it write them to another file: the one dnsmasq reads.
+
+This plan installs dnsmasq on the Alpine nodes and sets it up that way, in a script that runs after the host packages and before the deployer forwards the domain:
+
+```yaml
+consul:
+  dns_forwarding:
+    enabled: true
+host_packages:
+  apk:
+    install:
+      - name: dnsmasq
+scripts:
+  - name: alpine-dnsmasq
+    phase: post_packages
+    interpreter: sh
+    families: [alpine]
+    inline: |
+      set -eu
+      # The servers of the network, once: those /etc/resolv.conf names now.
+      up=/etc/resolv.dnsmasq
+      if [ ! -s "$up" ]; then
+        grep -E '^nameserver[[:space:]]' /etc/resolv.conf |
+          grep -vE '^nameserver[[:space:]]+(127\.0\.0\.1|::1)[[:space:]]*$' >"$up.new" || true
+        if [ ! -s "$up.new" ]; then
+          rm -f "$up.new"
+          echo "/etc/resolv.conf names no DNS server of the network: write them to $up" >&2
+          exit 1
+        fi
+        mv "$up.new" "$up"
+      fi
+      # udhcpc writes the servers of the next leases there, not to resolv.conf.
+      conf=/etc/udhcpc/udhcpc.conf
+      if ! grep -qxF "RESOLV_CONF=$up" "$conf" 2>/dev/null; then
+        mkdir -p /etc/udhcpc
+        { grep -v '^RESOLV_CONF=' "$conf" 2>/dev/null || true; echo "RESOLV_CONF=$up"; } >"$conf.new"
+        mv "$conf.new" "$conf"
+      fi
+      # dnsmasq answers this host only, from the servers of the network.
+      want="listen-address=127.0.0.1
+      bind-interfaces
+      resolv-file=$up"
+      restart=0
+      if [ "$(cat /etc/dnsmasq.d/local.conf 2>/dev/null)" != "$want" ]; then
+        printf '%s\n' "$want" >/etc/dnsmasq.d/local.conf
+        restart=1
+      fi
+      rc-update add dnsmasq default >/dev/null
+      if [ -e /run/openrc/softlevel ]; then # OpenRC runs (not an image build)
+        if [ "$restart" = 1 ]; then
+          rc-service dnsmasq restart
+        elif ! rc-service dnsmasq status >/dev/null 2>&1; then
+          rc-service dnsmasq start
+        fi
+      fi
+      # The host asks dnsmasq; search and options lines stay.
+      if [ "$(grep -E '^nameserver' /etc/resolv.conf)" != "nameserver 127.0.0.1" ]; then
+        { grep -E '^(search|domain|options)[[:space:]]' /etc/resolv.conf || true
+          echo "nameserver 127.0.0.1"; } >/etc/resolv.conf.new
+        cat /etc/resolv.conf.new >/etc/resolv.conf
+        rm -f /etc/resolv.conf.new
+      fi
+```
+
+The script:
+
+- writes the servers that `/etc/resolv.conf` names on its first run to `/etc/resolv.dnsmasq` (it stops with an error when that names no server but dnsmasq), and sets `RESOLV_CONF=/etc/resolv.dnsmasq` in `/etc/udhcpc/udhcpc.conf`, so udhcpc writes the servers of later leases there;
+- writes `/etc/dnsmasq.d/local.conf`: dnsmasq asks the servers of `/etc/resolv.dnsmasq` (and reads the file again when udhcpc changes it), and answers on `127.0.0.1` only (`listen-address`, `bind-interfaces`; the `local-service` of the Alpine `dnsmasq.conf` would answer every host of the local subnets);
+- puts dnsmasq into the `default` runlevel and starts it, or restarts it when its file changed (not while OpenRC does not run: an image build);
+- makes `/etc/resolv.conf` name `127.0.0.1` only, with its `search`, `domain` and `options` lines.
+
+A second run changes nothing. A host with a static address (`iface eth0 inet static`) has no udhcpc rewriting `/etc/resolv.conf`; the same script works there. A host with another DHCP client (dhcpcd) must keep that client from writing `/etc/resolv.conf` in the client's own way. The install script of [scaled machines](node-scaling-machines.md) does not run the scripts of the plan: build the image with this setup.
+
+**How to check** on an Alpine node:
+
+```sh
+nslookup consul.service.consul    # through dnsmasq on 127.0.0.1: answered by the Consul agent
+nslookup dl-cdn.alpinelinux.org   # other names still resolve
+rc-service dnsmasq status
+cat /etc/resolv.dnsmasq           # the servers of the network that dnsmasq asks
+```
 
 ## CNI plugins
 
