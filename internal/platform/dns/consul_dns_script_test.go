@@ -1151,7 +1151,10 @@ func TestScriptOpenRCDnsmasqWithoutUpstream(t *testing.T) {
 				for run := range 2 {
 					res := h.mustApply(forward(config.DNSMethodAuto, false))
 					got := len(res.Warnings) == 1 && strings.Contains(res.Warnings[0], "dnsmasq has no DNS server for names outside the consul domain") &&
-						strings.Contains(res.Warnings[0], "RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf")
+						strings.Contains(res.Warnings[0], "RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf") &&
+						// dhcpcd, which the Alpine cloud images use, needs its own
+						// setup (lab case alpine-dns).
+						strings.Contains(res.Warnings[0], "with dhcpcd, nohook resolv.conf in /etc/dhcpcd.conf and /etc/dhcpcd.exit-hook writing them there")
 					if got != tt.warn || len(res.Warnings) > 1 {
 						t.Fatalf("run %d: warnings = %q, want the warning: %v", run+1, res.Warnings, tt.warn)
 					}

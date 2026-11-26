@@ -587,9 +587,11 @@ ncd_prepare_dnsmasq() {
 # dnsmasq itself (127.0.0.1, ::1; dnsmasq skips an address of its own:
 # "ignoring nameserver 127.0.0.1 - local interface", and answers REFUSED),
 # and no resolv-file= or server= in its configuration or on its command
-# line gives it another. On Alpine udhcpc writes the servers of the network
-# into /etc/resolv.conf unless RESOLV_CONF in /etc/udhcpc/udhcpc.conf names
-# another file.
+# line gives it another. On Alpine the DHCP client writes the servers of the
+# network into /etc/resolv.conf: udhcpc unless RESOLV_CONF in
+# /etc/udhcpc/udhcpc.conf names another file, dhcpcd (the cloud images;
+# ifupdown-ng takes it when it is installed) unless its resolv.conf hook is
+# off (nohook), and then its exit hook can write them for dnsmasq.
 ncd_check_dnsmasq_upstream() {
   if [ "$ncd_init" != openrc ] || [ "$ncd_online" != 1 ]; then
     return 0
@@ -609,7 +611,7 @@ ncd_check_dnsmasq_upstream() {
   if ncd_dnsmasq_cmdline_has '(^| )(--resolv-file=|-r |--server=[^/]|-S [^/])'; then
     return 0
   fi
-  ncd_say "warn dnsmasq has no DNS server for names outside the $ncd_domain domain: /etc/resolv.conf names only $ncd_ns, which dnsmasq does not ask, and no resolv-file= or server= gives it another. Give it the servers of the network: with udhcpc, RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf and resolv-file=/etc/resolv.dnsmasq in a file of /etc/dnsmasq.d"
+  ncd_say "warn dnsmasq has no DNS server for names outside the $ncd_domain domain: /etc/resolv.conf names only $ncd_ns, which dnsmasq does not ask, and no resolv-file= or server= gives it another. Give it the servers of the network: resolv-file=/etc/resolv.dnsmasq in a file of /etc/dnsmasq.d, and the DHCP client writing them there (with udhcpc, RESOLV_CONF=/etc/resolv.dnsmasq in /etc/udhcpc/udhcpc.conf; with dhcpcd, nohook resolv.conf in /etc/dhcpcd.conf and /etc/dhcpcd.exit-hook writing them there)"
 }
 
 # ncd_write_dnsmasq writes the server line of the domain and restarts

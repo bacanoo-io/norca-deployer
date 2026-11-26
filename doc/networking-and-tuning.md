@@ -197,7 +197,7 @@ Alpine runs OpenRC and has no systemd-resolved, so an Alpine node forwards the d
 Two things of an Alpine host need a setup that the plan does, because the deployer does not manage `/etc/resolv.conf`:
 
 - **dnsmasq needs servers other than those of `/etc/resolv.conf`.** dnsmasq asks the servers `/etc/resolv.conf` names. Once that names `127.0.0.1`, dnsmasq skips it as its own address (`ignoring nameserver 127.0.0.1 - local interface` in the log) and refuses every name it cannot answer itself. Give it the servers of the network in a file of their own (`resolv-file=`) or as `server=` lines. The deployer warns when dnsmasq has neither: `dnsmasq has no DNS server for names outside the consul domain`.
-- **udhcpc rewrites `/etc/resolv.conf`.** With DHCP (`iface eth0 inet dhcp` in `/etc/network/interfaces`, the default of Alpine and of its cloud images) udhcpc writes the servers of each lease into `/etc/resolv.conf`, and so drops `127.0.0.1` at the next renewal. `RESOLV_CONF` in `/etc/udhcpc/udhcpc.conf` makes it write them to another file: the one dnsmasq reads.
+- **The DHCP client rewrites `/etc/resolv.conf`.** With DHCP (`iface eth0 inet dhcp` in `/etc/network/interfaces`, the default of Alpine and of its cloud images) ifupdown-ng starts dhcpcd when it is installed, as on the Alpine cloud images, and else the udhcpc of busybox. Both write the servers of each lease into `/etc/resolv.conf`, and so drop `127.0.0.1` at the next renewal or boot. udhcpc writes them to another file with `RESOLV_CONF` in `/etc/udhcpc/udhcpc.conf`: the one dnsmasq reads. dhcpcd leaves `/etc/resolv.conf` alone with `nohook resolv.conf` in `/etc/dhcpcd.conf`, and its hook `/etc/dhcpcd.exit-hook` writes the servers to that file.
 
 This plan installs dnsmasq on the Alpine nodes and sets it up that way, in a script that runs after the host packages and before the deployer forwards the domain:
 
@@ -235,6 +235,35 @@ scripts:
         { grep -v '^RESOLV_CONF=' "$conf" 2>/dev/null || true; echo "RESOLV_CONF=$up"; } >"$conf.new"
         mv "$conf.new" "$conf"
       fi
+      # dhcpcd (ifupdown-ng takes it when it is installed, as on the cloud
+      # images): its resolv.conf hook off, and its exit hook writes the
+      # servers of each lease there. A running dhcpcd reads nohook only when
+      # it starts again; until then the exit hook names dnsmasq in
+      # resolv.conf again after its resolv.conf hook.
+      if [ -x /sbin/dhcpcd ]; then
+        if ! grep -qxF 'nohook resolv.conf' /etc/dhcpcd.conf 2>/dev/null; then
+          echo 'nohook resolv.conf' >>/etc/dhcpcd.conf
+        fi
+        cat >/etc/dhcpcd.exit-hook.new <<'EOF'
+      # Written by the plan (alpine-dnsmasq): dnsmasq asks the servers of the
+      # lease, /etc/resolv.conf names dnsmasq.
+      if [ -n "$new_domain_name_servers" ]; then
+        printf 'nameserver %s\n' $new_domain_name_servers >/etc/resolv.dnsmasq.new &&
+          mv -f /etc/resolv.dnsmasq.new /etc/resolv.dnsmasq
+      fi
+      if [ "$(grep -E '^nameserver' /etc/resolv.conf)" != "nameserver 127.0.0.1" ]; then
+        { grep -E '^(search|domain|options)[[:space:]]' /etc/resolv.conf
+          echo "nameserver 127.0.0.1"; } >/etc/resolv.conf.new
+        cat /etc/resolv.conf.new >/etc/resolv.conf
+        rm -f /etc/resolv.conf.new
+      fi
+      EOF
+        if cmp -s /etc/dhcpcd.exit-hook.new /etc/dhcpcd.exit-hook; then
+          rm -f /etc/dhcpcd.exit-hook.new
+        else
+          mv /etc/dhcpcd.exit-hook.new /etc/dhcpcd.exit-hook
+        fi
+      fi
       # dnsmasq answers this host only, from the servers of the network.
       want="listen-address=127.0.0.1
       bind-interfaces
@@ -264,11 +293,12 @@ scripts:
 The script:
 
 - writes the servers that `/etc/resolv.conf` names on its first run to `/etc/resolv.dnsmasq` (it stops with an error when that names no server but dnsmasq), and sets `RESOLV_CONF=/etc/resolv.dnsmasq` in `/etc/udhcpc/udhcpc.conf`, so udhcpc writes the servers of later leases there;
-- writes `/etc/dnsmasq.d/local.conf`: dnsmasq asks the servers of `/etc/resolv.dnsmasq` (and reads the file again when udhcpc changes it), and answers on `127.0.0.1` only (`listen-address`, `bind-interfaces`; the `local-service` of the Alpine `dnsmasq.conf` would answer every host of the local subnets);
+- with dhcpcd, adds `nohook resolv.conf` to `/etc/dhcpcd.conf` and writes `/etc/dhcpcd.exit-hook`, which dhcpcd runs after its own hooks at every lease: it writes the servers of the lease to `/etc/resolv.dnsmasq` and makes `/etc/resolv.conf` name `127.0.0.1` again when the `resolv.conf` hook of a dhcpcd that started before the change rewrote it;
+- writes `/etc/dnsmasq.d/local.conf`: dnsmasq asks the servers of `/etc/resolv.dnsmasq` (and reads the file again when the DHCP client changes it), and answers on `127.0.0.1` only (`listen-address`, `bind-interfaces`; the `local-service` of the Alpine `dnsmasq.conf` would answer every host of the local subnets);
 - puts dnsmasq into the `default` runlevel and starts it, or restarts it when its file changed (not while OpenRC does not run: an image build);
 - makes `/etc/resolv.conf` name `127.0.0.1` only, with its `search`, `domain` and `options` lines.
 
-A second run changes nothing. A host with a static address (`iface eth0 inet static`) has no udhcpc rewriting `/etc/resolv.conf`; the same script works there. A host with another DHCP client (dhcpcd) must keep that client from writing `/etc/resolv.conf` in the client's own way. The install script of [scaled machines](node-scaling-machines.md) does not run the scripts of the plan: build the image with this setup.
+A second run changes nothing. A host with a static address (`iface eth0 inet static`) has no DHCP client rewriting `/etc/resolv.conf`; the same script works there. A host with another DHCP client (dhclient) must keep that client from writing `/etc/resolv.conf` in the client's own way. The install script of [scaled machines](node-scaling-machines.md) does not run the scripts of the plan: build the image with this setup.
 
 **How to check** on an Alpine node:
 
