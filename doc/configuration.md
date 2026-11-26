@@ -395,8 +395,24 @@ deployer writes, after `apply`, what the operator needs:
 | `install` | `image` | `image`: the script runs when the image of the provider is built. `boot`: `apply` writes the script into the bootstrap Variable (item `install_script`) and the bootstrap of the operator runs it at the first boot. `boot` needs a release and CNI plugins the machine can download (not `local-path`) and no APT repository with `auth` |
 | `arch` | `amd64` | Architecture of the machines: `amd64`, `arm64`, `arm` or `386`. The script of the bootstrap Variable is for this one; `install-script --arch` overrides it |
 | `join_binary` | `/usr/local/bin/norca-join` | Where `norca-join` is on the machines. Written into the bootstrap Variable (item `join_binary`) only when set |
-| `join_download.url` | | Where the script downloads `norca-join` from (http or https). Without it the script only checks that the binary is there |
-| `join_download.checksum_sha256` | | SHA-256 of that file (required with `url`) |
+| `join_download` | | Where the script downloads `norca-join` from. Without it the script only checks that the binary is there |
+| `join_download.source` | `url` | `url`: the file of `url`, checked against `checksum_sha256`. `official`: the release `version` of norca-platform |
+| `join_download.url` | | Source `url`: the binary (http or https) |
+| `join_download.checksum_sha256` | | Source `url`: SHA-256 of that file (required) |
+| `join_download.version` | | Source `official`: the release of norca-platform (`v0.1.0`). The script downloads `norca-join_<version>_linux_<arch>` for `arch` (`amd64` or `arm64`), and the deployer reads its digest from `norca-platform_<version>_SHA256SUMS` of the release when it writes the script. The binary is static: the same file serves Alpine and the glibc distributions |
+| `join_download.download_base_url` | `https://github.com/bacanoo-io/norca-platform/releases/download` | Source `official`: where the releases are, as `<base>/v<version>/<file>`; a mirror keeps that layout |
+
+The two sources, a release of norca-platform and a file of your own:
+
+```yaml
+node_scaling:
+  enabled: true
+  machine:
+    install: image
+    join_download:
+      source: official
+      version: v0.1.0
+```
 
 ```yaml
 node_scaling:
@@ -408,6 +424,9 @@ node_scaling:
       url: https://downloads.example.com/norca-join/v0.3.0/norca-join_linux_amd64
       checksum_sha256: 9f2c...  # 64 hex characters
 ```
+
+With `official`, `url` and `checksum_sha256` are refused (the release gives both), and so is an
+`arch` the release has no build for (`arm`, `386`: use `url` with a build of your own).
 
 The template is the configuration of a client of the plan without what belongs to one node: the
 name, datacenter, pool, class and meta come from the node group, and the agent takes its own

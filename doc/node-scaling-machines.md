@@ -16,7 +16,7 @@ A scaled node is a Linux client of the plan. Before its bootstrap runs, the mach
 | --- | --- | --- |
 | The `norca` binary of the release (the musl build on Alpine) | `paths.linux.bin_dir` (`/usr/local/bin/norca`) | `release` |
 | The CNI plugins | `paths.linux.cni_bin_dir` (`/opt/cni/bin`) | `cni`, when `cni.install` is true |
-| `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download`; build it with `CGO_ENABLED=0` (a static binary) so that it runs on Alpine too |
+| `norca-join`, for nodes that make their own key | `node_scaling.machine.join_binary` (`/usr/local/bin/norca-join`) | `node_scaling.machine.join_download`: a release of norca-platform (`source: official`), whose static binary runs on Alpine and the glibc distributions alike, or a file of your own; build that with `CGO_ENABLED=0` (a static binary) so that it runs on Alpine too |
 | The directories: bin `0755`, config `0750`, data `0750`, log `0750`, tls `0700`, CNI bin and config `0755` | `paths.linux` | the same modes as `apply` |
 | The service of the agent, enabled but not started | `/etc/systemd/system/norca.service`; on Alpine the OpenRC service `/etc/init.d/norca` in the default runlevel | the service `apply` writes, with `tuning.file_descriptor_limit` |
 | The host packages of a client (Docker, for example) | APT (Debian, Ubuntu), dnf (RHEL, Rocky Linux, AlmaLinux) or apk (Alpine) | `host_packages.apt`, `host_packages.dnf` and `host_packages.apk` with the role `client` (or no role) |
@@ -56,9 +56,12 @@ node_scaling:
     install: image            # image (default) | boot
     arch: amd64               # the architecture of the boot script
     join_binary: /usr/local/bin/norca-join
-    join_download:
-      url: https://downloads.example.com/norca-join/v0.3.0/norca-join_linux_amd64
-      checksum_sha256: 9f2c...  # 64 hex characters
+    join_download:            # a release of norca-platform
+      source: official
+      version: v0.1.0
+      # or a file of your own:
+      # url: https://downloads.example.com/norca-join/v0.3.0/norca-join_linux_amd64
+      # checksum_sha256: 9f2c...  # 64 hex characters
 ```
 
 The keys are in the [configuration reference](configuration.md#node_scaling).
@@ -91,6 +94,8 @@ digests of the files; the machine downloads them itself. The URLs are the same a
 and `cni.checksum_sha256`; without them the deployer downloads the checksum file of the release
 (`norca_<version>_SHA256SUMS`, `cni-plugins-linux-<arch>-<version>.tgz.sha256`) and writes the
 digest into the script, so the machine checks the archive against a digest the deployer chose.
+`norca-join` of `join_download.source: official` is checked the same way, against
+`norca-platform_<version>_SHA256SUMS`.
 The same plan always gives the same script, so `apply` rewrites the bootstrap Variable only when
 the plan changes.
 
@@ -172,9 +177,13 @@ build) are functions of that family. In order:
 5. **The CNI plugins**: download, check, unpack into `cni_bin_dir`, with the same marker file as
    `apply` (`.norca-deployer-cni.sha256`). With `cni.source: local-path` the image build names
    the archive in `NORCA_CNI_ARCHIVE`.
-6. **norca-join** from `join_download`, checked against its digest. Without `join_download` the
-   script warns when `join_binary` is missing and says how to provide it. A node whose key the
-   operator makes (no join endpoint) does not use `norca-join`.
+6. **norca-join** from `join_download`, checked against its digest. With `source: official` the
+   file is `norca-join_<version>_linux_<arch>` of the release of norca-platform, and the digest
+   is the one of `norca-platform_<version>_SHA256SUMS`, which the deployer downloads when it
+   writes the script (once: it is cached in the state directory). Every family gets the same
+   static binary. Without `join_download` the script warns when `join_binary` is missing and
+   says how to provide it. A node whose key the operator makes (no join endpoint) does not use
+   `norca-join`.
 7. **The unit** `norca.service`, then `systemctl daemon-reload` (when systemd runs and the unit
    changed) and `systemctl enable`. It does not start the agent: the bootstrap, or `norca-join`,
    starts it once the configuration and the certificate exist. Without `systemctl` (an image
@@ -192,10 +201,11 @@ The script needs `sha256sum`, `tar`, `install`, `base64`, `find`, `stat` and `mk
 coreutils or busybox; a minimal RHEL image and Alpine have them all), and `apt-get`, `dnf` or
 `apk` only with host packages. It needs no `bash` and no `cmp`.
 
-**The bootstrap and Alpine.** The bootstrap of the operator (below) starts the agent with
-`systemctl enable --now` and writes a systemd unit for `norca-join`: on an Alpine machine those
-commands fail, so Alpine machines of the node scaling operator need an OpenRC variant of the
-bootstrap in `norca-platform`. The install script itself installs on Alpine.
+**The bootstrap and Alpine.** The bootstrap of the operator (below) works on Alpine machines
+too: it decides at boot between systemd and OpenRC (see
+[systemd or OpenRC](#systemd-or-openrc-decided-at-boot)). An Alpine image needs a cloud-init
+of its own: the `cloud-init` package of Alpine, or tiny-cloud, the bootstrapper of the Alpine
+cloud images.
 
 An excerpt of a generated script (defaults of the plan, `install: image`):
 
@@ -260,7 +270,8 @@ plan: with the defaults, `/etc/norca.d/tls`, `/etc/norca.d/norca.hcl` and `norca
 | `<config_file>` | `0640` | The agent configuration of the node |
 | `/usr/local/sbin/norca-node-install.sh` | `0700` | The install script, with `install: boot` only |
 
-Then `runcmd` runs the install script (with `install: boot`) and `systemctl enable --now norca`.
+Then `runcmd` runs the install script (with `install: boot`) and enables and starts the service
+`norca` (see [systemd or OpenRC](#systemd-or-openrc-decided-at-boot)).
 
 **Join mode** (the operator serves its join endpoint; the key stays on the node):
 
@@ -269,12 +280,48 @@ Then `runcmd` runs the install script (with `install: boot`) and `systemctl enab
 | `<tls_dir>/ca.pem` | `0644` | The cluster CA |
 | `<config_file>` | `0640` | The agent configuration of the node, with the meta `norca.identity = "join"` |
 | `<config dir>/norca-join.json` | `0600` | The configuration of `norca-join`, with the one-time token |
-| `/etc/systemd/system/norca-join.service` | `0644` | The unit of `norca-join`: `ExecStart=<join_binary> run -config <config dir>/norca-join.json` |
+| `/etc/systemd/system/norca-join.service` | `0644` | The unit of `norca-join`: `ExecStart=<join_binary> run -config <config dir>/norca-join.json`, restarted 10 seconds after it ended |
+| `/etc/init.d/norca-join` | `0755` | The OpenRC service of `norca-join`: the same command under `supervise-daemon`, started again 10 seconds after it ended, its output in syslog |
 | `/usr/local/sbin/norca-node-install.sh` | `0700` | The install script, with `install: boot` only |
 
-Then `runcmd` runs the install script (with `install: boot`), `systemctl daemon-reload` and
-`systemctl enable --now norca-join`. `norca-join` makes the key, gets the certificate from the
-endpoint, writes `client.pem` and `client-key.pem` into `tls_dir`, and starts the agent unit.
+Then `runcmd` runs the install script (with `install: boot`) and enables and starts the service
+`norca-join`. `norca-join` makes the key, gets the certificate from the endpoint, writes
+`client.pem` and `client-key.pem` into `tls_dir`, and enables and starts the service of the agent
+with the same init system; after each renewal it sends the agent `SIGHUP` (`systemctl kill
+--signal=HUP`, or `rc-service norca reload`, which the OpenRC service of the install script
+has).
+
+### systemd or OpenRC, decided at boot
+
+One document serves every family of the install script: the last line of `runcmd` finds the
+init system when the machine boots. It is one line of POSIX `sh`:
+
+```sh
+if [ -d /run/systemd/system ]; then rm -f /etc/init.d/norca-join && systemctl daemon-reload && systemctl enable --now norca-join; elif command -v rc-service >/dev/null 2>&1; then rc-update add norca-join default && rc-service norca-join start; else echo "norca bootstrap: neither systemd nor OpenRC runs on this machine: norca-join is not started" >&2; exit 1; fi
+```
+
+- **systemd** runs when `/run/systemd/system` exists (Debian, Ubuntu, RHEL and its rebuilds):
+  `systemctl daemon-reload` and `systemctl enable --now`. In join mode the OpenRC service
+  `/etc/init.d/norca-join` is removed first: `systemctl enable` hands a script of `/etc/init.d`
+  with the name of the unit to `update-rc.d`, which refuses one without an LSB header.
+- **OpenRC** otherwise, when `rc-service` is there (Alpine): `rc-update add <service> default`
+  and `rc-service <service> start`.
+- **Neither**: the line fails with the message above, and cloud-init reports the error of
+  `runcmd` (`cloud-init status --long`, `/var/log/cloud-init-output.log`).
+
+The basic mode has the same line for `norca`, without the removal. `norca-join` decides the same
+way when it starts the agent: on a machine with neither systemd nor OpenRC it does not join, so
+the one-time token is not spent.
+
+The entries of `runcmd` are shell lines (YAML strings), not the list form `[cmd, arg]`, so both
+bootstrappers of Alpine images run them:
+
+- **cloud-init** (the `cloud-init` package; Alpine 3.22 has 24.3) runs them in its `sh` script
+  and handles the whole document. The document passes `cloud-init schema`.
+- **tiny-cloud** (3.2 on Alpine 3.22), the bootstrapper of the Alpine cloud images, runs each
+  line with `sh -c` and writes `write_files` (with `b64` content and `permissions`). It does not
+  read `hostname`: the machine keeps the host name of its metadata. The agent configuration
+  names the node, so the node name is the same either way.
 
 An example `norca-join.json`:
 
