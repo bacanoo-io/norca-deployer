@@ -291,13 +291,13 @@ See [Host packages and scripts](host-packages-and-scripts.md).
 | --- | --- | --- |
 | `name` | | Unique name |
 | `phase` | | `pre_install`, `post_packages` or `post_install` |
-| `interpreter` | `bash` | `bash` or `sh`; a `bash` script on a node without bash is an error |
-| `families` | all | Only on nodes of these families: `debian`, `rhel`, `alpine`, `windows` |
+| `interpreter` | `bash` on Linux, `powershell` on Windows | `bash` or `sh` (Linux nodes), `powershell` (Windows PowerShell 5.1, Windows nodes); a script is skipped on the nodes of the other platform. A `bash` script on a node without bash is an error. Without `interpreter` and `families`, a script must not select Linux and Windows nodes |
+| `families` | all | Only on nodes of these families: `debian`, `rhel`, `alpine`, `windows`; they must fit the interpreter (`windows` only with `powershell` or none, Linux families only with `bash`, `sh` or none, not both without an interpreter) |
 | `path` / `inline` | | Script file (relative to the plan) or body; exactly one |
 | `roles` | all | `master`, `client` |
 | `hosts` | all | Host addresses or hostnames |
 | `env` | | Environment variables; values may be `!enc:` secrets |
-| `timeout` | `600` | Seconds |
+| `timeout` | `600` | Seconds; then the script is stopped (on Windows with the processes it started) and the node fails |
 | `always` | `false` | Run on every apply |
 
 ## secrets

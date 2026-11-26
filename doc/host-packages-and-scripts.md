@@ -1,6 +1,6 @@
 # Host Packages and Scripts
 
-Before Norca is configured, `apply` can install packages and run scripts on Linux nodes. Packages are written in one block per package manager; a node takes only the block of its own package manager. Windows nodes take no packages and skip the scripts with a warning.
+Before Norca is configured, `apply` can install packages on Linux nodes and run scripts on Linux and Windows nodes. Packages are written in one block per package manager; a node takes only the block of its own package manager. Windows nodes take no packages; their scripts run in Windows PowerShell.
 
 Order on each node:
 
@@ -233,7 +233,7 @@ With `release.source: host-package` the norca binary comes from a package of `ho
 scripts:
   - name: prepare-data-disk
     phase: pre_install                # pre_install | post_packages | post_install
-    interpreter: bash                 # bash (default) | sh
+    interpreter: bash                 # bash | sh | powershell (default: bash on Linux, powershell on Windows)
     families: [debian]                # optional: debian | rhel | alpine | windows
     path: scripts/prepare-data-disk.sh   # relative to the plan; or inline: |
     roles: [master]
@@ -245,16 +245,20 @@ scripts:
     always: false                     # true: run on every apply
 ```
 
-- Scripts run as root with their `interpreter` under `timeout`; a non-zero exit fails the node.
+- Scripts run as root (on Windows: as the administrator of the connection) with their `interpreter` under `timeout`; a non-zero exit fails the node.
+- **A script is written for Linux or for Windows.** `bash` and `sh` run on Linux nodes, `powershell` (Windows PowerShell 5.1, `powershell.exe`) on Windows nodes. A script whose interpreter is of the other platform is skipped on a node without a warning: a `powershell` script on Linux nodes, a `bash` or `sh` script on Windows nodes.
+- **Without `interpreter`** a script runs with `bash` on Linux nodes and with `powershell` on Windows nodes. A plan with Linux and Windows nodes must therefore tell which one a script is for: `validate` refuses a script without `interpreter` and `families` whose `roles` and `hosts` select nodes of both platforms. Set `interpreter`, or `families` (`[windows]`, or Linux families).
+- `families` limits a script to the nodes of those families; other nodes skip it. Families must fit the interpreter: `interpreter: bash` or `sh` with `families: [windows]`, `interpreter: powershell` with a Linux family, and `families` naming `windows` and a Linux family without an interpreter are errors of `validate`.
 - `interpreter: sh` runs the script with the `/bin/sh` of the node (dash on Debian and Ubuntu, bash on RHEL, busybox ash on Alpine); write such a script without bash features. Alpine has no bash unless `host_packages.apk` installs it.
 - A `bash` script on a node without bash is an error of that node before anything is changed: install `bash` with `host_packages` (for a script after `pre_install`) or set `interpreter: sh`.
-- `families` limits a script to the nodes of those families; other nodes skip it.
-- Environment variables are written to a 0600 file, sourced by the script runner and deleted afterwards. They never appear on a command line.
-- After a successful run, the SHA-256 of the script and its environment is stored in `/var/lib/norca-deployer/scripts/<name>.sha256`. The script runs again only when the body or the environment changed, or with `always: true`. Write scripts so that a second run is harmless anyway.
+- Environment variables are written to a private file (Linux: mode 0600; Windows: a directory only the Administrators and SYSTEM can open), read by the script runner and deleted afterwards. They never appear on a command line.
+- After a successful run, the SHA-256 of the script and its environment is stored in `/var/lib/norca-deployer/scripts/<name>.sha256` (Windows: `C:\ProgramData\norca-deployer\scripts\<name>.sha256`). The script runs again only when the body or the environment changed, or with `always: true`. Write scripts so that a second run is harmless anyway.
+
+How a script runs on a Windows node (the environment file, the exit code, the timeout): [Windows nodes](windows.md#scripts).
 
 ## Validation
 
-`validate` and `plan` check package names and versions (Debian rules in `apt`, RPM rules in `dnf`, apk rules in `apk`), repository names, URIs and base URLs (`http`/`https` only), suites, components, architectures, pin expressions, dnf priorities and package filters, apk keys and their names, the tagged repositories of apk packages, script names, interpreters, families and environment variable names. Because of these checks, no plan value can inject shell commands or repository options.
+`validate` and `plan` check package names and versions (Debian rules in `apt`, RPM rules in `dnf`, apk rules in `apk`), repository names, URIs and base URLs (`http`/`https` only), suites, components, architectures, pin expressions, dnf priorities and package filters, apk keys and their names, the tagged repositories of apk packages, script names, interpreters, families and environment variable names. Because of these checks, no plan value can inject shell commands or repository options. The values of script environments are not restricted: they are quoted for the shell, or as PowerShell literals on Windows, and reach the script as they are.
 
 ## Privileges
 

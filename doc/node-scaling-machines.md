@@ -119,7 +119,11 @@ A family whose block is missing while another block has packages for the clients
 `apply` refuses such a node, and so is the Alpine family when `consul.dns_forwarding` is on (it
 needs systemd); a plan that leaves no family is an error of `install-script`. On a machine of a
 family it has no steps of, the script stops before it changes anything: `this script has no
-install for rocky (family rhel); it installs on the families: debian`. The tuning and the norca
+install for rocky (family rhel); it installs on the families: debian`. It also stops on a version
+older than `apply` installs on (Debian 11, Ubuntu 20.04, RHEL and its rebuilds 9, Alpine 3.22;
+see [Supported operating systems](getting-started.md#supported-operating-systems)), with the
+reason `apply` gives: `this machine is not supported: it runs debian 10, but Debian is supported
+from version 11: ...`. The tuning and the norca
 binary of a family that differ from the others' (on Alpine: the tuning of OpenRC and the musl
 build) are functions of that family. In order:
 
@@ -211,6 +215,8 @@ case $os_family in
 debian | rhel) log "family $os_family (${os_id})" ;;
 *) die "this script has no install for ${os_id:-this system} (family $os_family); it installs on the families: debian, rhel" ;;
 esac
+os_problem=$(os_too_old "$os_id" "$os_family" "$(os_release VERSION_ID)")
+[ -z "$os_problem" ] || die "this machine is not supported: $os_problem"
 ...
 # directories
 ensure_dir '/usr/local/bin' 0755
