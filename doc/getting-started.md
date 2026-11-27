@@ -27,7 +27,7 @@ Older systems are refused before anything is changed, with the reason: RHEL 8 an
 
 **Firewall:** `apply_firewall_rules` uses an active ufw, a running firewalld (the default on RHEL), else nftables (a table of the deployer), else iptables; see [Networking and tuning](networking-and-tuning.md#firewall).
 
-When the detection is wrong, set the right values in [`host_facts`](configuration.md#host_facts) of the node.
+When the detection is wrong, set the right values in [`host_facts`](configuration.md#host_facts) of the node. A one-page summary of the systems and package managers: [Supported systems](supported-platforms.md).
 
 **Network between the nodes:** TCP 4646-4647 and TCP/UDP 4648 to the servers; TCP/UDP 20000-32000 to the clients for allocation ports (the deployer can open these, see [Networking and tuning](networking-and-tuning.md)).
 

@@ -10,6 +10,7 @@ Norca Deployer installs and maintains [Norca](https://github.com/bacanoo-io/norc
 | [How apply works](how-apply-works.md) | Stages, change detection, rolling restarts, idempotency, local state |
 | [Configuration reference](configuration.md) | Every key of the plan with defaults, YAML and HCL |
 | [Security](security.md) | CA and certificates, gossip encryption, ACLs, secrets, SSH host keys |
+| [Supported systems](supported-platforms.md) | The operating systems, init systems, architectures and package managers the deployer installs on, in one place |
 | [Host packages and scripts](host-packages-and-scripts.md) | One block per package manager (`apt`), APT repositories, local `.deb` files, pins, holds, scripts in `bash` or `sh` |
 | [Networking and tuning](networking-and-tuning.md) | Advertise addresses, ports, firewall, sysctl, CNI, volumes |
 | [Node labels, pools and resources](node-labels-and-pools.md) | Meta and node class, client defaults, node pools, host networks, reserved resources, drain on shutdown, dynamic ports |
