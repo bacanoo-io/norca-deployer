@@ -188,7 +188,7 @@ getent hosts deb.debian.org                   # other names still resolve
 docker run --rm busybox nslookup consul.service.consul   # with docker: true
 ```
 
-Consul answers DNS queries with the rights of its DNS token: with ACLs that deny by default (the `consul` module) the answers stay empty until the agents have a token that may read nodes and services (`consul acl set-agent-token dns <token>` on every agent).
+Consul answers DNS queries with the rights of its DNS token. The `consul` module (0.2.2 or newer) gives every agent one: its bootstrap creates the `norca-dns` policy (read on nodes, services and prepared queries) and a DNS token, and sets it as `acl.tokens.dns` on every agent, so the names resolve with no manual step (`acl.tokens.dns` needs Consul 1.17 or newer). A Consul not installed by the module, with ACLs that deny by default, answers nothing until every agent has a DNS token that may read nodes and services: set `acl.tokens.dns` in its configuration, or run `consul acl set-agent-token dns <token>` on every agent.
 
 ### Alpine: dnsmasq
 
