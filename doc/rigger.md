@@ -1,6 +1,6 @@
 # Rigger stacks
 
-[Rigger](https://github.com/bacanoo-io/norca/tree/main/rigger) is the package manager of Norca: modules written in HCL, deployed as a stack with a lock file of versions and digests. `apply` can apply one Rigger stack after the cluster is up, so a new cluster comes with its base services from modules.
+[Rigger](https://github.com/bacanoo-io/norca/tree/main/rigger) is the package manager of Norca: modules written in HCL, deployed as a stack with a lock file of versions and digests. `apply` can apply one Rigger stack after the cluster is up, so a new cluster comes with its base services from modules. How to write modules and stacks, their language, versions and registries: the [Rigger section](https://bacanoo-io.github.io/norca-doc/docs/rigger/) of the Norca documentation.
 
 ```yaml
 rigger:
