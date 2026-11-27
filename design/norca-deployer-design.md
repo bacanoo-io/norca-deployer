@@ -318,7 +318,8 @@ The deployer's `FwTuner` module opens the following ports on the target machines
 ## 9. Log Rotation and Protection Against Full Disks
 
 - **Linux (`/etc/logrotate.d/norca`):** daily rotation, compression, 7 days of retention, `copytruncate`.
-- **Prometheus telemetry:** enabling the `telemetry { prometheus_metrics = true }` block for production observability (`/v1/metrics?format=prometheus`).
+- **Prometheus telemetry:** enabling the `telemetry { prometheus { enabled = true } }` block for production observability (`/v1/metrics?format=prometheus`).
+- **OTLP telemetry:** alternatively the `telemetry { otlp { ... } }` block, with which the agent pushes its metrics over OTLP/gRPC: by default to the collector of its own node (`127.0.0.1:4317`, plain text on loopback), or to a central receiver by `endpoint` with `tls { ca_file, cert_file, key_file }` and `headers_file` (servers without a client, which run no collector of the otel-collector module).
 
 ---
 
