@@ -133,6 +133,12 @@ func (m *Manifest) check() error {
 		errs = append(errs, fmt.Errorf("tree.namespace %q: only %q for now", m.Tree.Namespace, defaultNamespace))
 	}
 
+	if len(m.Layers) > 0 {
+		// Read but not applied would change what a tree means without a
+		// word: refused until the layers are built (design §6.2).
+		errs = append(errs, errors.New("layers are not supported yet"))
+	}
+
 	seen := map[string]bool{}
 
 	for _, s := range m.StackOrder {

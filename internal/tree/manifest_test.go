@@ -66,6 +66,7 @@ func TestLoadManifest_Refused(t *testing.T) {
 		{name: "an unknown key", fsys: tree(`tree {` + "\n" + `name = "a"` + "\n" + v + "\n}\n" + `region "eu" {}`), want: `unknown key "region"`},
 		{name: "tree-global in the order", fsys: tree(`tree {` + "\n" + `name = "a"` + "\n" + v + "\n}\n" + `stack_order = ["tree-global"]`), want: "always first"},
 		{name: "a stack twice", fsys: tree(`tree {` + "\n" + `name = "a"` + "\n" + v + "\n}\n" + `stack_order = ["x", "x"]`), want: "named twice"},
+		{name: "layers, later", fsys: tree(`tree {` + "\n" + `name = "a"` + "\n" + v + "\n}\n" + `layers = ["base"]`), want: "layers are not supported yet"},
 	}
 
 	for _, tt := range tests {
