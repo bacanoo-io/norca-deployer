@@ -31,6 +31,11 @@ A binding ties one stack directory of a repository to a namespace and a region. 
 - The ACL token needs object `write` on `rigger.norca.io/Release` in the namespace, and object `read` on
   `rigger.norca.io/Operation` to follow the operation. A stack with modules of a registry also needs object
   `read` on `rigger.norca.io/Registry`.
+- A binding that only plans (`mode = "plan-only"`) needs object `read` on `rigger.norca.io/Release`
+  instead of `write`, and the right to read what the plan compares: `read-job` for jobs, `read` on the paths
+  of Variables, `read-secret` for the stack's secrets and generated values (the
+  [permissions of Rigger](https://bacanoo-io.github.io/norca-doc/docs/rigger/permissions/#what-each-operation-needs)).
+  Such a token can't apply.
 
 **Where a stack came from** is recorded by the servers: the operation has the repository (without credentials),
 the branch or tag, the commit and, when the signature was checked, who signed; the releases of the stack's own
