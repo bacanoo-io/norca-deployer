@@ -35,29 +35,29 @@ This directory contains the system design, architecture specifications and user 
   - 8. In-Memory Ring-Buffer Logging & Audit Trail (`RingLogger`, release provenance)
   - 9. CLI Command Catalog (`norca-deployer gitops run`, `daemon`, `status`, `logs`)
   - 10. Security & Hardening Guarantees (ephemeral execution, path traversal protection)
-- [Norca Deployer – Platform Management (Directory-Based GitOps for Norca Objects)](platform-management-design.md) (proposal)
-  - 1. Goal and Non-Goals (API objects only, no node install, not a Terraform clone); scope decision: the authoritative region is the only target for now
-  - 2. What Norca Offers (object inventory: ACL, namespaces, quotas, node pools, policies, jobs, packs, secrets, intentions, volumes, custom objects)
-  - 3. Boundary with the Existing Deployer Plan (packs and GitOps pack bindings stay with the existing engine, referenced as externals)
-  - 4. Directory Layout (`global/`, `namespaces/<ns>/`, `regions/<r>/`), file formats (HCL first, YAML as the equivalent secondary form) and naming rules
-  - 5. Configuration: tree manifest `platform.hcl` (in Git) and the startup configuration (outside Git: cluster, token, placement, state, limits, watch)
-  - 6. Multi-Region and Environment Handling (scope by directory, file-level overlay, per-region var files)
-  - 7. Reconciliation Model (plan/apply, per-kind compare, opt-in prune with an in-cluster ledger, fixed ordering, safety rails, version check and reconciliation with Norca, validation stages and rollback with journal, local state directory and `--state-dir`, dependency graph of units with install, update and delete order (§7.10), Consul KV entries (§7.12), saved plans and JSON output (§7.13), fields owned by the autoscaler (§7.14), API load and read strategy (§7.15))
-  - 8. Kind Table (implementation contract)
+- [Norca Deployer – Platform Management (Directory-Based GitOps for Norca Objects)](platform-management-design.md) (proposal; revised 2026-11-28 for Rigger in two rounds: `tree.hcl`, `cluster-config/`, `norca-deployer tree`, the tree applied as stacks; the tree's own engine replaced by the release engine)
+  - 1. Goal and Non-Goals (API objects only, no node install, not a Terraform clone); a run goes to one region through its endpoint
+  - 2. What Norca Offers (object inventory: ACL, namespaces, quotas, node pools, policies, jobs, Rigger releases, secrets, intentions, volumes, custom objects)
+  - 3. Boundary with the Existing Deployer Plan (stacks of the `rigger` section stay there, one owner per stack)
+  - 4. Directory Layout (`cluster-config/` with `modules/`, `stacks/`, `global/`, `namespaces/<ns>/` with plain job files, `kv/`), file formats, naming rules (the extension decides the kind); 4.1 How the tree is applied: stacks (generated `tree-global` and `tree-ns-<ns>`, written stacks, shared modules, values, order, tokens, supported kinds)
+  - 5. Configuration: tree manifest `tree.hcl` (in Git) and the startup configuration (outside Git: cluster, tokens per stack, placement, limits, watch)
+  - 6. Regions and Environments (one endpoint per region, one run per region; the multi-region design removed 2026-11-28; environments as separate trees or layers)
+  - 7. Reconciliation Model (the servers' plan of every stack, "changed" from release digests, ownership by release owners with prune guards (§7.4), stack order, safety rails, version check, validation stages and atomic release restores (§7.8), no local state (§7.9), dependencies through Rigger and `stack_order` (§7.10), Consul KV as a future kind (§7.12), saved plans and JSON output (§7.13), fields owned by the autoscaler (§7.14), API load (§7.15))
+  - 8. Kind Table (kind id, file extension, Rigger resource kind, supported or not yet; the secret manifest)
   - 9. Secrets and Sensitive Values
-  - 10. CLI (`platform validate|plan|apply|diff|import|status|init`)
-  - 11. GitOps Integration (a `platform` binding on the existing webhook daemon)
-  - 11a. Service Mode: Continuous Watching (`platform watch`, source and drift loops, OS service or Norca job, HA lease, self-management and region topologies, API and metrics)
+  - 10. CLI (`tree validate|build|plan|apply|rollback|diff|import|status|init`; `--stack`, `--namespace`, `--kind` as a guard)
+  - 11. GitOps Integration (a tree binding of the GitOps controller; `auto_apply` per stack, `heal` per release)
+  - 11a. Service Mode: Continuous Watching (`tree watch`, the controller with one tree binding, OS service or Norca job, self-management and region topologies, API and metrics)
   - 11b. Placement: Where the Tool Runs and How It Reaches the Cluster (local, proxy, client node; proxy profiles, probes, design by placement)
   - 11c. Runbook: From an Empty Cluster to a Running Watcher (tokens, adoption, read-only watcher, step-by-step raise of `auto_apply`)
   - 12. Implementation Plan (summary of the phases; details in the implementation plan below)
-  - 13. Open Questions (27 questions with an accepted answer each, §13.1: decide / spike / deferred)
-  - 13a. Review Findings: Gaps Still to Design (configuration levels, ACL permissions, saved plan, autoscaler-owned fields, secret digests, kind vocabulary, file-system hazards, ...)
+  - 13. Open Questions (27 questions with an accepted answer each, §13.1: decide / spike; some obsolete or removed)
+  - 13a. Review Findings: Gaps Still to Design (configuration levels, ACL permissions, saved plan, autoscaler-owned fields, kind vocabulary, file-system hazards, ...; G17 to G25 from the Rigger revision)
 - [Norca Deployer – Platform Management: Implementation Plan](platform-management-implementation-plan.md)
   - 1. How the work is cut (vertical slices, nothing existing breaks, safety before breadth)
-  - 2. What exists and is reused (`pkg/config/hcl.go`, gitops daemon, connector, `norca-lab`)
+  - 2. What exists and is reused (the stack client of the stack bindings, `pkg/plan/hcl.go`, gitops daemon, connector, `norca-lab`)
   - 3. Package layout
-  - 4. Phases P0 to P6 with work packages, sizes, acceptance criteria and milestones M1 to M5
+  - 4. Phases T0 to T7 (revised 2026-11-28 around G8a and G8b) with work packages, sizes, acceptance criteria and milestones
   - 5. Testing strategy
   - 6. Risks and mitigations
   - 7. First slice
@@ -66,11 +66,11 @@ This directory contains the system design, architecture specifications and user 
   - 2. Where we are (today's pack GitOps and its gaps; what changes with Rigger)
   - 3. What users expect of a GitOps tool (R1 to R18)
   - 4. Who does what (Rigger and the release engine vs the GitOps controller)
-  - 5. The GitOps controller (one loop, bindings with two sources, webhook and poll, operations and retries, drift reaction, operator form with `gitops.norca.io/Binding`, pull requests, notifications, provenance)
-  - 6. Changes needed in Norca and Rigger (`Commit`, the source of an operation, the autoscaler's `count`, evaluation in a child process, mixed versions)
-  - 7. Platform management: a new scope (the platform tree as a Rigger stack)
-  - 8. Order of the work (G0 to G8)
-  - 9. Open questions
+  - 5. The GitOps controller (one loop, bindings with two sources, webhook and poll, operations and retries, drift reaction, operator form with `gitops.norca.io/Binding`, pull requests, notifications, provenance; 5.10 what Rigger has and the controller takes up: registry sync, values files, outputs, cancel, destroy, rollback to a commit, release tests, standalone evaluation, air-gap and CI recipes; 5.11 the pending image-update marker)
+  - 6. Changes needed in Norca and Rigger (`Commit`, the source of an operation, the autoscaler's `count`, evaluation in a child process, mixed versions, an event at the end of an operation, a read-only stack plan, a test command in Rigger)
+  - 7. Platform management: a new scope (the tree applied as Rigger stacks, decided 2026-11-28)
+  - 8. Order of the work (G0 to G13; state on 2026-11-28: G1 and G7 built)
+  - 9. Open questions (all decided 2026-11-28: controller binary, renames, promotion, image updates, no tree lock, environment names)
   - Appendix A. Research summary (Terraform, GitOps for Nomad, Waypoint, sources)
 - [Norca Deployer – Sync with Norca and Rigger](norca-rigger-sync-plan.md) (work plan)
   - what Norca and Rigger can do that the plan cannot express, what the deployer writes or checks wrongly, and how to close each gap
