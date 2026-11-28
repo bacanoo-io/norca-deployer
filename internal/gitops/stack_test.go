@@ -665,7 +665,7 @@ func TestSync_CheckStopsTheRunBeforeTheApply(t *testing.T) {
 	}
 
 	_, _, err := syncStack(t.Context(), f, run)
-	if err == nil || !strings.HasPrefix(err.Error(), "tree acme: stack demo: stack demo") || !strings.Contains(err.Error(), "--prune-jobs") {
+	if err == nil || !strings.HasPrefix(err.Error(), "tree acme: stack demo at commit ") || !strings.Contains(err.Error(), "--prune-jobs") {
 		t.Fatalf("got %v", err)
 	}
 	if f.count(applyCall) != 0 {
@@ -909,5 +909,33 @@ func TestRun_FetchErrorNamesNoCredentials(t *testing.T) {
 		if len(events) != 1 || events[0].Phase != PhaseFetch || strings.Contains(events[0].Details, "ghp_SECRET") || !strings.Contains(events[0].Details, shown) {
 			t.Errorf("%s: events %+v", url, events)
 		}
+	}
+}
+
+// An error names the stack once: a tree names it in its label, a binding
+// gets it from the plan (the e2e of the tree read "stack tree-global: stack
+// tree-global").
+func TestStackSync_Errorf(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		run  *StackRun
+		want string
+	}{
+		{name: "a tree", run: &StackRun{Label: "tree acme: stack tree-global"}, want: "tree acme: stack tree-global: operation op-1: failed"},
+		{name: "a binding", run: &StackRun{Binding: "platform", Commit: "0123456789abcdef"}, want: "gitops binding platform: stack tree-global at commit 0123456789ab: operation op-1: failed"},
+		{name: "a label of another stack", run: &StackRun{Label: "tree acme: stack tree-global-old"}, want: "tree acme: stack tree-global-old: stack tree-global: operation op-1: failed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := &stackSync{run: tt.run, stack: "tree-global", operation: "op-1"}
+			if got := s.errorf("failed").Error(); got != tt.want {
+				t.Errorf("errorf = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

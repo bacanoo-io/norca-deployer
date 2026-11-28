@@ -553,7 +553,8 @@ type stackSync struct {
 // commit and the operation, as far as they are known.
 func (s *stackSync) errorf(format string, args ...any) error {
 	what := s.run.label()
-	if s.stack != "" {
+	// A tree names the stack in its label already: named once.
+	if s.stack != "" && !strings.HasSuffix(what, "stack "+s.stack) {
 		what += ": stack " + s.stack
 	}
 	if s.run.Commit != "" {
