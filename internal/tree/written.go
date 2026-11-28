@@ -28,6 +28,9 @@ const defaultValuesFile = "values/default.vars.hcl"
 // modules/ directory, where a shared module of the tree is put too.
 const localModulePrefix = "./modules/"
 
+// defaultStackRegion is the region of a stack whose rigger block names none.
+const defaultStackRegion = "global"
+
 // writtenName is the rule of the name of a directory of stacks/ or
 // modules/: the name of a stack, of a module.
 var writtenName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -203,8 +206,15 @@ func buildWritten(t *Tree, ws *WrittenStack, region string, runValues map[string
 		errs = append(errs, fmt.Errorf("%s: the name %s is reserved for the stacks the deployer generates", where, sh.name))
 	}
 
-	if sh.region != "" && sh.region != region {
-		errs = append(errs, fmt.Errorf("%s: the stack is for the region %s, the run goes to %s", where, sh.region, region))
+	// The servers take a stack without a region as one of global, and
+	// refuse it in the request of another region.
+	stackRegion := sh.region
+	if stackRegion == "" {
+		stackRegion = defaultStackRegion
+	}
+
+	if stackRegion != region {
+		errs = append(errs, fmt.Errorf("%s: the stack is for the region %s, the run goes to %s", where, stackRegion, region))
 	}
 
 	for _, release := range slices.Sorted(maps.Keys(sh.sources)) {

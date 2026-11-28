@@ -15,7 +15,7 @@ import (
 func withWrittenStack(fsys fstest.MapFS) fstest.MapFS {
 	add := func(p, data string) { fsys[p] = &fstest.MapFile{Data: []byte(data)} }
 
-	add("stacks/data/stack.hcl", "rigger {\n  name      = \"data\"\n  namespace = \"platform\"\n}\n\n"+
+	add("stacks/data/stack.hcl", "rigger {\n  name      = \"data\"\n  namespace = \"platform\"\n  region    = \"eu-1\"\n}\n\n"+
 		"module \"db\" {\n  source = \"./modules/postgres\"\n  values = { replicas = var.replicas }\n}\n\n"+
 		"module \"cache\" {\n  source = \"./modules/own\"\n}\n\n"+
 		"module \"web\" {\n  source  = \"acme/web\"\n  version = \"~> 1.0\"\n}\n")
@@ -128,6 +128,13 @@ func TestBuild_WrittenStackRefused(t *testing.T) {
 				f["stacks/data/stack.hcl"].Data = []byte(stackHCL("data", "  region = \"us-1\"\n"))
 			},
 			want: "the stack is for the region us-1, the run goes to eu-1",
+		},
+		{
+			name: "a stack without a region is of global",
+			edit: func(f fstest.MapFS) {
+				f["stacks/data/stack.hcl"].Data = []byte(stackHCL("data", ""))
+			},
+			want: "the stack is for the region global, the run goes to eu-1",
 		},
 		{
 			name: "a module that is nowhere",
