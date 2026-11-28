@@ -9,7 +9,7 @@ require (
 	github.com/go-git/go-git/v6 v6.0.0-beta.1
 	github.com/hashicorp/hcl v1.0.0
 	github.com/hashicorp/hcl/v2 v2.20.2-0.20240517235513-55d9c02d147d
-	github.com/nats-io/nkeys v0.4.16
+	github.com/nats-io/nkeys v0.4.17
 	github.com/pkg/sftp v1.13.12
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.13.0
