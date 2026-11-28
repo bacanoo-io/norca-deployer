@@ -22,6 +22,8 @@ type treeServer struct {
 	plans  map[string]string
 	tokens map[string]string
 	synced []string
+	// releases is the answer of the list of releases.
+	releases string
 }
 
 func (s *treeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -32,6 +34,8 @@ func (s *treeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(r.URL.Path, "/v1/rigger/registry/") && strings.HasSuffix(r.URL.Path, "/sync"):
 		s.synced = append(s.synced, strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v1/rigger/registry/"), "/sync"))
 		_, _ = w.Write([]byte(`{}`))
+	case r.URL.Path == "/v1/releases":
+		_, _ = fmt.Fprint(w, s.releases)
 	case r.URL.Path == "/v1/rigger/stack/plan":
 		ns := r.URL.Query().Get("namespace")
 		s.tokens[ns] = r.Header.Get("X-Nomad-Token")
@@ -55,7 +59,7 @@ func TestTreePlanCommand(t *testing.T) {
 	t.Setenv("T_DEFAULT", "token-default")
 	t.Setenv("T_APPS", "token-apps")
 
-	srv := &treeServer{tokens: map[string]string{}, plans: map[string]string{
+	srv := &treeServer{releases: "[]", tokens: map[string]string{}, plans: map[string]string{
 		"default": stackPlanOf("tree-global", "default", "unchanged", ""),
 		"apps":    stackPlanOf("tree-ns-apps", "apps", "upgrade", `{"kind":"job","name":"old","action":"delete"}`),
 	}}

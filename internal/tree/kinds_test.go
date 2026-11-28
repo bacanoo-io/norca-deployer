@@ -68,9 +68,9 @@ func TestCheckChanges(t *testing.T) {
 		gitops.ResourceChange{Kind: "job", Name: "a", Action: "update"},
 		gitops.ResourceChange{Kind: "job", Name: "b", Action: "create"})
 	p.Secrets = []gitops.SecretPlan{{Path: "x", Action: "keep"}, {Path: "y", Action: "create"}}
-	plans := []*Planned{{Plan: p}, {Plan: planWith("remove")}}
+	plans := []*Planned{{Plan: p, Prune: true}, {Plan: planWith("remove"), Prune: true}}
 
-	if n := Changes(p); n != 3 {
+	if n := Changes(plans[0]); n != 3 {
 		t.Fatalf("Changes = %d, want 3", n)
 	}
 
@@ -86,7 +86,12 @@ func TestCheckChanges(t *testing.T) {
 		t.Fatalf("--yes-really: %v", err)
 	}
 
-	if !HasChanges(p) || HasChanges(planWith("unchanged")) {
+	if !HasChanges(plans[0]) || HasChanges(&Planned{Plan: planWith("unchanged")}) {
 		t.Fatal("HasChanges answers wrong")
+	}
+
+	// Without --prune a release to remove is kept: no change.
+	if kept := (&Planned{Plan: planWith("remove")}); HasChanges(kept) || Changes(kept) != 0 {
+		t.Fatal("a remove without --prune counts as a change")
 	}
 }

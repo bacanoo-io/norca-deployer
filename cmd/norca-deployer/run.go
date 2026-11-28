@@ -60,6 +60,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if _, ok := errors.AsType[silentBlocked](err); ok {
 		return exitBlocked
 	}
+	if _, ok := errors.AsType[silentError](err); ok {
+		return exitError
+	}
 	fmt.Fprintf(stderr, "[ERROR] %v\n", err)
 	code := exitCode(err)
 	if code == exitUsage {

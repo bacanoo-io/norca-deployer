@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -62,7 +63,7 @@ with ` + experimentalEnv + `=tree.`,
 		},
 	}
 
-	cmd.AddCommand(newTreeBuildCmd(), newTreePlanCmd(), newTreeApplyCmd())
+	cmd.AddCommand(newTreeInitCmd(), newTreeValidateCmd(), newTreeBuildCmd(), newTreePlanCmd(), newTreeApplyCmd(), newTreeStatusCmd())
 	return cmd
 }
 
@@ -82,6 +83,9 @@ type treeFlags struct {
 	kinds     []string
 	guards    tree.Guards
 	format    string
+	// onlyStacks and onlyNamespaces narrow a run to whole stacks.
+	onlyStacks     []string
+	onlyNamespaces []string
 }
 
 func (f *treeFlags) register(cmd *cobra.Command, cluster bool) {
@@ -102,6 +106,8 @@ func (f *treeFlags) register(cmd *cobra.Command, cluster bool) {
 	fl.StringVar(&f.caCert, "norca-ca-cert", "", "CA certificate file of the Norca API (default: the region's, then NORCA_CACERT)")
 	fl.BoolVar(&f.insecure, "norca-insecure-skip-tls-verify", false, "Do not verify the certificate of the Norca API")
 	fl.StringSliceVar(&f.kinds, "kind", nil, "Only stacks whose plans change these kinds (kind identifiers and groups); others are blocked")
+	fl.StringSliceVar(&f.onlyStacks, "stack", nil, "Only these stacks (whole stacks, in the order of the tree)")
+	fl.StringSliceVar(&f.onlyNamespaces, "namespace", nil, "Only the stacks of these namespace directories (tree-ns-<ns>)")
 	fl.BoolVar(&f.guards.Prune, "prune", false, "Allow deletes: a resource a release no longer has, a release the stack no longer has")
 	fl.BoolVar(&f.guards.PruneJobs, "prune-jobs", false, "Allow the delete of a job (it is purged), with --prune")
 	fl.BoolVar(&f.guards.PruneData, "prune-data", false, "Allow the delete of a Variable, with --prune")
@@ -119,14 +125,24 @@ type treeSetup struct {
 	done     func()
 }
 
-// setup reads the startup configuration and the tree and builds its stacks.
-func (f *treeFlags) setup() (*treeSetup, error) {
+// offlineRegion is the region of an offline command (validate, build) when
+// neither --region nor the startup configuration names one.
+const offlineRegion = "global"
+
+// setup reads the startup configuration and the tree and builds its stacks,
+// narrowed by --stack and --namespace. offline commands need no region.
+func (f *treeFlags) setup(offline bool) (*treeSetup, error) {
 	cfg, warnings, err := tree.LoadConfig(f.config, f.dir)
 	if err != nil {
 		return nil, err
 	}
 
-	region, err := cfg.Region(f.region)
+	name := f.region
+	if offline && name == "" && len(cfg.Regions) == 0 {
+		name = offlineRegion
+	}
+
+	region, err := cfg.Region(name)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +163,48 @@ func (f *treeFlags) setup() (*treeSetup, error) {
 		return nil, err
 	}
 
+	if stacks, err = f.narrow(stacks); err != nil {
+		done()
+		return nil, err
+	}
+
 	return &treeSetup{cfg: cfg, region: region, tree: t, stacks: stacks, warnings: warnings, done: done}, nil
+}
+
+// narrowed reports whether --stack or --namespace narrows the run.
+func (f *treeFlags) narrowed() bool {
+	return len(f.onlyStacks) > 0 || len(f.onlyNamespaces) > 0
+}
+
+// narrow keeps the stacks --stack and --namespace name, in their order; a
+// name that is no stack of the tree is a usage error.
+func (f *treeFlags) narrow(stacks []*tree.Stack) ([]*tree.Stack, error) {
+	if !f.narrowed() {
+		return stacks, nil
+	}
+
+	want := map[string]bool{}
+	for _, s := range f.onlyStacks {
+		want[s] = true
+	}
+	for _, ns := range f.onlyNamespaces {
+		want[tree.NamespaceStack(ns)] = true
+	}
+
+	var out []*tree.Stack
+	for _, s := range stacks {
+		if want[s.Name] {
+			out = append(out, s)
+			delete(want, s.Name)
+		}
+	}
+
+	if len(want) > 0 {
+		missing := slices.Sorted(maps.Keys(want))
+		return nil, usageError{fmt.Errorf("no stack of the tree: %s", strings.Join(missing, ", "))}
+	}
+
+	return out, nil
 }
 
 // resolver is the resolver of the value forms: the flags, else the values
@@ -313,13 +370,19 @@ stack. The resolved values of secret items are not written: they go only with
 the request to the servers.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			s, err := f.setup()
+			s, err := f.setup(true)
 			if err != nil {
 				return err
 			}
 			defer s.done()
 
-			return writeStacks(cmd.OutOrStdout(), out, s.stacks)
+			if err := tree.WriteStacks(out, s.stacks); err != nil {
+				return err
+			}
+			for _, st := range s.stacks {
+				fmt.Fprintf(cmd.OutOrStdout(), "%s: %d files\n", filepath.Join(out, st.Name), len(st.Files))
+			}
+			return nil
 		},
 	}
 
@@ -329,22 +392,226 @@ the request to the servers.`,
 	return cmd
 }
 
-// writeStacks writes each stack below out/<stack>/.
-func writeStacks(w io.Writer, out string, stacks []*tree.Stack) error {
-	for _, s := range stacks {
-		for name, data := range s.Files {
-			p := filepath.Join(out, s.Name, filepath.FromSlash(name))
-			if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+// newTreeValidateCmd is tree validate: the offline checks of a tree, and
+// with --rigger the installed rigger program on the built stacks.
+func newTreeValidateCmd() *cobra.Command {
+	var (
+		f      treeFlags
+		rigger bool
+		bin    string
+		format string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "validate",
+		Short: "Check a tree offline",
+		Long: `Check a tree without a cluster: the paths and names, the manifest, the kinds,
+the reserved names, the written stacks and their modules, the value forms
+(with the key, directory and variables of the startup configuration), and the
+syntax of every HCL file of the stacks it builds. With --rigger the installed
+rigger program runs rigger stack validate on each built stack. The servers'
+plan (tree plan) checks the rest.`,
+		Args: usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if format != "text" && format != "json" {
+				return usageError{fmt.Errorf("--format %q: text or json", format)}
+			}
+
+			out := cmd.OutOrStdout()
+			s, err := f.setup(true)
+			if err == nil {
+				defer s.done()
+				err = tree.CheckSyntax(s.stacks)
+			}
+			if err == nil && rigger {
+				err = tree.RiggerValidate(cmd.Context(), bin, s.stacks)
+			}
+
+			if format == "json" {
+				return writeValidateJSON(out, s, err)
+			}
+			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(p, data, 0o600); err != nil {
-				return err
+
+			for _, w := range append(s.warnings, s.tree.Warnings...) {
+				fmt.Fprintf(cmd.ErrOrStderr(), "[WARN] %s\n", w)
 			}
+			names := make([]string, 0, len(s.stacks))
+			for _, st := range s.stacks {
+				names = append(names, st.Name)
+			}
+			fmt.Fprintf(out, "Tree %s is valid: %d stacks (%s)\n", s.tree.Manifest.Tree.Name, len(names), strings.Join(names, ", "))
+			return nil
+		},
+	}
+
+	f.register(cmd, false)
+	cmd.Flags().BoolVar(&rigger, "rigger", false, "Also run rigger stack validate on each built stack")
+	cmd.Flags().StringVar(&bin, "rigger-bin", "rigger", "The rigger program --rigger runs")
+	cmd.Flags().StringVar(&format, "format", "text", "The output: text or json")
+	return cmd
+}
+
+// validateSchema names the shape of the JSON of tree validate.
+const validateSchema = "norca.io/tree/validate/v1"
+
+// writeValidateJSON writes the result of tree validate as JSON; an invalid
+// tree is still exit code 1, its errors written in the JSON only.
+func writeValidateJSON(w io.Writer, s *treeSetup, err error) error {
+	doc := struct {
+		Schema   string   `json:"schema"`
+		Tree     string   `json:"tree,omitempty"`
+		Valid    bool     `json:"valid"`
+		Stacks   []string `json:"stacks"`
+		Errors   []string `json:"errors,omitempty"`
+		Warnings []string `json:"warnings,omitempty"`
+	}{Schema: validateSchema, Valid: err == nil, Stacks: []string{}}
+
+	if s != nil {
+		doc.Tree = s.tree.Manifest.Tree.Name
+		doc.Warnings = append(append(doc.Warnings, s.warnings...), s.tree.Warnings...)
+		for _, st := range s.stacks {
+			doc.Stacks = append(doc.Stacks, st.Name)
 		}
-		fmt.Fprintf(w, "%s: %d files\n", filepath.Join(out, s.Name), len(s.Files))
+	}
+	if err != nil {
+		doc.Errors = strings.Split(err.Error(), "\n")
+	}
+
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	if encErr := enc.Encode(doc); encErr != nil {
+		return encErr
+	}
+	if err != nil {
+		return silentError{err}
 	}
 	return nil
 }
+
+// silentError fails a command whose output already says why: exit code 1,
+// nothing printed.
+type silentError struct{ error }
+
+func (e silentError) Unwrap() error { return e.error }
+
+// newTreeInitCmd is tree init: the skeleton of a new tree and a commented
+// startup configuration.
+func newTreeInitCmd() *cobra.Command {
+	var (
+		dir, name, config string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "init",
+		Short: "Write the skeleton of a new tree and a startup configuration template",
+		Long: `Write the skeleton of a new tree: tree.hcl, README.md, a .gitattributes that
+keeps Git from converting the line endings of values, and a .gitignore for
+credentials. A commented startup configuration is written to --config (default
+./` + tree.DefaultConfigFile + `) with mode 0600 unless it exists; it holds
+credentials and stays out of Git. A directory that has a tree is refused.`,
+		Args: usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if name == "" {
+				abs, err := filepath.Abs(dir)
+				if err != nil {
+					return err
+				}
+				name = filepath.Base(abs)
+			}
+
+			out := cmd.OutOrStdout()
+			written, err := tree.Init(dir, name)
+			for _, p := range written {
+				fmt.Fprintf(out, "wrote %s\n", p)
+			}
+			if err != nil {
+				return err
+			}
+
+			ok, err := tree.WriteConfigTemplate(config)
+			if err != nil {
+				return err
+			}
+			if ok {
+				fmt.Fprintf(out, "wrote %s (the startup configuration: credentials, keep it out of Git)\n", config)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&dir, "dir", "d", "cluster-config", "The root of the new tree")
+	cmd.Flags().StringVar(&name, "name", "", "The name of the tree (default: the name of its directory)")
+	cmd.Flags().StringVar(&config, "config", tree.DefaultConfigFile, "Where the startup configuration template is written")
+	return cmd
+}
+
+// newTreeStatusCmd is tree status: the releases of each stack of a tree,
+// their drift and last operation, and the orphan releases.
+func newTreeStatusCmd() *cobra.Command {
+	var f treeFlags
+
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show the releases of the tree's stacks, their drift and last operation",
+		Long: `Show what the servers hold for each stack of the tree: the releases it owns,
+their revision, status and drift, the stack's last operation, and the releases
+of generated stacks the tree no longer has (an apply with --prune uninstalls
+them). Nothing is changed.`,
+		Args: usageArgs(cobra.NoArgs),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if f.format != "text" && f.format != "json" {
+				return usageError{fmt.Errorf("--format %q: text or json", f.format)}
+			}
+
+			s, err := f.setup(false)
+			if err != nil {
+				return err
+			}
+			s.done()
+
+			runner, err := f.runner(s, cmd.ErrOrStderr())
+			if err != nil {
+				return err
+			}
+
+			states, err := runner.Status(cmd.Context(), s.stacks)
+			if err != nil {
+				return err
+			}
+
+			var orphans []tree.Orphan
+			if !f.narrowed() {
+				if orphans, err = runner.Orphans(cmd.Context(), s.stacks, s.region.Name); err != nil {
+					return err
+				}
+			}
+
+			out := cmd.OutOrStdout()
+			if f.format == "json" {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(struct {
+					Schema  string             `json:"schema"`
+					Tree    string             `json:"tree"`
+					Region  string             `json:"region"`
+					Stacks  []*tree.StackState `json:"stacks"`
+					Orphans []tree.Orphan      `json:"orphans,omitempty"`
+				}{statusSchema, s.tree.Manifest.Tree.Name, s.region.Name, states, orphans})
+			}
+
+			tree.RenderStatus(out, s.tree, s.region.Name, states, orphans)
+			return nil
+		},
+	}
+
+	f.register(cmd, true)
+	return cmd
+}
+
+// statusSchema names the shape of the JSON of tree status.
+const statusSchema = "norca.io/tree/status/v1"
 
 // newTreePlanCmd is tree plan: the servers' plan of every stack of a tree.
 func newTreePlanCmd() *cobra.Command {
@@ -425,7 +692,11 @@ without --yes-really): exit code 3. The first stack that fails stops the run.`,
 
 			stacks := make([]*tree.Stack, 0, len(plans))
 			for _, p := range plans {
-				stacks = append(stacks, p.Stack)
+				// A stack with nothing to do is not applied: an orphan
+				// release without --prune, a stack in sync.
+				if tree.HasChanges(p) {
+					stacks = append(stacks, p.Stack)
+				}
 			}
 
 			_, err = runner.Apply(cmd.Context(), stacks)
@@ -463,24 +734,39 @@ func treePlan(cmd *cobra.Command, f *treeFlags) (*treeSetup, []*tree.Planned, *t
 		return nil, nil, nil, usageError{fmt.Errorf("--format %q: text or json", f.format)}
 	}
 
-	s, err := f.setup()
+	s, err := f.setup(false)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	// The stacks are built: the values directory is read no more.
 	s.done()
 
-	for _, w := range s.warnings {
-		fmt.Fprintf(cmd.ErrOrStderr(), "[WARN] %s\n", w)
+	if err := tree.CheckSyntax(s.stacks); err != nil {
+		return nil, nil, nil, err
 	}
 
-	runner, err := f.runner(s, cmd.ErrOrStderr())
+	stderr := cmd.ErrOrStderr()
+	for _, w := range s.warnings {
+		fmt.Fprintf(stderr, "[WARN] %s\n", w)
+	}
+
+	runner, err := f.runner(s, stderr)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	if err := runner.SyncRegistries(cmd.Context(), s.cfg.SyncRegistries); err != nil {
 		return nil, nil, nil, err
+	}
+
+	// The releases of generated stacks whose directories are gone: their
+	// stacks are planned empty, so that the plan shows their removal.
+	if !f.narrowed() {
+		orphans, err := runner.Orphans(cmd.Context(), s.stacks, s.region.Name)
+		if err != nil {
+			fmt.Fprintf(stderr, "[WARN] the releases of removed namespace directories were not looked for: %v\n", err)
+		}
+		s.stacks = append(s.stacks, tree.OrphanStacks(orphans, s.region.Name)...)
 	}
 
 	plans, err := runner.Plan(cmd.Context(), s.stacks)
@@ -529,8 +815,8 @@ func writePlan(w io.Writer, f *treeFlags, s *treeSetup, plans []*tree.Planned, y
 			sp.Blocked = p.Blocked.Error()
 		}
 		doc.Stacks = append(doc.Stacks, sp)
-		doc.Changes += tree.Changes(p.Plan)
-		pending = pending || tree.HasChanges(p.Plan)
+		doc.Changes += tree.Changes(p)
+		pending = pending || tree.HasChanges(p)
 	}
 	if err := firstBlocked(plans, s, yesReally); err != nil {
 		doc.Blocked = err.Error()

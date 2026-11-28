@@ -107,18 +107,19 @@ func (g Guards) Check(p *gitops.StackPlan) error {
 const secretKeep = "keep"
 
 // Changes counts what a plan changes: each resource of a release, each
-// release removed, each secret written.
-func Changes(p *gitops.StackPlan) int {
+// release removed (only with --prune: without it the servers keep it),
+// each secret written.
+func Changes(p *Planned) int {
 	n := 0
 
-	for _, rp := range p.Releases {
+	for _, rp := range p.Plan.Releases {
 		n += len(rp.Changes)
-		if rp.Action == actionRemove {
+		if rp.Action == actionRemove && p.Prune {
 			n++
 		}
 	}
 
-	for _, sp := range p.Secrets {
+	for _, sp := range p.Plan.Secrets {
 		if sp.Action != secretKeep {
 			n++
 		}
@@ -128,21 +129,27 @@ func Changes(p *gitops.StackPlan) int {
 }
 
 // HasChanges reports whether an apply of a plan would do anything: a
-// release to install, upgrade or remove, a secret to write, a value to
-// generate.
-func HasChanges(p *gitops.StackPlan) bool {
-	if len(p.Generate) > 0 {
+// release to install or upgrade, one to remove with --prune, a secret to
+// write, a value to generate.
+func HasChanges(p *Planned) bool {
+	if len(p.Plan.Generate) > 0 {
 		return true
 	}
 
-	for _, sp := range p.Secrets {
+	for _, sp := range p.Plan.Secrets {
 		if sp.Action != secretKeep {
 			return true
 		}
 	}
 
-	for _, rp := range p.Releases {
-		if rp.Action != "unchanged" && rp.Action != "disabled" {
+	for _, rp := range p.Plan.Releases {
+		switch rp.Action {
+		case "unchanged", "disabled":
+		case actionRemove:
+			if p.Prune {
+				return true
+			}
+		default:
 			return true
 		}
 	}
@@ -155,7 +162,7 @@ func HasChanges(p *gitops.StackPlan) bool {
 func CheckChanges(plans []*Planned, limit int, allowed bool) error {
 	total := 0
 	for _, p := range plans {
-		total += Changes(p.Plan)
+		total += Changes(p)
 	}
 
 	if allowed || limit <= 0 || total <= limit {
@@ -172,6 +179,9 @@ type Planned struct {
 	Warnings []string
 	// Blocked is why a guard would stop its apply; nil when it would not.
 	Blocked error
+	// Prune is whether the run prunes: a release to remove is a change
+	// only then.
+	Prune bool
 }
 
 // Runner plans and applies the stacks of a tree through the stacks API of
@@ -220,7 +230,7 @@ func (r *Runner) SyncRegistries(ctx context.Context, names []string) error {
 }
 
 // run is the request of a stack.
-func (r *Runner) run(s *Stack, planOnly bool) *gitops.StackRun {
+func (r *Runner) run(ctx context.Context, client gitops.APIClient, s *Stack, planOnly bool) *gitops.StackRun {
 	return &gitops.StackRun{
 		Label:     fmt.Sprintf("tree %s: stack %s", r.Tree, s.Name),
 		Namespace: s.Namespace,
@@ -229,8 +239,59 @@ func (r *Runner) run(s *Stack, planOnly bool) *gitops.StackRun {
 		Values:    s.Values,
 		Prune:     r.Guards.Prune,
 		PlanOnly:  planOnly,
-		Check:     r.Guards.Check,
+		// The plan the apply is made of passes the same guards, with the
+		// resources of the releases it removes.
+		Check: func(p *gitops.StackPlan) error {
+			if err := removedResources(ctx, client, p); err != nil {
+				return err
+			}
+
+			return r.Guards.Check(p)
+		},
 	}
+}
+
+// releaseResources is a release as GET /v1/release/<name> answers it, as
+// far as its resources go.
+type releaseResources struct {
+	Status struct {
+		Resources []struct {
+			Type string `json:"type"`
+			Name string `json:"name"`
+			Hook string `json:"hook"`
+		} `json:"resources"`
+	}
+}
+
+// removedResources adds the resources of each release a plan removes as
+// deletes: the servers' plan of a remove names none, and without them the
+// guards would let a release go whose job or Variable needs --prune-jobs
+// or --prune-data. The jobs of hooks are left out.
+func removedResources(ctx context.Context, client gitops.APIClient, p *gitops.StackPlan) error {
+	for i := range p.Releases {
+		rp := &p.Releases[i]
+		if rp.Action != actionRemove || len(rp.Changes) > 0 {
+			continue
+		}
+
+		q := url.Values{"namespace": {rp.Release.Namespace}}
+		if p.Region != "" {
+			q.Set("region", p.Region)
+		}
+
+		var rel releaseResources
+		if err := getJSON(ctx, client, "/v1/release/"+url.PathEscape(rp.Release.Name)+"?"+q.Encode(), &rel); err != nil {
+			return fmt.Errorf("the resources of the release %s/%s, which the plan removes: %w", rp.Release.Namespace, rp.Release.Name, err)
+		}
+
+		for _, res := range rel.Status.Resources {
+			if res.Hook == "" {
+				rp.Changes = append(rp.Changes, gitops.ResourceChange{Kind: res.Type, Name: res.Name, Action: actionDelete})
+			}
+		}
+	}
+
+	return nil
 }
 
 // Plan has the servers plan every stack, in order, applying nothing, and
@@ -245,12 +306,16 @@ func (r *Runner) Plan(ctx context.Context, stacks []*Stack) ([]*Planned, error) 
 			return out, err
 		}
 
-		plan, warnings, err := runner.Plan(ctx, r.run(s, true))
+		plan, warnings, err := runner.Plan(ctx, r.run(ctx, runner.Client, s, true))
 		if err != nil {
 			return out, redact(err, s)
 		}
 
-		out = append(out, &Planned{Stack: s, Plan: plan, Warnings: warnings, Blocked: r.Guards.Check(plan)})
+		if err := removedResources(ctx, runner.Client, plan); err != nil {
+			return out, fmt.Errorf("stack %s: %w", s.Name, err)
+		}
+
+		out = append(out, &Planned{Stack: s, Plan: plan, Warnings: warnings, Blocked: r.Guards.Check(plan), Prune: r.Guards.Prune})
 	}
 
 	return out, nil
@@ -268,7 +333,7 @@ func (r *Runner) Apply(ctx context.Context, stacks []*Stack) ([]*gitops.Result, 
 			return out, err
 		}
 
-		res, err := runner.Sync(ctx, r.run(s, false))
+		res, err := runner.Sync(ctx, r.run(ctx, runner.Client, s, false))
 		if err != nil {
 			return out, redact(err, s)
 		}

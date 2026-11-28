@@ -48,15 +48,11 @@ func RenderPlan(w io.Writer, t *Tree, region string, plans []*Planned) bool {
 
 		for _, rp := range p.Plan.Releases {
 			line := fmt.Sprintf("  %s release %s  %s", sign(rp.Action), rp.Release.Name, rp.Action)
-			if rp.Action == actionRemove {
-				line += " (with --prune)"
+			if rp.Action == actionRemove && !p.Prune {
+				line += " (only with --prune; kept otherwise)"
 			}
 
 			fmt.Fprintln(w, line)
-
-			if rp.Action != "unchanged" && rp.Action != "disabled" {
-				changes++
-			}
 
 			for _, c := range rp.Changes {
 				fmt.Fprintf(w, "    %s %-16s %s\n", sign(c.Action), c.Kind, c.Name)
@@ -73,14 +69,13 @@ func RenderPlan(w io.Writer, t *Tree, region string, plans []*Planned) bool {
 
 		for _, sp := range p.Plan.Secrets {
 			fmt.Fprintf(w, "  secret %s  %s\n", sp.Path, sp.Action)
-
-			if sp.Action != "keep" {
-				changes++
-			}
 		}
 
 		if len(p.Plan.Generate) > 0 {
 			fmt.Fprintf(w, "  generates %s\n", strings.Join(p.Plan.Generate, ", "))
+		}
+
+		if HasChanges(p) {
 			changes++
 		}
 
@@ -100,7 +95,7 @@ func RenderPlan(w io.Writer, t *Tree, region string, plans []*Planned) bool {
 	case changes == 0:
 		fmt.Fprintf(w, "Summary: %d stacks, nothing to do\n", len(plans))
 	default:
-		fmt.Fprintf(w, "Summary: %d stacks, %d changes\n", len(plans), changes)
+		fmt.Fprintf(w, "Summary: %d stacks, %d to change\n", len(plans), changes)
 	}
 
 	return changes > 0

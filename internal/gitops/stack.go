@@ -283,6 +283,36 @@ type (
 		Action string `json:"action"`
 	}
 
+	// StackStatus is the status of a stack: the releases it owns, their
+	// current revision and drift.
+	StackStatus struct {
+		Stack    string
+		Releases []ReleaseStatus
+	}
+
+	// ReleaseStatus is a release a stack owns and what drifted of it.
+	ReleaseStatus struct {
+		Revision Revision `json:"revision"`
+		Drift    []Drift  `json:"drift"`
+	}
+
+	// Revision is the current revision of a release; Owner is the stack
+	// as <namespace>/<name>.
+	Revision struct {
+		Release ReleaseRef `json:"release"`
+		Number  uint64     `json:"number"`
+		Module  ModuleRef  `json:"module"`
+		Owner   string     `json:"owner"`
+		Status  string     `json:"status"`
+	}
+
+	// Drift is what differs of a resource of a release from its revision.
+	Drift struct {
+		Kind   string `json:"kind"`
+		Name   string `json:"name"`
+		Detail string `json:"detail"`
+	}
+
 	// operation is an operation: the answer of an apply, and the object
 	// rigger.norca.io/Operation, whose spec and status have the same keys.
 	operation struct {
@@ -463,6 +493,21 @@ func (r *Runner) Plan(ctx context.Context, run *StackRun) (*StackPlan, []string,
 		s.reportPlan(resp)
 		return resp.Plan, resp.Warnings, nil
 	}
+}
+
+// Status has the servers read the releases a stack owns, their revision
+// and drift, changing nothing.
+func (r *Runner) Status(ctx context.Context, run *StackRun) (*StackStatus, error) {
+	s, err := r.newSync(run)
+	if err != nil {
+		return nil, err
+	}
+
+	var out StackStatus
+	if err := s.call(ctx, requestTimeout, http.MethodPut, "/v1/rigger/stack/status", s.query(), s.body, &out); err != nil {
+		return nil, s.errorf("status: %w", err)
+	}
+	return &out, nil
 }
 
 // newSync builds the request body of a run: the files of the stack as an

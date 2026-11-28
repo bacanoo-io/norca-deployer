@@ -17,7 +17,7 @@ import (
 )
 
 // ConfigEnv names the startup configuration when --config does not.
-const ConfigEnv = "NORCA_DEPLOYER_TREE_CONFIG"
+const ConfigEnv = "NORCA_DEPLOYER_PLATFORM_CONFIG"
 
 // DefaultConfigFile is the startup configuration read from the working
 // directory when neither --config nor ConfigEnv names one.

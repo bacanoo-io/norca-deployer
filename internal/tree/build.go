@@ -28,6 +28,10 @@ const (
 	releasePrefix   = "tree-"
 )
 
+// NamespaceStack is the name of the generated stack of a namespace
+// directory.
+func NamespaceStack(namespace string) string { return namespacePrefix + namespace }
+
 // secretVarPrefix starts the names of the stack variables that carry the
 // resolved values of secret items; they are sensitive and travel only in
 // the values of the request, never in the files of the stack.
@@ -221,6 +225,19 @@ func stackHCL(name, release, namespace, region string) []byte {
 
 	body.AppendNewline()
 	body.AppendNewBlock("module", []string{release}).Body().SetAttributeValue("source", cty.StringVal("./modules/"+release))
+
+	return hclwrite.Format(f.Bytes())
+}
+
+// emptyStackHCL is the stack.hcl of a generated stack whose directory is
+// gone: the rigger block alone.
+func emptyStackHCL(name, namespace, region string) []byte {
+	f := hclwrite.NewEmptyFile()
+
+	rig := f.Body().AppendNewBlock("rigger", nil).Body()
+	rig.SetAttributeValue("name", cty.StringVal(name))
+	rig.SetAttributeValue("namespace", cty.StringVal(namespace))
+	rig.SetAttributeValue("region", cty.StringVal(region))
 
 	return hclwrite.Format(f.Bytes())
 }
