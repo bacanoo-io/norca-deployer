@@ -270,6 +270,10 @@ type (
 		Kind   string `json:"kind"`
 		Name   string `json:"name"`
 		Action string `json:"action"`
+		// Error is why the servers would refuse the change; Diff the
+		// lines of a job's diff. Servers before Rigger's G27 send neither.
+		Error string   `json:"error,omitempty"`
+		Diff  []string `json:"diff,omitempty"`
 	}
 
 	// SecretPlan is what an apply would do to a secret of the stack:

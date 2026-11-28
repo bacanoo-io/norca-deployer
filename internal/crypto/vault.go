@@ -63,6 +63,19 @@ func ResolveMasterKey(keyFlag, keyFile string) ([]byte, error) {
 	return nil, errors.New("master encryption key not found (use --secret-key, --secret-key-file or NORCA_DEPLOYER_SECRET_KEY)")
 }
 
+// ReadKeyFile reads a key from one file only: unlike ResolveMasterKey it
+// never falls back to NORCA_DEPLOYER_SECRET_KEY or .norca-deployer.key, the
+// master key of the node plan. A tree has a key of its own, so that a value
+// encrypted for the plan can't be decrypted into a secret of a namespace
+// (platform-management-design.md 13a, G28).
+func ReadKeyFile(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read key file (%s): %w", path, err)
+	}
+	return parseKeyString(string(data))
+}
+
 func parseKeyString(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
 	// Try hex decoding

@@ -4,6 +4,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,5 +41,52 @@ func TestTreeCommandIsExperimental(t *testing.T) {
 				t.Fatalf("tree listed in the help: %v, want %v", listed, tt.rootListed)
 			}
 		})
+	}
+}
+
+// tree build writes the stacks of a tree to a directory; the resolved value
+// of a secret item is not among the files.
+func TestTreeBuildCommand(t *testing.T) {
+	t.Setenv(experimentalEnv, "tree")
+	t.Setenv("APP_DB_PASSWORD", "s3cret")
+
+	dir := t.TempDir()
+	files := map[string]string{
+		"tree.hcl":                             "tree {\n  name    = \"acme\"\n  version = \"norca.io/tree/v1alpha1\"\n}\n",
+		"global/namespaces/apps.namespace.hcl": "namespace \"apps\" {}\n",
+		"namespaces/apps/jobs/api.norca.hcl":   "job \"api\" {}\n",
+		"namespaces/apps/secrets/api/db.hcl":   "items = {\n  password = \"!env:APP_DB_PASSWORD\"\n}\n",
+	}
+	for name, content := range files {
+		p := filepath.Join(dir, "tree", filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out := filepath.Join(dir, "out")
+
+	code, stdout, stderr := execute(t, "tree", "build", "-d", filepath.Join(dir, "tree"), "--region", "eu-1", "--out", out, "--values-env", "APP_*")
+	if code != exitOK || !strings.Contains(stdout, "tree-ns-apps: 5 files") {
+		t.Fatalf("tree build = %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+
+	for _, name := range []string{"tree-global/stack.hcl", "tree-ns-apps/stack.hcl", "tree-ns-apps/modules/tree-apps/api.norca.hcl", "tree-ns-apps/secrets.hcl", "tree-ns-apps/variables.hcl"} {
+		data, err := os.ReadFile(filepath.Join(out, filepath.FromSlash(name)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "s3cret") {
+			t.Fatalf("%s holds the secret value", name)
+		}
+	}
+
+	// Without --values-env the variable is not read.
+	code, _, stderr = execute(t, "tree", "build", "-d", filepath.Join(dir, "tree"), "--region", "eu-1", "--out", out)
+	if code != exitError || !strings.Contains(stderr, "not allowed") {
+		t.Fatalf("tree build without --values-env = %d, stderr %q", code, stderr)
 	}
 }
