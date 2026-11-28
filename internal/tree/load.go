@@ -64,7 +64,7 @@ var kindDirs = map[string]string{
 // yet (design §4.1, Kinds): a file in them is refused, never ignored.
 var notSupported = []string{
 	"global/acl/roles", "global/acl/auth-methods", "global/acl/binding-rules", "global/node-pools",
-	"global/network-policies", "kv", "modules", "stacks",
+	"global/network-policies", "kv",
 }
 
 // namespaceNotSupported are such directories inside namespaces/<ns>/.
@@ -108,6 +108,10 @@ type Tree struct {
 	Manifest   *Manifest
 	Global     []File
 	Namespaces []*Namespace
+	// Stacks are the directories of stacks/, in name order; Modules the
+	// files of each directory of modules/ by their paths below it.
+	Stacks  []*WrittenStack
+	Modules map[string]map[string][]byte
 	// Warnings are what the reader found odd but read anyway.
 	Warnings []string
 }
@@ -172,9 +176,16 @@ func (t *Tree) add(fsys fs.FS, p string, namespaces map[string]*Namespace) error
 		return nil
 	case "namespaces":
 		return t.addNamespaced(fsys, p, parts, namespaces)
+	case "stacks", "modules":
+		data, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return err
+		}
+
+		return t.addWritten(p, parts, data)
 	}
 
-	return fmt.Errorf("%s: %s/ is not a directory of a tree (global/, namespaces/)", p, parts[0])
+	return fmt.Errorf("%s: %s/ is not a directory of a tree (global/, namespaces/, stacks/, modules/)", p, parts[0])
 }
 
 // addNamespaced sorts a file of namespaces/<ns>/ into its namespace.

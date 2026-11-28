@@ -141,7 +141,7 @@ func (f *treeFlags) setup() (*treeSetup, error) {
 		return nil, err
 	}
 
-	stacks, err := tree.Build(t, region.Name, r)
+	stacks, err := tree.Build(t, region.Name, region.Values, r)
 	if err != nil {
 		done()
 		return nil, err

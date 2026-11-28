@@ -9,6 +9,7 @@ import (
 	"maps"
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/hclwrite"
@@ -55,11 +56,15 @@ type secretFile struct {
 	Overwrite bool              `yaml:"overwrite"`
 }
 
-// Build builds the generated stacks of a tree for a region: tree-global from
-// global/ and tree-ns-<ns> from each namespaces/<ns>/, in the order they
-// are applied. Secret items are resolved with r; an item the servers
-// generate ("!generate:name") is written as it is.
-func Build(t *Tree, region string, r *values.Resolver) ([]*Stack, error) {
+// Build builds the stacks of a tree for a region, in the order they are
+// applied: tree-global from global/, tree-ns-<ns> from each
+// namespaces/<ns>/, and each written stack of stacks/ with the shared
+// modules it uses and its values, runValues (the values of the region)
+// over its values/default.vars.hcl. The value forms are resolved with r;
+// a value the servers generate ("!generate:name") is written as it is. A
+// value of the run that no written stack declares is warned about in
+// t.Warnings.
+func Build(t *Tree, region string, runValues map[string]any, r *values.Resolver) ([]*Stack, error) {
 	var (
 		stacks []*Stack
 		errs   []error
@@ -87,15 +92,29 @@ func Build(t *Tree, region string, r *values.Resolver) ([]*Stack, error) {
 		}
 	}
 
+	used := map[string]bool{}
+
+	for _, ws := range t.Stacks {
+		s, err := buildWritten(t, ws, region, runValues, r, used)
+		if err != nil {
+			errs = append(errs, err)
+		} else {
+			stacks = append(stacks, s)
+		}
+	}
+
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
+
+	t.Warnings = append(t.Warnings, unusedValues(runValues, used)...)
 
 	return order(stacks, t.Manifest.StackOrder)
 }
 
 // order puts the stacks in the order of design §4.1: tree-global first, then
-// those named in stack_order, in that order, then the others in name order.
+// those named in stack_order, in that order, then the other generated
+// namespace stacks in name order, then the other written stacks.
 func order(stacks []*Stack, stackOrder []string) ([]*Stack, error) {
 	byName := map[string]*Stack{}
 	for _, s := range stacks {
@@ -128,7 +147,18 @@ func order(stacks []*Stack, stackOrder []string) ([]*Stack, error) {
 		rest = append(rest, name)
 	}
 
-	slices.Sort(rest)
+	slices.SortFunc(rest, func(a, b string) int {
+		// Generated namespace stacks before written ones, then by name.
+		ga, gb := strings.HasPrefix(a, namespacePrefix), strings.HasPrefix(b, namespacePrefix)
+		switch {
+		case ga && !gb:
+			return -1
+		case gb && !ga:
+			return 1
+		}
+
+		return strings.Compare(a, b)
+	})
 
 	for _, name := range rest {
 		out = append(out, byName[name])

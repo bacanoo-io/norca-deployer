@@ -80,7 +80,8 @@ func TestLoad_Refused(t *testing.T) {
 	}{
 		{name: "a kind without a Rigger kind yet", path: "global/acl/roles/dev.hcl", want: "global/acl/roles/ is not supported yet"},
 		{name: "Consul KV", path: "kv/app/config", want: "kv/ is not supported yet"},
-		{name: "written stacks, later", path: "stacks/data/stack.hcl", want: "stacks/ is not supported yet"},
+		{name: "a file directly in stacks/", path: "stacks/stack.hcl", want: "a file of stacks/ is in the directory of its stack"},
+		{name: "a stack name in capitals", path: "stacks/Data/stack.hcl", want: `"Data": lower case letters`},
 		{name: "a namespaced kind without a Rigger kind", path: "namespaces/apps/intentions/a.hcl", want: "intentions/ is not supported yet"},
 		{name: "an extension of no kind", path: "namespaces/apps/jobs/api.hcl", want: "the extension names no kind"},
 		{name: "a job in global/", path: "global/jobs/api.norca.hcl", want: "a job does not belong in global/"},

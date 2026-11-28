@@ -51,7 +51,7 @@ func TestBuild(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stacks, err := Build(tr, "eu-1", testResolver())
+	stacks, err := Build(tr, "eu-1", nil, testResolver())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestBuild_Refused(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err = Build(tr, "eu-1", testResolver())
+			_, err = Build(tr, "eu-1", nil, testResolver())
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("Build error %v, want one with %q", err, tt.want)
 			}
