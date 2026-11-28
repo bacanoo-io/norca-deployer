@@ -194,6 +194,22 @@ type StackRun struct {
 	// Commit is the commit that was fetched, for the events and the errors.
 	Commit string
 	Origin *Origin
+	// Label is what the errors name the run by; empty is "gitops binding
+	// <Binding>". A run of a tree names its stack.
+	Label string
+	// Check, when set, looks at the plan before an apply starts and stops
+	// the run with its error: the guards of a tree run on the plan the
+	// apply is made of, not on an older one. A plan with nothing to do is
+	// not checked.
+	Check func(*StackPlan) error
+}
+
+// label is what the errors of the run name it by.
+func (run *StackRun) label() string {
+	if run.Label != "" {
+		return run.Label
+	}
+	return "gitops binding " + run.Binding
 }
 
 // stackRequest is the body of a plan and of an apply.
@@ -207,41 +223,58 @@ type stackRequest struct {
 // The answers of the servers, as far as a run reads them.
 type (
 	stackPlanResponse struct {
-		Plan     *stackPlan
+		Plan     *StackPlan
 		Warnings []string
 	}
 
-	stackPlan struct {
+	// StackPlan is the plan of a stack as the servers answer it: what an
+	// apply would do to each release, to the secrets of the stack, and the
+	// values it would generate.
+	StackPlan struct {
 		Stack    string        `json:"stack"`
 		Region   string        `json:"region"`
-		Releases []releasePlan `json:"releases"`
+		Releases []ReleasePlan `json:"releases"`
 		Generate []string      `json:"generate"`
-		Secrets  []secretPlan  `json:"secrets"`
+		Secrets  []SecretPlan  `json:"secrets"`
 	}
 
-	releaseRef struct {
+	// ReleaseRef names a release.
+	ReleaseRef struct {
 		Namespace string `json:"namespace"`
 		Name      string `json:"name"`
 	}
 
-	releasePlan struct {
-		Release releaseRef `json:"release"`
+	// ModuleRef names the module of a release and its version.
+	ModuleRef struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+
+	// ReleasePlan is what an apply would do to a release: install,
+	// upgrade, unchanged, disabled or remove.
+	ReleasePlan struct {
+		Release ReleaseRef `json:"release"`
 		Action  string     `json:"action"`
-		Module  struct {
-			Name    string `json:"name"`
-			Version string `json:"version"`
-		} `json:"module"`
-		Changes []struct {
-			Kind   string `json:"kind"`
-			Name   string `json:"name"`
-			Action string `json:"action"`
-		} `json:"changes"`
+		Module  ModuleRef  `json:"module"`
+		// Changes are the changes per resource of an upgrade, as the
+		// servers' dry run answers them; an install has none.
+		Changes []ResourceChange `json:"changes"`
 		// TakesOver says whose the release is when an apply would take it
 		// over.
 		TakesOver string `json:"takes_over"`
 	}
 
-	secretPlan struct {
+	// ResourceChange is the change of one resource of a release: create,
+	// update or delete.
+	ResourceChange struct {
+		Kind   string `json:"kind"`
+		Name   string `json:"name"`
+		Action string `json:"action"`
+	}
+
+	// SecretPlan is what an apply would do to a secret of the stack:
+	// create, keep or overwrite.
+	SecretPlan struct {
 		Path   string `json:"path"`
 		Action string `json:"action"`
 	}
@@ -394,6 +427,43 @@ func (r *Runner) report(e Event) {
 // it) it waits and plans again, for deployTimeout at most. Every wait ends
 // with ctx.
 func (r *Runner) Sync(ctx context.Context, run *StackRun) (*Result, error) {
+	s, err := r.newSync(run)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.do(ctx)
+}
+
+// Plan has the servers plan a stack and returns their plan and warnings,
+// applying nothing. While another operation of the stack runs it waits, as
+// Sync does. A tree plans every stack this way before it applies one.
+func (r *Runner) Plan(ctx context.Context, run *StackRun) (*StackPlan, []string, error) {
+	s, err := r.newSync(run)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	for {
+		resp, err := s.plan(ctx)
+		if isConflict(err) {
+			if err := s.waitForOther(ctx, PhasePlan, err); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if err != nil {
+			return nil, nil, s.errorf("plan: %w", err)
+		}
+
+		s.reportPlan(resp)
+		return resp.Plan, resp.Warnings, nil
+	}
+}
+
+// newSync builds the request body of a run: the files of the stack as an
+// archive, its values and its options.
+func (r *Runner) newSync(run *StackRun) (*stackSync, error) {
 	s := &stackSync{runner: r, run: run}
 
 	archive, err := StackArchive(run.Files)
@@ -410,7 +480,7 @@ func (r *Runner) Sync(ctx context.Context, run *StackRun) (*Result, error) {
 		return nil, s.errorf("%w", err)
 	}
 
-	return s.do(ctx)
+	return s, nil
 }
 
 // stackSync is the state of one Sync.
@@ -433,7 +503,7 @@ type stackSync struct {
 // errorf is an error of the run: it names the binding, the stack, the
 // commit and the operation, as far as they are known.
 func (s *stackSync) errorf(format string, args ...any) error {
-	what := "gitops binding " + s.run.Binding
+	what := s.run.label()
 	if s.stack != "" {
 		what += ": stack " + s.stack
 	}
@@ -488,6 +558,11 @@ func (s *stackSync) do(ctx context.Context) (*Result, error) {
 			if rp.TakesOver != "" {
 				return nil, s.errorf("the release %s/%s is of %s: a binding takes over no release (apply the stack once with rigger stack apply -adopt)",
 					rp.Release.Namespace, rp.Release.Name, rp.TakesOver)
+			}
+		}
+		if s.run.Check != nil {
+			if err := s.run.Check(plan.Plan); err != nil {
+				return nil, s.errorf("%w", err)
 			}
 		}
 

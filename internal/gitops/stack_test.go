@@ -651,6 +651,80 @@ func TestSync_ReleaseOfAnotherOwnerFailsTheRun(t *testing.T) {
 	}
 }
 
+// Check looks at the plan an apply is made of: an error stops the run
+// before the apply, and the error names the run by its label.
+func TestSync_CheckStopsTheRunBeforeTheApply(t *testing.T) {
+	f := &fakeNorca{plans: []fakeAnswer{planOf("", fakeRelease{name: "cache", action: "upgrade"})}}
+	run := stackRun()
+	run.Label = "tree acme: stack demo"
+
+	var seen *StackPlan
+	run.Check = func(p *StackPlan) error {
+		seen = p
+		return errors.New("a job delete needs --prune-jobs")
+	}
+
+	_, _, err := syncStack(t.Context(), f, run)
+	if err == nil || !strings.HasPrefix(err.Error(), "tree acme: stack demo: stack demo") || !strings.Contains(err.Error(), "--prune-jobs") {
+		t.Fatalf("got %v", err)
+	}
+	if f.count(applyCall) != 0 {
+		t.Errorf("calls %v", f.called())
+	}
+	if seen == nil || len(seen.Releases) != 1 || len(seen.Releases[0].Changes) != 1 || seen.Releases[0].Changes[0].Action != "update" {
+		t.Errorf("Check saw %+v", seen)
+	}
+}
+
+// A Check that passes lets the apply run; a plan with nothing to do is
+// not checked.
+func TestSync_CheckThatPassesAndAPlanInSync(t *testing.T) {
+	checks := 0
+	check := func(*StackPlan) error { checks++; return nil }
+
+	f := &fakeNorca{plans: []fakeAnswer{planOf("", fakeRelease{name: "cache", action: "install"})}, ends: []string{opSucceeded}}
+	run := stackRun()
+	run.Check = check
+	if res, _, err := syncStack(t.Context(), f, run); err != nil || res.Outcome != OutcomeApplied {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+
+	inSync := &fakeNorca{plans: []fakeAnswer{planOf("", fakeRelease{name: "cache", action: "unchanged"})}}
+	run = stackRun()
+	run.Check = check
+	if res, _, err := syncStack(t.Context(), inSync, run); err != nil || res.Outcome != OutcomeInSync {
+		t.Fatalf("got %+v, %v", res, err)
+	}
+
+	if checks != 1 {
+		t.Errorf("checked %d times, want once", checks)
+	}
+}
+
+// Plan answers the servers' plan and its warnings, and applies nothing.
+func TestRunner_PlanAppliesNothing(t *testing.T) {
+	f := &fakeNorca{plans: []fakeAnswer{planOf(`{"Answer":{"Warnings":["a warning"]},"Plan":{"generate":["db"]}}`,
+		fakeRelease{name: "cache", action: "upgrade"}, fakeRelease{name: "new", action: "install"})}}
+
+	r := &Runner{Client: f}
+	plan, warnings, err := r.Plan(t.Context(), stackRun())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Stack != "demo" || len(plan.Releases) != 2 || plan.Releases[0].Module.Name != "redis" || len(plan.Generate) != 1 {
+		t.Errorf("plan %+v", plan)
+	}
+	if plan.Releases[1].Action != "install" || len(plan.Releases[1].Changes) != 0 {
+		t.Errorf("an install has no changes: %+v", plan.Releases[1])
+	}
+	if len(warnings) != 1 || warnings[0] != "a warning" {
+		t.Errorf("warnings %v", warnings)
+	}
+	if calls := f.called(); len(calls) != 1 || !strings.HasPrefix(calls[0], planCall) {
+		t.Errorf("calls %v", calls)
+	}
+}
+
 func TestSync_PlanThatIsRefusedFailsTheRun(t *testing.T) {
 	for name, answer := range map[string]fakeAnswer{
 		"an invalid stack":   {status: http.StatusBadRequest, body: `the stack demo is of the namespace "shop": send the request in that namespace`},
