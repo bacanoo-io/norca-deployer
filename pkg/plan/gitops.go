@@ -23,6 +23,12 @@ var gitOpsNameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // expandLabelledBindings turns `binding "name" { ... }` blocks, which HCL
 // decodes as objects keyed by their label, into bindings with a name.
 func expandLabelledBindings(list []any, at string) ([]any, error) {
+	return expandLabelled(list, at, reflectBinding)
+}
+
+// expandLabelled turns labelled blocks of the struct type t into list items
+// with the label as their name (expandLabelledBindings, LabelledBlock).
+func expandLabelled(list []any, at string, t reflect.Type) ([]any, error) {
 	var res []any
 	for i, item := range list {
 		obj, err := single(item, fmt.Sprintf("%s[%d]", at, i))
@@ -31,7 +37,7 @@ func expandLabelledBindings(list []any, at string) ([]any, error) {
 		}
 		labels := make([]string, 0, len(obj))
 		for key := range obj {
-			if _, isField := fieldByTag(reflectBinding, key); isField {
+			if _, isField := fieldByTag(t, key); isField {
 				labels = nil
 				break
 			}

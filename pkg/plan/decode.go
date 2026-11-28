@@ -14,6 +14,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// LabelledBlock marks a struct whose HCL blocks carry a label that is its
+// name: region "eu-1" { ... } decodes as an item with name "eu-1", as a
+// YAML list item with name: eu-1. The struct needs a name field.
+type LabelledBlock interface {
+	LabelledBlock()
+}
+
+// labelledBlock is the type of LabelledBlock.
+var labelledBlock = reflect.TypeFor[LabelledBlock]()
+
 // DecodeInto decodes a document of another format of the deployer (the
 // manifest of a tree) into target, a pointer to a struct with yaml tags,
 // the way a plan is decoded: HCL is shaped after the type of target and

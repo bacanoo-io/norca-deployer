@@ -117,9 +117,15 @@ func shape(v any, t reflect.Type, path string) (any, error) {
 				return nil, fmt.Errorf("%s: expected a list", where(path))
 			}
 		}
-		if t.Elem() == reflect.TypeFor[GitOpsBinding]() {
+		switch {
+		case t.Elem() == reflect.TypeFor[GitOpsBinding]():
 			var err error
 			if list, err = expandLabelledBindings(list, path); err != nil {
+				return nil, err
+			}
+		case t.Elem().Kind() == reflect.Struct && reflect.PointerTo(t.Elem()).Implements(labelledBlock):
+			var err error
+			if list, err = expandLabelled(list, path, t.Elem()); err != nil {
 				return nil, err
 			}
 		}

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/bacanoo-io/norca-deployer/internal/tree"
 )
 
 // Exit codes. 1 is a failure while the command ran; 2 is a command line the
@@ -17,12 +19,24 @@ import (
 //
 // 130 is 128 plus SIGINT: the command was interrupted and stopped between two
 // steps, the usual code for that.
+//
+// The tree commands add two (design/platform-management-design.md §10): 2
+// is also "changes pending" of tree plan --detailed-exitcode, as
+// terraform plan -detailed-exitcode has it (a usage error prints its help,
+// a plan does not), and 3 is a run that a guard blocked: blocked, not
+// failed.
 const (
 	exitOK          = 0
 	exitError       = 1
 	exitUsage       = 2
+	exitChanges     = 2
+	exitBlocked     = 3
 	exitInterrupted = 130
 )
+
+// errChangesPending ends tree plan --detailed-exitcode when the plan has
+// changes: exit code 2, and no error printed.
+var errChangesPending = errors.New("changes pending")
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
@@ -40,6 +54,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err == nil {
 		return exitOK
 	}
+	if errors.Is(err, errChangesPending) {
+		return exitChanges
+	}
+	if _, ok := errors.AsType[silentBlocked](err); ok {
+		return exitBlocked
+	}
 	fmt.Fprintf(stderr, "[ERROR] %v\n", err)
 	code := exitCode(err)
 	if code == exitUsage {
@@ -55,6 +75,8 @@ func exitCode(err error) int {
 		return exitUsage
 	case errors.Is(err, context.Canceled):
 		return exitInterrupted
+	case errors.Is(err, tree.ErrBlocked):
+		return exitBlocked
 	}
 	return exitError
 }

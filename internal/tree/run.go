@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/bacanoo-io/norca-deployer/internal/gitops"
@@ -47,6 +48,9 @@ type Guards struct {
 	PruneJobs bool
 	// PruneData allows the delete of a Variable.
 	PruneData bool
+	// Kinds are the kinds a stack may change (limits.kinds and --kind);
+	// nil allows all.
+	Kinds map[string]bool
 }
 
 // Check returns why a plan may not be applied, wrapped in ErrBlocked; nil
@@ -63,6 +67,10 @@ func (g Guards) Check(p *gitops.StackPlan) error {
 		}
 
 		for _, c := range rp.Changes {
+			if kind := resourceKind(c.Kind); g.Kinds != nil && !g.Kinds[kind] {
+				reasons = append(reasons, fmt.Sprintf("the release %s changes the %s %s, a kind this run may not change", release, kind, c.Name))
+			}
+
 			if c.Action != actionDelete {
 				continue
 			}
@@ -82,11 +90,79 @@ func (g Guards) Check(p *gitops.StackPlan) error {
 		}
 	}
 
+	for _, sp := range p.Secrets {
+		if sp.Action != secretKeep && g.Kinds != nil && !g.Kinds[KindSecret] {
+			reasons = append(reasons, fmt.Sprintf("the stack writes the secret %s, a kind this run may not change", sp.Path))
+		}
+	}
+
 	if len(reasons) == 0 {
 		return nil
 	}
 
 	return fmt.Errorf("%w: %s", ErrBlocked, strings.Join(reasons, "; "))
+}
+
+// secretKeep is the action of a stack secret that is left as it is.
+const secretKeep = "keep"
+
+// Changes counts what a plan changes: each resource of a release, each
+// release removed, each secret written.
+func Changes(p *gitops.StackPlan) int {
+	n := 0
+
+	for _, rp := range p.Releases {
+		n += len(rp.Changes)
+		if rp.Action == actionRemove {
+			n++
+		}
+	}
+
+	for _, sp := range p.Secrets {
+		if sp.Action != secretKeep {
+			n++
+		}
+	}
+
+	return n
+}
+
+// HasChanges reports whether an apply of a plan would do anything: a
+// release to install, upgrade or remove, a secret to write, a value to
+// generate.
+func HasChanges(p *gitops.StackPlan) bool {
+	if len(p.Generate) > 0 {
+		return true
+	}
+
+	for _, sp := range p.Secrets {
+		if sp.Action != secretKeep {
+			return true
+		}
+	}
+
+	for _, rp := range p.Releases {
+		if rp.Action != "unchanged" && rp.Action != "disabled" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// CheckChanges blocks a run whose plans change more than max resources,
+// unless allowed (design §7.6, the blast-radius guard).
+func CheckChanges(plans []*Planned, limit int, allowed bool) error {
+	total := 0
+	for _, p := range plans {
+		total += Changes(p.Plan)
+	}
+
+	if allowed || limit <= 0 || total <= limit {
+		return nil
+	}
+
+	return fmt.Errorf("%w: the run changes %d resources, more than limits.max_changes (%d); give --yes-really to apply it", ErrBlocked, total, limit)
 }
 
 // Planned is the plan of one stack of a tree.
@@ -103,14 +179,44 @@ type Planned struct {
 type Runner struct {
 	// Client sends the requests; Report gets the events of the runs.
 	Client gitops.APIClient
-	Report func(gitops.Event)
+	// ClientFor, when set, gives the client of a stack: its scoped token
+	// (design §5.3), the read token for a plan.
+	ClientFor func(stack string, plan bool) (gitops.APIClient, error)
+	Report    func(gitops.Event)
 	// Tree names the tree in the errors.
 	Tree   string
 	Guards Guards
 }
 
-func (r *Runner) stacks() *gitops.Runner {
-	return &gitops.Runner{Client: r.Client, Report: r.Report}
+// stacks is the stack client of a stack.
+func (r *Runner) stacks(stack string, plan bool) (*gitops.Runner, error) {
+	client := r.Client
+
+	if r.ClientFor != nil {
+		var err error
+		if client, err = r.ClientFor(stack, plan); err != nil {
+			return nil, fmt.Errorf("stack %s: %w", stack, err)
+		}
+	}
+
+	return &gitops.Runner{Client: client, Report: r.Report}, nil
+}
+
+// SyncRegistries has the servers sync the registries in order before the
+// plans (gitops-rigger-design.md 5.10); a sync that fails stops the run.
+func (r *Runner) SyncRegistries(ctx context.Context, names []string) error {
+	for _, name := range names {
+		status, body, err := r.Client.API(ctx, "PUT", "/v1/rigger/registry/"+url.PathEscape(name)+"/sync", nil)
+		if err != nil {
+			return fmt.Errorf("syncing the registry %s: %w", name, err)
+		}
+
+		if status/100 != 2 {
+			return fmt.Errorf("syncing the registry %s: HTTP %d: %s", name, status, strings.TrimSpace(body))
+		}
+	}
+
+	return nil
 }
 
 // run is the request of a stack.
@@ -134,7 +240,12 @@ func (r *Runner) Plan(ctx context.Context, stacks []*Stack) ([]*Planned, error) 
 	out := make([]*Planned, 0, len(stacks))
 
 	for _, s := range stacks {
-		plan, warnings, err := r.stacks().Plan(ctx, r.run(s, true))
+		runner, err := r.stacks(s.Name, true)
+		if err != nil {
+			return out, err
+		}
+
+		plan, warnings, err := runner.Plan(ctx, r.run(s, true))
 		if err != nil {
 			return out, redact(err, s)
 		}
@@ -152,7 +263,12 @@ func (r *Runner) Apply(ctx context.Context, stacks []*Stack) ([]*gitops.Result, 
 	out := make([]*gitops.Result, 0, len(stacks))
 
 	for _, s := range stacks {
-		res, err := r.stacks().Sync(ctx, r.run(s, false))
+		runner, err := r.stacks(s.Name, false)
+		if err != nil {
+			return out, err
+		}
+
+		res, err := runner.Sync(ctx, r.run(s, false))
 		if err != nil {
 			return out, redact(err, s)
 		}
